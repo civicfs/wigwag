@@ -57,6 +57,10 @@ are delivered by the turn-boundary hooks and `inbox`, and the SessionStart conte
 remain unread (on a cold start that context arrives with the first binding prompt or tool call, §4). If the waiting
 message is delivered by the digest in that same context, the digest marks it read first, so the unread sentence is
 omitted; the sentence appears only when messages remain unread after the digest.
+The held item's `last_error` names the cause the owner can act on (the reason stays `unbound`, a fixed enum): when a
+hook has bound the session it says the session did not load the channel and to start it with `wigwag claude`; while no
+hook has bound it, it says the session is connected but not bound (see `not bound` in `broker.log`), since then no turn
+boundary can deliver either and relaunching with `wigwag claude` is not the fix.
 
 If S2 fails (channels unavailable), Claude degrades to hook-boundary delivery only: pushes reach a Claude session
 while it is working, not while it is idle. That would miss R1 for idle Claude sessions and is reported to the owner
@@ -131,16 +135,35 @@ vitest, linted with biome.
     plugin's own server (`session_bind`, `turn_ended`) with `${session_id}` — same pattern the bundled `browser`
     plugin uses. Direct, no inference.
   - Claude: command hooks receive `session_id` on stdin; the MCP server does not. Both processes descend from the
-    same `claude` process. The MCP server reports its ancestor PID chain on connect; the hook reports its own; the
-    broker binds to the MCP connection sharing the nearest common ancestor whose executable is the agent binary.
-    Unverified → spike S3. Ambiguity (two candidates) fails closed: hook logs an error, session stays unbound and is
-    shown as such in the TUI.
-    Precisely (E-4 nested): the hook reports `agent_pid`, its nearest ancestor whose executable is `claude`; a hook
-    binds only to the live Claude session whose `mcp_ppid` equals `agent_pid`, and a session already bound to the
-    hook's `session_id` is used only when its `mcp_ppid` equals `agent_pid`. Membership of `mcp_ppid` in the hook's
-    chain is not enough: a `claude -p` run from a session's shell tool has the outer claude in its chain too. No
-    `claude` ancestor, no matching session (the inner MCP server not yet connected) or two matches fail closed with
-    a `not bound` line in `broker.log`; a later hook of the same session binds once its MCP server is connected.
+    same agent process. The MCP server reports its ancestor PID chain and its direct parent (`mcp_ppid`) on connect;
+    the hook reports its own chain and its agent process (`agent_pid`); the broker binds the hook to the MCP
+    connection whose `mcp_ppid` is that agent process. Ambiguity (two candidates) fails closed: the broker logs
+    `not bound`, the session stays unbound and is shown as such in the TUI.
+    Precisely (E-4 nested, bg layout): the agent process is found by position, never by executable name or path,
+    because the name changes per release and per install: a terminal `claude` session runs as `claude`; a
+    `claude --bg` session process is named after the release (`2.1.295`, under a pty host and a daemon that are
+    both named `claude`); an npm install runs as `node`. The hook's `agent_pid` is its nearest strict ancestor whose
+    executable (`ps` comm basename, a login shell's leading `-` dropped) is not one of the fixed shell and launcher
+    names `sh bash zsh dash ksh fish env timeout wigwag ww` (Claude Code runs a command hook through a shell; a hook
+    command may be wrapped in `env` or `timeout`). The walk stops at the first other process, whatever it is: an
+    unknown wrapper (`nice`, a version-manager shim), an unnamed process or the agent itself. It never skips past it.
+    A hook binds only to the live Claude session whose `mcp_ppid` equals `agent_pid`, and exactly one such session
+    must exist; a session already bound to the hook's `session_id` is used only when its `mcp_ppid` equals
+    `agent_pid`. Membership of `mcp_ppid` in the hook's chain is not enough. No agent ancestor, no matching session
+    (the inner MCP server not yet connected, or an unknown wrapper in between) or two matches fail closed with a
+    `not bound` line in `broker.log`; a later hook of the same session binds once its MCP server is connected.
+    `mcp_ppid` stays the MCP server's direct parent (Claude Code spawns it directly, no shell): looking through shells
+    on that side would let a `wigwag mcp` started from a session's shell tool claim that session's agent as its own.
+    Why a nested `claude -p` still fails to reach the outer session: the inner agent is a separate process between
+    the inner hook and the outer agent, and no agent runs under a shell or launcher name, so the walk always stops
+    at the inner agent (`agent_pid` = inner). At the inner cold SessionStart it has no session (0 candidates, not
+    bound); once the inner MCP server connects, it binds the inner session. The outer session's `mcp_ppid` is the
+    outer agent, which is never the inner hook's `agent_pid`, and an inner hook reusing the outer `session_id`
+    (`--continue`) is refused because the bound session's `mcp_ppid` differs. Recognising more processes as an
+    agent can only stop the walk nearer the hook, which at worst leaves a hook unbound; the unsafe direction, an
+    agent process being looked through, would need an agent named like a shell (which is why `node` is not in the
+    list). Each name added to the list must keep that property. A `--bg` hook reaches the version-named session
+    process first; the pty host and daemon above it are never examined.
     Cold start (E-3): on a fresh `claude` start the SessionStart hook runs about 0.5 s before the MCP server registers,
     so it finds 0 candidates and returns no context. The broker remembers that session id (in memory, cleared when the
     context is delivered or a SessionStart later succeeds). The first `UserPromptSubmit` or `PostToolUse` that passes

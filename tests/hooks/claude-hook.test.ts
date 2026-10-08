@@ -12,6 +12,7 @@ import {
   DIST_MAIN,
   type FakeClaude,
   fakeClaude,
+  launcher,
   mcpClient,
   STARTED_PRELOAD,
   startTestBroker,
@@ -73,15 +74,18 @@ const trees: Array<{ stop(): Promise<void> }> = [];
 afterEach(async () => {
   for (const t of trees.splice(0)) await t.stop();
 });
-const startClaude = async () => {
-  const c = await fakeClaude();
+const startClaude = async (exe?: string) => {
+  const c = await fakeClaude(exe);
   trees.push(c);
   return c;
 };
-/** Runs the real hook command as a child of `agent`, as Claude Code does. */
-const hookIn = (agent: FakeClaude, home: string, event: string, session_id: string) =>
+/**
+ * Runs the real hook command as a child of `agent`, as Claude Code does; `via` is an argv prefix that puts a shell or
+ * launcher between the agent and the hook.
+ */
+const hookIn = (agent: FakeClaude, home: string, event: string, session_id: string, via: string[] = []) =>
   agent.run(
-    [process.execPath, DIST_MAIN, 'hook', 'claude', event],
+    [...via, process.execPath, DIST_MAIN, 'hook', 'claude', event],
     // Spec §17 (R46-N4): the hook's cwd must be in the session's workspace (mcpClient's default cwd).
     JSON.stringify({ session_id, cwd: '/w/myproject', hook_event_name: event }),
     { WIGWAG_HOME: home },
@@ -102,16 +106,13 @@ describe('claude hook command', () => {
     a.client.close();
   });
 
-  it('is not bound by chain membership alone: an MCP parent that is not the hook claude never matches', async () => {
+  it('is not bound by chain membership alone: an MCP parent above the hook agent never matches', async () => {
     const started = await startTestBroker();
     broker = started.broker;
-    // This test process is in the hook's chain but is no `claude`; the old rule (mcp_ppid in the chain) bound it.
+    const claude = await startClaude();
+    // This test process is in the hook's chain, above the hook's agent; the old rule (mcp_ppid in the chain) bound it.
     const a = await mcpClient(started.home, { requested_name: 'claude-main', mcp_ppid: process.pid });
-    const r = await runHook(
-      started.home,
-      'SessionStart',
-      JSON.stringify({ session_id: 'cs-1', cwd: '/w/myproject', hook_event_name: 'SessionStart' }),
-    );
+    const r = await hookIn(claude, started.home, 'SessionStart', 'cs-1');
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('');
     expect(getSession(started.broker.db, a.welcome.session_id)?.agent_session_id).toBeNull();
@@ -357,5 +358,127 @@ describe('claude hook in a nested claude process tree (E-4 nested)', () => {
     expect(getSession(started.broker.db, o.welcome.session_id)?.state).toBe('online-idle');
     expect(brokerLog(started.home)).toMatch(/hook\.event UserPromptSubmit: .*not bound/);
     o.client.close();
+  });
+});
+
+// Spec §4: the hook's agent is its nearest ancestor that is not a shell or launcher, whatever that process is named. The
+// Claude Code `--bg` session process is named after its version (`2.1.295`) and runs under a pty host and a daemon that
+// are named `claude`; an npm-installed Claude Code runs as `node`.
+describe('claude hook agent process, identified by position not by name', () => {
+  const brokerLog = (home: string) => readFileSync(join(home, 'logs', 'broker.log'), 'utf8');
+  const ctxOf = (stdout: string): string | null =>
+    stdout === '' ? null : JSON.parse(stdout).hookSpecificOutput.additionalContext;
+  // `exit $?` keeps the shell as the hook's parent instead of exec'ing the hook in its place.
+  const SH = ['/bin/sh', '-c', '"$0" "$@"; exit $?'];
+  /** `claude --bg`: daemon (`claude`) -> pty host (`claude`) -> the session process, named after the version. */
+  const bgTree = async () => {
+    const daemon = await startClaude();
+    const ptyHost = await daemon.nest();
+    const session = await ptyHost.nest('2.1.295');
+    return { daemon, ptyHost, session };
+  };
+
+  it('binds a --bg session: the version-named process that spawned the MCP server and the hook', async () => {
+    const started = await startTestBroker();
+    broker = started.broker;
+    const { ptyHost, session } = await bgTree();
+    const a = await mcpClient(started.home, { requested_name: 'bg-one', mcp_ppid: session.pid });
+    // A session whose MCP parent is the pty host above: the hook must stop at its own agent and never reach it.
+    const decoy = await mcpClient(started.home, { requested_name: 'decoy-one', mcp_ppid: ptyHost.pid });
+    const r = await hookIn(session, started.home, 'SessionStart', 'cs-bg', SH);
+    expect(r.status).toBe(0);
+    expect(ctxOf(r.stdout)).toMatch(/registered as "bg-one"/);
+    expect(getSession(started.broker.db, a.welcome.session_id)?.agent_session_id).toBe('cs-bg');
+    expect(getSession(started.broker.db, decoy.welcome.session_id)?.agent_session_id).toBeNull();
+    decoy.client.close();
+    a.client.close();
+  });
+
+  it('binds an npm-installed Claude Code that runs as node', async () => {
+    const started = await startTestBroker();
+    broker = started.broker;
+    const agent = await startClaude('node');
+    const a = await mcpClient(started.home, { requested_name: 'npm-one', mcp_ppid: agent.pid });
+    expect(ctxOf((await hookIn(agent, started.home, 'SessionStart', 'cs-npm', SH)).stdout)).toMatch(
+      /registered as "npm-one"/,
+    );
+    a.client.close();
+  });
+
+  it.each([
+    ['a shell', SH],
+    ['timeout', launcher('timeout')],
+    ['env', launcher('env')],
+    ['a shell running timeout', [...SH, ...launcher('timeout')]],
+  ])('looks through %s between the agent and the hook', async (_label, via) => {
+    const started = await startTestBroker();
+    broker = started.broker;
+    const claude = await startClaude();
+    const a = await mcpClient(started.home, { requested_name: 'wrapped-one', mcp_ppid: claude.pid });
+    expect(ctxOf((await hookIn(claude, started.home, 'SessionStart', 'cs-wrap', via)).stdout)).toMatch(
+      /registered as "wrapped-one"/,
+    );
+    a.client.close();
+  });
+
+  it('fails closed on an unknown launcher between the agent and the hook instead of skipping past it', async () => {
+    const started = await startTestBroker();
+    broker = started.broker;
+    const claude = await startClaude();
+    // The agent above has exactly one session; skipping upward over `nice` would bind it.
+    const a = await mcpClient(started.home, { requested_name: 'wrapped-one', mcp_ppid: claude.pid });
+    const r = await hookIn(claude, started.home, 'SessionStart', 'cs-nice', launcher('nice'));
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(getSession(started.broker.db, a.welcome.session_id)?.agent_session_id).toBeNull();
+    expect(brokerLog(started.home)).toMatch(/hook\.event SessionStart: 0 candidate sessions .*not bound/);
+    a.client.close();
+  });
+
+  it('fails closed when two live sessions have the hook agent as their MCP parent', async () => {
+    const started = await startTestBroker();
+    broker = started.broker;
+    const { session } = await bgTree();
+    const a = await mcpClient(started.home, { requested_name: 'twin-one', mcp_ppid: session.pid });
+    const b = await mcpClient(started.home, { requested_name: 'twin-two', mcp_ppid: session.pid });
+    const r = await hookIn(session, started.home, 'SessionStart', 'cs-twin', SH);
+    expect(r.stdout).toBe('');
+    for (const x of [a, b]) expect(getSession(started.broker.db, x.welcome.session_id)?.agent_session_id).toBeNull();
+    expect(brokerLog(started.home)).toMatch(/hook\.event SessionStart: 2 candidate sessions .*not bound/);
+    b.client.close();
+    a.client.close();
+  });
+
+  // E-4 nested under each layout, with the inner agent named as each install names it. The inner hook's agent is the
+  // inner process, which has no session yet at its cold SessionStart: the hook must stop there, never at the outer.
+  describe.each([
+    ['a terminal session', 'claude', async () => ({ outer: await startClaude() })],
+    ['a --bg session', '2.1.295', async () => ({ outer: (await bgTree()).session })],
+  ])('nested claude -p under %s', (_label, _outerExe, outerOf) => {
+    it.each(['claude', '2.1.295', 'node'])('an inner agent named %s never binds to the outer', async (innerExe) => {
+      const started = await startTestBroker();
+      broker = started.broker;
+      const { outer } = await outerOf();
+      const inner = await outer.nest(innerExe);
+      const o = await mcpClient(started.home, { requested_name: 'outer-one', mcp_ppid: outer.pid });
+      expect((await hookIn(inner, started.home, 'SessionStart', 'cs-inner', SH)).stdout).toBe('');
+      expect((await hookIn(inner, started.home, 'UserPromptSubmit', 'cs-inner', SH)).stdout).toBe('');
+      expect(getSession(started.broker.db, o.welcome.session_id)).toMatchObject({
+        agent_session_id: null,
+        state: 'online-idle',
+      });
+      // Once the inner MCP server is connected, the inner hook binds to it and not to the outer.
+      const i = await mcpClient(started.home, { requested_name: 'inner-one', mcp_ppid: inner.pid });
+      expect(ctxOf((await hookIn(inner, started.home, 'UserPromptSubmit', 'cs-inner', SH)).stdout)).toMatch(
+        /registered as "inner-one"/,
+      );
+      expect(getSession(started.broker.db, o.welcome.session_id)?.agent_session_id).toBeNull();
+      // The outer's own hook still binds the outer.
+      expect(ctxOf((await hookIn(outer, started.home, 'SessionStart', 'cs-outer', SH)).stdout)).toMatch(
+        /registered as "outer-one"/,
+      );
+      i.client.close();
+      o.client.close();
+    });
   });
 });

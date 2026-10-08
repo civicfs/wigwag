@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { nearestAncestor, pidChain, processChain } from '../../src/proc/ancestors.js';
+import { agentAncestor, pidChain, processChain } from '../../src/proc/ancestors.js';
 import { fakeClaude, fakeCommandDir } from '../helpers.js';
 
 describe('pidChain', () => {
@@ -14,25 +14,37 @@ describe('pidChain', () => {
   });
 });
 
-describe('processChain and nearestAncestor', () => {
+describe('processChain and agentAncestor', () => {
   it('reports pids with executable names, starting at the given pid', () => {
     const chain = processChain(process.pid);
     expect(chain.map((x) => x.pid)).toEqual(pidChain(process.pid));
     expect(chain[0].exe).toMatch(/^node/);
   });
 
-  it('finds the nearest strict ancestor by executable name and never the process itself', () => {
-    const chain = [
-      { pid: 10, exe: 'claude' },
-      { pid: 9, exe: 'sh' },
-      { pid: 8, exe: 'claude' },
-      { pid: 7, exe: 'claude' },
-    ];
-    expect(nearestAncestor(chain, 'claude')).toBe(8);
-    expect(nearestAncestor(chain, 'tmux')).toBeNull();
+  const at = (...exes: string[]) => exes.map((exe, i) => ({ pid: 100 - i, exe }));
+
+  it('is the nearest strict ancestor that is not a shell or launcher, whatever its name, never the hook itself', () => {
+    expect(agentAncestor(at('node', 'claude', 'claude'))).toBe(99);
+    expect(agentAncestor(at('node', 'sh', '2.1.295', 'claude', 'claude'))).toBe(98);
+    expect(agentAncestor(at('node', 'sh', 'node', 'zsh', 'claude'))).toBe(98);
+    expect(agentAncestor(at('node', 'timeout', 'bash', 'env', 'dash', 'ksh', 'fish', 'zsh', 'agent'))).toBe(92);
+    expect(agentAncestor(at('node', 'wigwag', 'ww', 'sh', 'x'))).toBe(96);
+    expect(agentAncestor(at('node', '-zsh', 'x'))).toBe(98);
   });
 
-  it('reads a live nested fake claude tree: the nearest claude ancestor is the inner one', async () => {
+  it('stops at an unknown wrapper or an unnamed process and never skips past it', () => {
+    expect(agentAncestor(at('node', 'sh', 'nice', 'claude'))).toBe(98);
+    expect(agentAncestor(at('node', '', 'claude'))).toBe(99);
+    // `node` is an agent name (npm-installed Claude Code), never looked through.
+    expect(agentAncestor(at('node', 'node', 'claude'))).toBe(99);
+  });
+
+  it('is null when only shells and launchers are above the hook', () => {
+    expect(agentAncestor(at('node'))).toBeNull();
+    expect(agentAncestor(at('node', 'sh', 'env'))).toBeNull();
+  });
+
+  it('reads a live nested fake claude tree: the agent of a process under the inner claude is the inner one', async () => {
     const outer = await fakeClaude();
     try {
       const inner = await outer.nest();
@@ -44,9 +56,22 @@ describe('processChain and nearestAncestor', () => {
         { pid: outer.pid, exe: 'claude' },
         { pid: process.pid, exe: expect.stringMatching(/^node/) },
       ]);
-      expect(nearestAncestor(chain, 'claude')).toBe(inner.pid);
+      expect(agentAncestor(chain)).toBe(inner.pid);
     } finally {
       await outer.stop();
+    }
+  });
+
+  it('reads a live --bg tree through a shell and a launcher: the agent is the version-named process', async () => {
+    const daemon = await fakeClaude();
+    try {
+      const session = await (await daemon.nest()).nest('2.1.295');
+      const hook = await (await (await session.nest('sh')).nest('timeout')).nest('node');
+      expect(agentAncestor(processChain(hook.pid))).toBe(session.pid);
+      const nice = await session.nest('nice');
+      expect(agentAncestor(processChain((await nice.nest('node')).pid))).toBe(nice.pid);
+    } finally {
+      await daemon.stop();
     }
   });
 });

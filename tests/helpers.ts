@@ -195,17 +195,35 @@ export interface FakeClaude {
     stdin: string,
     env?: Record<string, string>,
   ): Promise<{ pid: number; status: number | null; stdout: string }>;
-  /** Starts a nested agent process under this one, as `claude -p` run from the session's shell tool. */
-  nest(): Promise<FakeClaude>;
+  /**
+   * Starts a nested agent process under this one: `claude -p` run from the session's shell tool, or (with another
+   * `exe`) the next layer of a launcher tree such as the `--bg` daemon -> pty host -> session process.
+   */
+  nest(exe?: string): Promise<FakeClaude>;
 }
 
-/**
- * A live fake `claude` process (tests/fixtures/fake-claude.mjs) started through a symlink named `claude` to the node
- * binary, so `ps` reports the agent executable for it and for every agent nested under it.
- */
-export async function fakeClaude(): Promise<FakeClaude & { stop(): Promise<void> }> {
-  const bin = join(mkdtempSync(join(tmpdir(), 'ww-c-')), 'claude');
+/** A fresh symlink named `exe` to the node binary: `ps` reports `exe` as the executable of a process started through it. */
+function nodeAs(exe: string): string {
+  const bin = join(mkdtempSync(join(tmpdir(), 'ww-c-')), exe);
   symlinkSync(process.execPath, bin);
+  return bin;
+}
+
+export const FAKE_WRAPPER = resolve(import.meta.dirname, 'fixtures/wrapper.mjs');
+
+/**
+ * The argv prefix of a launcher named `exe` (`timeout`, `env`, `nice`, ...) that stays the parent of the command it
+ * runs (tests/fixtures/wrapper.mjs). Prepend it to a hook's argv to put that launcher between the agent and the hook.
+ */
+export const launcher = (exe: string): string[] => [nodeAs(exe), FAKE_WRAPPER];
+
+/**
+ * A live fake agent process (tests/fixtures/fake-claude.mjs) started through a symlink named `exe` to the node binary,
+ * so `ps` reports `exe` as its executable: `claude` for a terminal session, a version string such as `2.1.295` for the
+ * Claude Code `--bg` session process, `node` for an npm-installed Claude Code.
+ */
+export async function fakeClaude(exe = 'claude'): Promise<FakeClaude & { stop(): Promise<void> }> {
+  const bin = nodeAs(exe);
   const proc = spawn(bin, [FAKE_CLAUDE], { stdio: ['pipe', 'pipe', 'inherit'] });
   const lines = createInterface({ input: proc.stdout });
   const waiting: Array<(l: string) => void> = [];
@@ -218,8 +236,8 @@ export async function fakeClaude(): Promise<FakeClaude & { stop(): Promise<void>
   const node = (pid: number, to: number[]): FakeClaude => ({
     pid,
     run: (argv, stdin, env) => call({ to, run: argv, stdin, env }),
-    nest: async () => {
-      const r = await call<{ pid: number; child: number }>({ to, spawn: [bin, FAKE_CLAUDE] });
+    nest: async (exe = 'claude') => {
+      const r = await call<{ pid: number; child: number }>({ to, spawn: [nodeAs(exe), FAKE_CLAUDE] });
       return node(r.pid, [...to, r.child]);
     },
   });

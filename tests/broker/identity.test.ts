@@ -260,7 +260,7 @@ describe('identity', () => {
     });
   });
 
-  // agent_pid is the hook's nearest `claude` ancestor, as src/hooks/claude.ts computes it.
+  // agent_pid is the hook's nearest ancestor that is not a shell or launcher, as src/hooks/claude.ts computes it.
   const hookEv = (
     agent_session_id: string,
     pid_chain: number[],
@@ -343,7 +343,7 @@ describe('identity', () => {
     expect(getSession(broker.db, outer.welcome.session_id)?.state).toBe('online-idle');
   });
 
-  it('fails closed when the hook has no claude ancestor, or reports one outside its chain', async () => {
+  it('fails closed when the hook has no agent ancestor, or reports one outside its chain', async () => {
     const { home, broker } = await boot();
     const a = await mcp(home, { mcp_ppid: 4242 });
     const h = await hook(home);

@@ -3,12 +3,10 @@ import { join } from 'node:path';
 import { canConnect, sockPath } from '../client/autospawn.js';
 import { Client } from '../client/client.js';
 import { loadConfig, resolveHome } from '../config.js';
-import { nearestAncestor, processChain } from '../proc/ancestors.js';
+import { agentAncestor, processChain } from '../proc/ancestors.js';
 import { frameLimit } from '../protocol/frame.js';
 
 export type ClaudeHookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'Stop';
-/** The Claude Code executable name as `ps` reports it (spike S3: comm `claude`; the MCP server's parent). */
-const CLAUDE_EXECUTABLE = 'claude';
 const CONTEXT_EVENTS = new Set<ClaudeHookEvent>(['SessionStart', 'UserPromptSubmit', 'PostToolUse']);
 
 class StdinTooLarge extends Error {}
@@ -82,9 +80,9 @@ export async function runClaudeHook(event: ClaudeHookEvent): Promise<void> {
         agent_session_id: input.session_id,
         cwd: input.cwd ?? process.cwd(),
         pid_chain: chain.map((x) => x.pid),
-        // Spec §4: the hook's own agent is its nearest `claude` ancestor; an outer claude further up (a nested
-        // `claude -p` run from a session's shell tool) is never this hook's session.
-        agent_pid: nearestAncestor(chain, CLAUDE_EXECUTABLE),
+        // Spec §4: the hook's own agent is its nearest ancestor that is not a shell or launcher; an outer claude
+        // further up (a nested `claude -p` run from a session's shell tool) is never this hook's session.
+        agent_pid: agentAncestor(chain),
       });
       if (r.additional_context && CONTEXT_EVENTS.has(event)) {
         process.stdout.write(
