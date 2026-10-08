@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wigwag": {
+      "command": "wigwag",
+      "args": ["mcp", "--agent", "codex"],
+      "env_vars": ["WIGWAG_HOME", "WIGWAG_NAME", "XDG_STATE_HOME"]
+    }
+  }
+}

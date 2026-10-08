@@ -1,0 +1,1 @@
+{ "mcpServers": { "wigwag": { "command": "wigwag", "args": ["mcp", "--agent", "claude"] } } }

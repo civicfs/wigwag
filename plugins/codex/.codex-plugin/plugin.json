@@ -1,0 +1,83 @@
+{
+  "name": "wigwag",
+  "version": "0.1.0",
+  "description": "Push messages and a data channel between Codex and Claude Code sessions on this machine.",
+  "author": {
+    "name": "Michael Handelman"
+  },
+  "license": "MIT",
+  "mcpServers": "./.mcp.json",
+  "hooks": {
+    "hooks": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "mcp_tool",
+              "server": "wigwag",
+              "tool": "session_bind",
+              "input": {
+                "session_id": "${session_id}"
+              }
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "hooks": [
+            {
+              "type": "mcp_tool",
+              "server": "wigwag",
+              "tool": "turn_started",
+              "input": {}
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "hooks": [
+            {
+              "type": "mcp_tool",
+              "server": "wigwag",
+              "tool": "hook_digest",
+              "input": {}
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "mcp_tool",
+              "server": "wigwag",
+              "tool": "turn_ended",
+              "input": {}
+            }
+          ]
+        }
+      ],
+      "Interrupt": [
+        {
+          "hooks": [
+            {
+              "type": "mcp_tool",
+              "server": "wigwag",
+              "tool": "turn_ended",
+              "input": {}
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "interface": {
+    "displayName": "wigwag",
+    "shortDescription": "Messages and shared data between local agent sessions",
+    "developerName": "Michael Handelman",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"]
+  }
+}

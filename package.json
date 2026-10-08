@@ -1,0 +1,68 @@
+{
+  "name": "@civicfs/wigwag",
+  "version": "0.1.0",
+  "description": "Push messaging and a data channel between Claude Code and Codex sessions on one host",
+  "license": "MIT",
+  "author": {
+    "name": "Michael Handelman"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/civicfs/wigwag.git"
+  },
+  "homepage": "https://github.com/civicfs/wigwag#readme",
+  "bugs": {
+    "url": "https://github.com/civicfs/wigwag/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "mcp",
+    "agents",
+    "messaging",
+    "cli"
+  ],
+  "type": "module",
+  "bin": {
+    "wigwag": "dist/main.js",
+    "ww": "dist/main.js"
+  },
+  "files": [
+    "dist",
+    "plugins",
+    ".claude-plugin",
+    ".agents",
+    "install.sh",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "lint": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run typecheck && biome check ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "ajv": "8.20.0",
+    "ink": "8.0.0",
+    "react": "19.3.0",
+    "string-width": "8.3.0",
+    "ulid": "3.0.2",
+    "wrap-ansi": "10.0.2",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "26.6.4",
+    "@types/react": "19",
+    "ink-testing-library": "4.0.0",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}

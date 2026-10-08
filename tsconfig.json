@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src", "tests"]
+}
