@@ -355,6 +355,7 @@ directory yourself.
   stay held (offline) in `wigwag deliveries`.
 - Closing a Codex TUI under the shared daemon leaves that thread's session live for about 60 s (until the daemon unloads
   the idle thread), longer if it is still working a turn. Messages sent to its name in that time go to the closed thread.
+- Claude background sessions (`claude --bg`) bind and can use every tool, but they are not started with the development-channels flag, so peer messages are not pushed to them. They are held with reason `unbound` and arrive as context at the session's next prompt or tool call, and `inbox` lists them.
 
 ## License
 
