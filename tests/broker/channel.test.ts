@@ -73,6 +73,29 @@ describe('claude channel capability (E-3)', () => {
     expect(state(l.id, 'no-chan')).toMatchObject({ state: 'held', hold_reason: 'low' });
   });
 
+  // The held reason stays `unbound` either way (a fixed enum); only last_error tells the owner which fix applies.
+  it('says the session is not bound, not that it lacks the channel, while no hook has bound it', async () => {
+    const a = await mcpClient(home, { requested_name: 'no-chan', mcp_ppid: 4001, channel: false });
+    closers.push(() => a.client.close());
+    const m = await send('no-chan', 'normal', 'UNBOUND-TOKEN');
+    expect(state(m.id, 'no-chan')).toMatchObject({ state: 'held', hold_reason: 'unbound' });
+    const text = state(m.id, 'no-chan')?.last_error ?? '';
+    expect(text).toMatch(/no wigwag hook has bound/);
+    expect(text).toMatch(/not bound/);
+    expect(text).not.toMatch(/did not load the wigwag channel|start it with/);
+  });
+
+  it('says the session did not load the channel once a hook has bound it', async () => {
+    const a = await mcpClient(home, { requested_name: 'no-chan', mcp_ppid: 4001, channel: false });
+    closers.push(() => a.client.close());
+    expect((await hook('SessionStart', 'claude-sess-b', 4001)).bound).toBe(true);
+    const m = await send('no-chan', 'normal', 'BOUND-TOKEN');
+    expect(state(m.id, 'no-chan')).toMatchObject({ state: 'held', hold_reason: 'unbound' });
+    const text = state(m.id, 'no-chan')?.last_error ?? '';
+    expect(text).toMatch(/did not load the wigwag channel \(start it with: wigwag claude\)/);
+    expect(text).not.toMatch(/no wigwag hook has bound/);
+  });
+
   it('keeps pushing over the channel when the client advertised it (and for a legacy hello without the field)', async () => {
     const yes = await mcpClient(home, { requested_name: 'with-chan', mcp_ppid: 4002, channel: true });
     const legacy = await mcpClient(home, { requested_name: 'legacy-chan', mcp_ppid: 4003 });

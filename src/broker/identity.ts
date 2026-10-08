@@ -341,19 +341,20 @@ export function installIdentity(broker: Broker): void {
       );
       return true;
     };
-    // Spec §4 (E-4 nested): a hook belongs only to the session whose MCP server is a child of the hook's own claude
-    // process, its nearest `claude` ancestor. Chain membership alone is not enough: an outer session's claude is also
-    // an ancestor of a nested `claude -p` and its hooks, and at the inner SessionStart the inner MCP server may not be
-    // registered yet, which left the outer session as the only candidate.
+    // Spec §4 (E-4 nested): a hook belongs only to the session whose MCP server is a child of the hook's own agent
+    // process: its nearest ancestor that is not a shell or launcher (src/proc/ancestors.ts), found by position because
+    // the agent's executable name changes per release and install. Chain membership alone is not enough: an outer
+    // session's claude is also an ancestor of a nested `claude -p` and its hooks, and at the inner SessionStart the
+    // inner MCP server may not be registered yet, which left the outer session as the only candidate.
     const agentPid = p.agent_pid;
     if (agentPid === null || !p.pid_chain.includes(agentPid)) {
-      broker.log(`hook.event ${p.event}: no claude ancestor in the hook's pid chain; not bound`);
+      broker.log(`hook.event ${p.event}: no agent process in the hook's pid chain; not bound`);
       return { bound: false, additional_context: null };
     }
     let s: SessionRow | undefined = bound[0];
     if (s && s.mcp_ppid !== agentPid) {
       broker.log(
-        `hook.event ${p.event}: ${p.agent_session_id} is bound to session ${s.id} of claude pid ${s.mcp_ppid}, the hook's claude is pid ${agentPid}; not bound`,
+        `hook.event ${p.event}: ${p.agent_session_id} is bound to session ${s.id} of agent pid ${s.mcp_ppid}, the hook's agent is pid ${agentPid}; not bound`,
       );
       return { bound: false, additional_context: null };
     }
@@ -366,7 +367,7 @@ export function installIdentity(broker: Broker): void {
         // Only the cold start (the MCP server not registered yet) owes the context later; ambiguity stays unbound.
         if (candidates.length === 0 && p.event === 'SessionStart') startContextOwed.add(p.agent_session_id);
         broker.log(
-          `hook.event ${p.event}: ${candidates.length} candidate sessions for ${p.agent_session_id} under claude pid ${agentPid}; not bound`,
+          `hook.event ${p.event}: ${candidates.length} candidate sessions for ${p.agent_session_id} under agent pid ${agentPid}; not bound`,
         );
         return { bound: false, additional_context: null };
       }

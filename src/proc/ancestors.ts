@@ -58,7 +58,26 @@ export function pidChain(pid: number): number[] {
   return processChain(pid).map((x) => x.pid);
 }
 
-/** The nearest strict ancestor (the chain's first entry is the process itself) whose executable is `exe`, or null. */
-export function nearestAncestor(chain: Proc[], exe: string): number | null {
-  return chain.slice(1).find((x) => x.exe === exe)?.pid ?? null;
+/**
+ * Spec §4: the shells and launchers that may stand between an agent process and a hook command it runs (Claude Code
+ * runs a command hook through a shell; a hook command may itself be wrapped in `env` or `timeout`), plus this package's
+ * own bin names. These are names of shells and generic launchers, never of an agent: the agent's executable name is
+ * not stable (Claude Code's terminal process is `claude`, its `--bg` session process is named after the release, such
+ * as `2.1.295`, and an npm install runs as `node`). Fixed, not a tunable: every name here is looked through on the way
+ * up, so it must never be a name an agent process can run under (`node` is therefore not here).
+ */
+const HOOK_LAUNCHERS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'env', 'timeout', 'wigwag', 'ww']);
+
+/** A login shell's `ps` name carries a leading `-` (`-zsh`). */
+const launcherName = (exe: string): string => (exe.startsWith('-') ? exe.slice(1) : exe);
+
+/**
+ * Spec §4: the process that ran this hook, found by position, not by name: the nearest strict ancestor (the chain's
+ * first entry is the hook itself) that is not a shell or launcher in `HOOK_LAUNCHERS`. The walk stops at the first
+ * other process, whatever it is (an unknown wrapper, or a process `ps` could not name): it never skips past it to a
+ * process further up, so a nested `claude -p` hook stops at the inner agent and never reaches the outer one. Null when
+ * the chain has only shells and launchers above the hook.
+ */
+export function agentAncestor(chain: Proc[]): number | null {
+  return chain.slice(1).find((x) => !HOOK_LAUNCHERS.has(launcherName(x.exe)))?.pid ?? null;
 }

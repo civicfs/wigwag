@@ -37,8 +37,14 @@ const SYSTEM_SENDERS = new Set(['owner', 'wigwag']);
 const OWNER = 'owner';
 /** Delivery transport recorded for messages addressed to the owner (read in the owner feed, not pushed to a session). */
 const OWNER_FEED = 'owner-feed';
+// Held-item text for a live Claude session that cannot take a channel push (hold_reason `unbound` either way: the stored
+// reasons are a fixed enum). Bound: its hooks work, so the turn boundary delivers and the fix is the launch flag. Not
+// bound: the MCP server is connected but no hook has matched it, so no turn boundary can deliver either; the launch
+// advice would be wrong (a session started with `wigwag claude` shows this too when its hooks fail to bind).
 const NO_CHANNEL =
   'this Claude session did not load the wigwag channel (start it with: wigwag claude); delivered at its next turn boundary or by inbox';
+const UNBOUND_NO_CHANNEL =
+  'this Claude session is connected but no wigwag hook has bound to it yet (see "not bound" in broker.log) and its MCP server reported no usable channel, so it cannot be pushed to or reached at a turn boundary; delivered by inbox, or at a turn boundary once a hook binds it';
 
 export class DeliveryEngine {
   private readonly limiter: WakeLimiter;
@@ -197,7 +203,9 @@ export class DeliveryEngine {
     if (dec.action === 'hold') {
       this.move(k, 'held', {
         hold_reason: dec.reason,
-        ...(rs.state === 'no-channel' ? { last_error: NO_CHANNEL } : {}),
+        ...(rs.state === 'no-channel'
+          ? { last_error: rs.session?.agent_session_id ? NO_CHANNEL : UNBOUND_NO_CHANNEL }
+          : {}),
       });
       return;
     }
