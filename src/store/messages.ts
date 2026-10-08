@@ -185,6 +185,36 @@ export function deliveriesFor(db: Db, recipient: string, states: DeliveryState[]
   return rows.map(({ m_id, ...d }) => ({ ...d, message: getMessage(db, m_id) as MessageRow }));
 }
 
+/**
+ * A session left the provisional name the broker gave it: its undelivered deliveries addressed to the old name move to
+ * the new one, in one transaction. Messages stay as sent (`to_target` is not rewritten); each moved delivery gets an
+ * event under the new recipient saying where it came from. A delivery whose message already has a row for the new
+ * recipient (an `all` broadcast that reached both names) is left where it is (primary-key collision). `canMove` is the
+ * caller's veto (scope, in-flight push).
+ */
+export function moveDeliveries(
+  db: Db,
+  from: string,
+  to: string,
+  canMove: (d: DeliveryWithMessage) => boolean,
+): DeliveryRow[] {
+  return tx(db, () => {
+    const moved: DeliveryRow[] = [];
+    const upd = db.prepare('UPDATE OR IGNORE deliveries SET recipient = ? WHERE message_id = ? AND recipient = ?');
+    const ev = db.prepare(
+      'INSERT INTO delivery_events (message_id, recipient, from_state, to_state, detail, at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    const at = nowIso();
+    for (const d of deliveriesFor(db, from, ['pending', 'held', 'stuck', 'failed'])) {
+      if (!canMove(d)) continue;
+      if (Number(upd.run(to, d.message_id, from).changes) !== 1) continue;
+      ev.run(d.message_id, to, d.state, d.state, `forwarded from ${from}`, at);
+      moved.push(getDelivery(db, d.message_id, to) as DeliveryRow);
+    }
+    return moved;
+  });
+}
+
 export const deliveriesByState = (db: Db, states: DeliveryState[]): DeliveryRow[] =>
   db
     .prepare(`SELECT * FROM deliveries WHERE state IN (${placeholders(states.length)}) ORDER BY message_id`)

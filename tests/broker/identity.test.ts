@@ -9,6 +9,7 @@ import { Client } from '../../src/client/client.js';
 import { loadConfig } from '../../src/config.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
+import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { bindAgentSession, getSession } from '../../src/store/sessions.js';
 import { GIT_TIMEOUT_MS } from '../../src/workspace.js';
 import { fakeGitDir, ownerClient, startTestBroker } from '../helpers.js';
@@ -427,5 +428,96 @@ describe('a hung git never freezes the broker (final I-5)', () => {
       agent_pid: null,
     });
     expect(Date.now() - t1).toBeLessThan(bound);
+  });
+});
+
+// A message sent to a session's provisional name must not be stranded when the session moves to another name: inbox
+// and unread look up only the name it has now.
+describe('undelivered messages follow a rename away from the provisional name', () => {
+  type Inbox = { messages: Array<{ message: { id: string; subject: string; to_target: string } }> };
+  const inbox = (c: { client: Client }) => c.client.call<Inbox>('msg.inbox', { include_read: false, limit: 20 });
+  const ownerSend = async (home: string, to: string, subject: string, priority = 'low') => {
+    const o = await ownerClient(home);
+    cleanup.push(() => o.close());
+    return o.call<{ id: string }>('owner.send', { to, subject, body: 'b', priority, attach_paths: [] });
+  };
+  const rows = (broker: Broker, id: string) => deliveriesOfMessage(broker.db, id);
+  const events = (broker: Broker, id: string) =>
+    broker.db
+      .prepare('SELECT recipient, from_state, to_state, detail FROM delivery_events WHERE message_id = ?')
+      .all(id);
+
+  it('register moves held messages to the new name; the message stays as sent and the event records the origin', async () => {
+    const { home, broker } = await boot();
+    const a = await mcp(home);
+    const old = a.welcome.name;
+    const m = await ownerSend(home, old, 'for-the-old-name');
+    expect(rows(broker, m.id)).toMatchObject([{ recipient: old, state: 'held', hold_reason: 'low' }]);
+    await a.client.call('session.register', { name: 'role-name' });
+    expect(rows(broker, m.id)).toMatchObject([{ recipient: 'role-name', state: 'held', hold_reason: 'low' }]);
+    expect(events(broker, m.id)).toContainEqual({
+      recipient: 'role-name',
+      from_state: 'held',
+      to_state: 'held',
+      detail: `forwarded from ${old}`,
+    });
+    expect(await a.client.call('session.whoami')).toMatchObject({ name: 'role-name', unread: 1 });
+    const got = await inbox(a);
+    expect(got.messages.map((x) => x.message.subject)).toEqual(['for-the-old-name']);
+    expect(got.messages[0].message.to_target).toBe(old);
+  });
+
+  it('moves pending, held, stuck and failed deliveries, but leaves pushed and read ones', async () => {
+    const { home, broker } = await boot();
+    const a = await mcp(home);
+    const old = a.welcome.name;
+    const ids = {
+      pending: (await ownerSend(home, old, 'pending')).id,
+      stuck: (await ownerSend(home, old, 'stuck')).id,
+      failed: (await ownerSend(home, old, 'failed')).id,
+      read: (await ownerSend(home, old, 'read')).id,
+    };
+    const set = (id: string, state: string) =>
+      broker.db.prepare('UPDATE deliveries SET state = ?, hold_reason = NULL WHERE message_id = ?').run(state, id);
+    set(ids.pending, 'pending');
+    set(ids.stuck, 'stuck');
+    set(ids.failed, 'failed');
+    set(ids.read, 'read');
+    await a.client.call('session.register', { name: 'role-name' });
+    const where = (id: string) => rows(broker, id)[0].recipient;
+    expect([ids.pending, ids.stuck, ids.failed].map(where)).toEqual(['role-name', 'role-name', 'role-name']);
+    expect(where(ids.read)).toBe(old);
+  });
+
+  it('does not forward when the session leaves a name it registered itself', async () => {
+    const { home, broker } = await boot();
+    const a = await mcp(home);
+    await a.client.call('session.register', { name: 'first-name' });
+    const m = await ownerSend(home, 'first-name', 'to-first');
+    await a.client.call('session.register', { name: 'second-name' });
+    expect(rows(broker, m.id)[0].recipient).toBe('first-name');
+  });
+
+  it('a broadcast that reached both names keeps its old-name row; other messages still move', async () => {
+    const { home, broker } = await boot();
+    const taken = await mcp(home, { requested_name: 'taken-one' });
+    taken.client.close();
+    await settle();
+    const sender = await mcp(home, { requested_name: 'sender-one' });
+    const a = await mcp(home);
+    const old = a.welcome.name;
+    const bc = await sender.client.call<{ id: string }>('msg.send', {
+      to: 'all',
+      subject: 'bc',
+      body: 'b',
+      priority: 'low',
+    });
+    expect(rows(broker, bc.id).map((r) => r.recipient)).toEqual(expect.arrayContaining([old, 'taken-one']));
+    const solo = await ownerSend(home, old, 'solo');
+    await a.client.call('session.register', { name: 'taken-one' }); // offline holder in scope: allowed
+    expect(rows(broker, solo.id)[0].recipient).toBe('taken-one');
+    const bcRows = rows(broker, bc.id).map((r) => r.recipient);
+    expect(bcRows).toEqual(expect.arrayContaining([old, 'taken-one'])); // no row lost, no collision error
+    expect(bcRows.filter((r) => r === 'taken-one')).toHaveLength(1);
   });
 });

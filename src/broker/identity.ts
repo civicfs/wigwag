@@ -34,7 +34,7 @@ const canonical = (p: string): string => {
   }
 };
 
-/** A launcher's request (E-1): the Codex session that binds in `cwd` after `at` should take `name`. */
+/** A launcher's request (E-1): the Codex session that connects in `cwd` after it should take `name`. */
 interface LaunchIntent {
   conn: Connection;
   name: string;
@@ -98,6 +98,17 @@ export function installIdentity(broker: Broker): void {
     }
   };
 
+  /**
+   * `s` just left the provisional name `from` (register, launch intent, a handed-over name): its undelivered messages
+   * addressed to that name follow it, since inbox and unread only look up the name it has now. The caller announces
+   * the session afterwards, which sweeps and delivers the moved backlog.
+   */
+  const leftProvisional = (s: SessionRow, from: string | null) => {
+    provisional.delete(s.id);
+    const to = getSession(db, s.id)?.name;
+    if (from && to && from !== to) broker.engine?.forward(from, to);
+  };
+
   broker.onHello = async (conn, hello: Hello) => {
     if (hello.role === 'owner' || hello.role === 'hook') return { role: hello.role };
     if (!hello.agent || hello.cwd === undefined || !hello.pid_chain) {
@@ -141,7 +152,11 @@ export function installIdentity(broker: Broker): void {
               ? `${takeoverText(want, r.holder.workspace)}; using a provisional name`
               : `requested name "${want}" is held by ${liveHolderText(s, r.holder)}; using a provisional name`;
       }
-      if (!ok) claimProvisional(s);
+      if (!ok) {
+        claimProvisional(s);
+        // E-1: a launcher's name is applied now, not at the first prompt (when Codex fires session.bind).
+        if (hello.agent === 'codex') applyLaunchIntent(getSession(db, s.id) as SessionRow);
+      }
     }
     const fresh = announce(s.id);
     return { session_id: fresh.id, name: fresh.name, agent: fresh.agent, warning };
@@ -156,6 +171,7 @@ export function installIdentity(broker: Broker): void {
         continue;
       }
       const previous = holderOf(db, w.intent.name);
+      const from = s.name;
       const r = claimName(db, s.id, w.intent.name);
       if (!r.ok && r.reason === 'live') continue; // still held: keep waiting
       dropWaiting(w);
@@ -165,7 +181,7 @@ export function installIdentity(broker: Broker): void {
         );
         continue;
       }
-      provisional.delete(s.id);
+      leftProvisional(s, from);
       broker.log(`launch intent: ${w.intent.name} handed to ${s.id} after the previous holder ended`);
       announce(s.id);
       // The old session keeps its row and history but lost the name; owner views must not go on showing it.
@@ -187,7 +203,9 @@ export function installIdentity(broker: Broker): void {
 
   broker.handle('session.register', ({ conn }, { name }) => {
     if (RESERVED_NAMES.has(name)) throw new WigwagError('bad_request', `"${name}" is reserved`);
-    const r = claimName(db, conn.sessionId as string, name);
+    const before = me(conn.sessionId);
+    const wasProvisional = provisional.has(before.id);
+    const r = claimName(db, before.id, name);
     // final m-5: a refusal names the holder's session and cwd only when the holder is in the caller's scope.
     if (!r.ok && r.reason === 'scope') throw new WigwagError('name_taken', takeoverText(name, r.holder.workspace));
     if (!r.ok) {
@@ -198,7 +216,7 @@ export function installIdentity(broker: Broker): void {
         sameScope(caller, r.holder) ? { holder_session_id: r.holder.id } : undefined,
       );
     }
-    provisional.delete(conn.sessionId as string);
+    if (wasProvisional) leftProvisional(before, before.name);
     announce(conn.sessionId as string);
     return { name };
   });
@@ -219,18 +237,19 @@ export function installIdentity(broker: Broker): void {
   });
 
   /**
-   * E-1: under the shared Codex daemon the MCP server never sees the launcher's WIGWAG_NAME. When a Codex session binds,
-   * the launcher's intent for its directory names it, through the same claim rules as WIGWAG_NAME (a live holder or an
-   * out-of-scope offline holder refuses it). Only a session still on its provisional name, created after the intent,
-   * qualifies, and exactly one such session and one intent must match: anything else fails closed and leaves the
-   * provisional name (the agent can still call register).
+   * E-1: under the shared Codex daemon the MCP server never sees the launcher's WIGWAG_NAME. The launcher's intent for
+   * the session's directory names it, through the same claim rules as WIGWAG_NAME (a live holder or an out-of-scope
+   * offline holder refuses it). It is applied when the MCP server connects (hello), so the name shows before the first
+   * prompt, and again at `session.bind` as a fallback. Only a session still on its provisional name, created after the
+   * intent, qualifies, and exactly one such session and one intent must match: anything else fails closed and leaves
+   * the provisional name (the agent can still call register). Only the intent that is applied is consumed: a refusal
+   * for ambiguity never removes another launcher's intent (they end with their launcher's connection).
    */
   const applyLaunchIntent = (s: SessionRow): void => {
     if (s.agent !== 'codex' || !provisional.has(s.id)) return;
     const cwd = canonical(s.cwd);
     const matching = [...intents].filter((i) => i.cwd === cwd && i.seq < (provisional.get(s.id) as number));
     if (!matching.length) return;
-    for (const i of matching) intents.delete(i);
     const rivals = listSessions(db).filter(
       (x) =>
         x.agent === 'codex' &&
@@ -246,11 +265,13 @@ export function installIdentity(broker: Broker): void {
       );
       return;
     }
-    const r = claimName(db, s.id, matching[0].name);
+    const intent = matching[0];
+    intents.delete(intent);
+    const from = s.name;
+    const r = claimName(db, s.id, intent.name);
     if (!r.ok) {
       const wait = broker.config.codex.name_wait_ms;
       if (r.reason === 'live') {
-        const intent = matching[0];
         const w: WaitingName = {
           intent,
           sessionId: s.id,
@@ -263,11 +284,11 @@ export function installIdentity(broker: Broker): void {
         waiting.add(w);
       }
       broker.log(
-        `launch intent: ${matching[0].name} refused for ${s.id} (${r.reason} holder ${r.holder.id}); keeping ${s.name}${r.reason === 'live' ? `, waiting up to ${wait} ms for the holder to end` : ''}`,
+        `launch intent: ${intent.name} refused for ${s.id} (${r.reason} holder ${r.holder.id}); keeping ${s.name}${r.reason === 'live' ? `, waiting up to ${wait} ms for the holder to end` : ''}`,
       );
       return;
     }
-    provisional.delete(s.id);
+    leftProvisional(s, from);
   };
 
   broker.handle('session.bind', ({ conn }, { agent_session_id }) => {
