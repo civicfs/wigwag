@@ -3,9 +3,13 @@
 Wigwag is a local message and data bus for coding-agent sessions. Claude Code and Codex sessions on one machine message
 each other without polling: a message to an idle session starts a turn. On top of messages there is a small data channel
 (blobs, shared key/value state with compare-and-set, typed append-only streams, request/response). The owner watches and
-steers everything from a CLI and a terminal UI. State lives in SQLite under `~/.wigwag`; nothing leaves the host.
+steers everything from a CLI and a terminal UI. Broker state lives in SQLite under `~/.wigwag`, and broker transport
+stays on the host. Messages delivered into Claude Code or Codex context may be sent to that agent's inference provider.
 
 Design: [docs/spec.md](docs/spec.md).
+
+Before installing, read the [privacy notice](PRIVACY.md) and the [provider-terms review](docs/provider-terms.md).
+Wigwag is an independent integration; this review does not establish approval by Anthropic or OpenAI.
 
 ## Why
 
@@ -25,7 +29,7 @@ Wigwag is a local broker that every session connects to:
 - The owner watches and steers through one view, a CLI and a terminal UI: sessions and their state, the live feed,
   stuck deliveries, and KV, stream and blob contents. The owner can send messages as `owner`.
 
-Wigwag is local only. The broker listens on a unix socket (mode 0600) inside a 0700 home directory, with no network
+Wigwag's broker is local only. It listens on a unix socket (mode 0600) inside a 0700 home directory, with no network
 listener. Sessions in the same git repository, including its worktrees, connect automatically; sessions in other
 workspaces need an owner-created link (`wigwag link`). Messages from other agents are information, never owner
 instructions. Messages, stream records and KV history are append-only.
@@ -58,13 +62,18 @@ After installing, Codex asks you to trust the plugin's hooks the first time you 
 
 ## Start sessions
 
+The Claude launcher below always adds `--dangerously-load-development-channels`, a local development/testing
+exception. Broader permission remains unresolved, including with API authentication. See the
+[provider-terms review](docs/provider-terms.md#anthropic-and-claude-code).
+
 ```
 wigwag claude --as reviewer          # claude --dangerously-load-development-channels plugin:wigwag@wigwag, named "reviewer"
 wigwag codex --as codex-merger       # codex, named "codex-merger"
 ```
 
 Both run the agent in the current terminal and pass every other argument through (`wigwag claude --as x --model sonnet`).
-Claude shows a development-channels warning at every start; accept it. Without `wigwag claude`, plain `claude` still
+Claude shows a development-channels warning at every start; continue only for local channel development/testing
+with trusted source code. Without `wigwag claude`, plain `claude` still
 registers a session but does not receive pushes: its messages are held, handed over as context at the next prompt or tool
 call, and listed by `inbox`; the session-start context tells the model its unread count and to call `inbox`. A message
 counts as read once it has been delivered into the model's context (channel push, `codex queue`, hook digest), so
@@ -303,6 +312,16 @@ once: it adds any key the new version needs and leaves your values alone.
 
 ## Trust
 
+Use your own provider account, or an account assigned to you by your organization. Do not use Wigwag to share or resell
+subscription access, evade provider usage limits, bypass safety controls, or train or distill models contrary to the
+provider's terms. Sharing task results between agents does not establish permission for other uses of those results.
+Wigwag's wake throttle limits broker traffic, not provider tokens, charges, or account quotas.
+
+Only share content you have permission to provide to every recipient and its inference provider. Do not send passwords,
+API keys, authentication tokens, protected health information, or payment-card data through the plugin. Review the
+[privacy notice](PRIVACY.md) for storage, sharing, and deletion details. Installing the plugin enables local session
+registration; sending content or creating subscriptions and workspace links determines further sharing.
+
 All agents run as the same OS user as the owner, so any agent with a shell can run `wigwag send` and appear as `owner`.
 The `owner` tag is a label, not an authorization. This matches the existing rule that approvals come from the owner in the
 session that will act, never through a relay. The broker listens only on a unix socket (mode 0600) inside a 0700 home
@@ -317,13 +336,16 @@ wigwag uninstall [--claude-only | --codex-only]
 Removes both plugins and marketplaces and keeps `~/.wigwag` (messages, KV, blobs). Running it again reports
 `was not installed` for the Claude plugin, the Claude marketplace and the Codex marketplace. For the Codex plugin it
 prints `codex plugin remove wigwag@wigwag` instead, because `codex plugin remove` exits 0 when the plugin is absent. To remove the CLI itself: `npm uninstall -g @civicfs/wigwag`. To remove the data, delete the home
-directory yourself.
+directory yourself after closing connected agent sessions and stopping the broker with `wigwag broker stop`. This
+permanently removes local configuration, history, and blobs. It does not remove exported files, backups, or copies
+already delivered to another session or inference provider. See [retention and deletion](PRIVACY.md#retention-and-deletion).
 
 ## Limitations
 
 - One host, macOS or Linux. Linux pid-chain binding has not been run end to end.
 - Spawning sessions is not implemented; `wigwag claude` and `wigwag codex` only start an agent in your terminal.
-- Claude pushes need `--dangerously-load-development-channels` (research preview). Claude Code 2.1.294 does not advertise
+- The Claude launcher uses `--dangerously-load-development-channels` for local development and testing (research
+  preview); broader use has unresolved permission requirements. Claude Code 2.1.294 does not advertise
   channel support in its MCP client capabilities, so the MCP server decides from the capability when present and
   otherwise from the launch flags of its parent `claude` process (`--dangerously-load-development-channels` or
   `--channels` naming `plugin:wigwag@...` or `server:wigwag`, read with `ps`). A Claude without them is treated as having

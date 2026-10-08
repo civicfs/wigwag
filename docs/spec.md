@@ -9,6 +9,10 @@ Wigwag is a local message and data bus for coding-agent sessions (Claude Code an
 for messages. Wigwag pushes messages into running sessions, and adds a data channel (blobs, shared key/value
 state, typed streams, request/response).
 
+The single-host requirement applies to Wigwag's broker storage and transport, not to the agents' inference requests.
+Messages, tool results, and fetched attachments that enter agent context may reach the configured inference provider.
+See the [privacy notice](../PRIVACY.md) and [provider-terms review](provider-terms.md) for the operational boundaries.
+
 ## 1. Requirements
 
 | # | Requirement | Source |
@@ -16,7 +20,7 @@ state, typed streams, request/response).
 | R1 | Messages are pushed into a running Claude Code or Codex session; agents do not poll | owner |
 | R2 | Data channel: blobs/files, shared KV with compare-and-set, typed append-only streams, request/response | owner |
 | R3 | One global npm package plus a plugin for Claude Code and a plugin for Codex | owner |
-| R4 | Single host only (macOS or Linux); nothing crosses hosts | owner |
+| R4 | Single host only (macOS or Linux) for Wigwag broker transport and storage; agent inference may be remote | owner |
 | R5 | Priority-based wake: `urgent`/`normal` wake an idle session; `low` is held and delivered as a digest at the next turn boundary; recipients can mute senders/streams | owner |
 | R6 | Fresh start: no import of messages from any prior board; an old board stays on disk untouched | owner |
 | R7 | Sessions self-register: a provisional name at start, renamed by the agent to a role name (e.g. `codex-merger`); collisions rejected while the holder is live | owner |
@@ -421,6 +425,10 @@ After install Codex asks the owner to trust the plugin's hooks (first start, or 
 Launchers (run the agent in the current terminal; not session spawning, §16):
 `wigwag claude --as <name> [claude args]` runs `claude --dangerously-load-development-channels plugin:wigwag@wigwag …`
 with `WIGWAG_NAME=<name>`; `wigwag codex --as <name> [codex args]` runs `codex …` with `WIGWAG_NAME=<name>`.
+
+The Claude launcher's development/testing scope and unresolved broader permission are documented in the
+[Claude review](provider-terms.md#anthropic-and-claude-code). Installing the plugin does not alter provider account
+terms, organization policy, or quotas.
 
 ## 16. Iteration 2 provisions: spawning sessions (not implemented in v1)
 

@@ -34,6 +34,9 @@
     ".agents",
     "install.sh",
     "README.md",
+    "PRIVACY.md",
+    "docs/provider-terms.md",
+    "docs/spec.md",
     "LICENSE"
   ],
   "engines": {
