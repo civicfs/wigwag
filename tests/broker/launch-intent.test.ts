@@ -1,22 +1,27 @@
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Broker } from '../../src/broker/server.js';
 import type { Client } from '../../src/client/client.js';
+import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { getSession } from '../../src/store/sessions.js';
-import { mcpClient, ownerClient, startTestBroker } from '../helpers.js';
+import { mcpClient, ownerClient, readCodexCalls, startTestBroker, until } from '../helpers.js';
 
 // E-1: under the shared Codex daemon the MCP server is spawned by the daemon and never sees WIGWAG_NAME from
-// `wigwag codex --as x`. The launcher registers the intended name with the broker (keyed by cwd) and the Codex
-// SessionStart hook (`session_bind`) consumes it, through the ordinary claim rules.
+// `wigwag codex --as x`. The launcher registers the intended name with the broker (keyed by cwd); the broker applies it
+// when the Codex MCP server connects (hello), and again at `session.bind` as a fallback, through the ordinary claim
+// rules.
 const closers: Array<() => unknown> = [];
 let broker: Broker;
 let home: string;
 afterEach(async () => {
   for (const c of closers.splice(0).reverse()) await c();
   await broker?.stop().catch(() => {});
+  delete process.env.FAKE_CODEX_LOG;
 });
 
 async function boot() {
   ({ home, broker } = await startTestBroker());
+  process.env.FAKE_CODEX_LOG = join(home, 'codex.jsonl');
 }
 async function launcher(name: string, cwd = '/w/myproject', agent = 'codex'): Promise<Client> {
   const o = await ownerClient(home);
@@ -33,11 +38,15 @@ const nameOf = (id: string) => getSession(broker.db, id)?.name;
 const settle = () => new Promise((r) => setTimeout(r, 60));
 
 describe('launcher name intent for daemon-spawned Codex (E-1)', () => {
-  it('names the first Codex session that binds in the launch directory after the intent', async () => {
+  it('names the Codex session at connect, before any prompt binds it', async () => {
     await boot();
     await launcher('e2e-codex');
     const c = await codex();
-    expect(c.welcome.name).toMatch(/^codex-myproject-/);
+    expect(c.welcome.name).toBe('e2e-codex');
+    expect(nameOf(c.welcome.session_id)).toBe('e2e-codex');
+    expect(await c.client.call('session.whoami')).toMatchObject({ name: 'e2e-codex', bound: false });
+    const who = await (await ownerClient(home)).call<Array<{ name: string; bound: boolean }>>('session.who');
+    expect(who.find((x) => x.name === 'e2e-codex')).toMatchObject({ bound: false });
     await c.client.call('session.bind', { agent_session_id: 'thread-1' });
     expect(nameOf(c.welcome.session_id)).toBe('e2e-codex');
     expect(await c.client.call('session.whoami')).toMatchObject({ name: 'e2e-codex', bound: true });
@@ -82,14 +91,13 @@ describe('launcher name intent for daemon-spawned Codex (E-1)', () => {
     const req = await codex('/w/myproject', { requested_name: 'chosen-one' });
     await req.client.call('session.bind', { agent_session_id: 'thread-1' });
     expect(nameOf(req.welcome.session_id)).toBe('chosen-one');
-    const reg = await codex();
-    await reg.client.call('session.register', { name: 'role-name' });
-    await reg.client.call('session.bind', { agent_session_id: 'thread-2' });
-    expect(nameOf(reg.welcome.session_id)).toBe('role-name');
-    // the intent is still unused; the right session can take it
+    // the intent is still unused; the right session takes it at connect
     const right = await codex();
-    await right.client.call('session.bind', { agent_session_id: 'thread-3' });
     expect(nameOf(right.welcome.session_id)).toBe('e2e-codex');
+    // an explicit register afterwards still wins over the launcher's name, and the bind keeps it
+    await right.client.call('session.register', { name: 'role-name' });
+    await right.client.call('session.bind', { agent_session_id: 'thread-3' });
+    expect(nameOf(right.welcome.session_id)).toBe('role-name');
   });
 
   it('refuses a live holder and an out-of-scope offline holder: the session keeps its provisional name', async () => {
@@ -112,14 +120,14 @@ describe('launcher name intent for daemon-spawned Codex (E-1)', () => {
     expect(nameOf(d.welcome.session_id)).toMatch(/^codex-myproject-/);
   });
 
-  it('fails closed when two unbound Codex sessions could be the launched one', async () => {
+  it('names only the first session that connects after the intent; a second one keeps its provisional name', async () => {
     await boot();
     await launcher('e2e-codex');
     const a = await codex();
     const b = await codex();
     await a.client.call('session.bind', { agent_session_id: 'thread-a' });
     await b.client.call('session.bind', { agent_session_id: 'thread-b' });
-    expect(nameOf(a.welcome.session_id)).toMatch(/^codex-myproject-/);
+    expect(nameOf(a.welcome.session_id)).toBe('e2e-codex');
     expect(nameOf(b.welcome.session_id)).toMatch(/^codex-myproject-/);
   });
 
@@ -279,5 +287,76 @@ describe('launcher name intent: relaunch while the previous thread is still live
     await settle();
     const names = [nameOf(a.welcome.session_id), nameOf(b.welcome.session_id)];
     expect(names.filter((n) => n === 'e2e-codex')).toHaveLength(1);
+  });
+});
+
+// A launcher's name is applied at connect. A refusal for ambiguity must not destroy anybody's intent, and messages
+// sent to the provisional name while a session waited for its name follow it.
+describe('launcher name intent: refusals keep intents, renames forward messages', () => {
+  const ownerSend = async (to: string, subject: string, priority = 'normal') => {
+    const o = await ownerClient(home);
+    closers.push(() => o.close());
+    return o.call<{ id: string }>('owner.send', { to, subject, body: 'b', priority, attach_paths: [] });
+  };
+  const recipients = (id: string) => deliveriesOfMessage(broker.db, id).map((d) => d.recipient);
+
+  it('an ambiguous refusal keeps both intents; the survivor applies once the other launcher is gone', async () => {
+    await boot();
+    await launcher('first-one');
+    const second = await launcher('second-one');
+    const c = await codex();
+    expect(nameOf(c.welcome.session_id)).toMatch(/^codex-myproject-/); // two launchers: refused
+    await c.client.call('session.bind', { agent_session_id: 'thread-1' });
+    expect(nameOf(c.welcome.session_id)).toMatch(/^codex-myproject-/); // still two: refused again, nothing consumed
+    second.close();
+    await settle();
+    await c.client.call('session.bind', { agent_session_id: 'thread-1' }); // idempotent re-bind retries the fallback
+    expect(nameOf(c.welcome.session_id)).toBe('first-one');
+  });
+
+  it('forwards a message sent to the provisional name when a waiting launcher name is handed over', async () => {
+    await boot();
+    const old = await codex('/w/myproject', { requested_name: 'e2e-codex' });
+    await old.client.call('session.bind', { agent_session_id: 'thread-old' });
+    await launcher('e2e-codex');
+    const fresh = await codex();
+    const provisional = nameOf(fresh.welcome.session_id) as string;
+    expect(provisional).toMatch(/^codex-myproject-/);
+    const m = await ownerSend(provisional, 'sent-while-waiting');
+    expect(deliveriesOfMessage(broker.db, m.id)[0]).toMatchObject({ state: 'held', hold_reason: 'unbound' });
+    old.client.close();
+    await settle();
+    expect(nameOf(fresh.welcome.session_id)).toBe('e2e-codex');
+    expect(recipients(m.id)).toEqual(['e2e-codex']);
+    expect(readCodexCalls(join(home, 'codex.jsonl'))).toHaveLength(0); // still unbound: nothing to push into
+    await fresh.client.call('session.bind', { agent_session_id: 'thread-new' });
+    await until(() => readCodexCalls(join(home, 'codex.jsonl')).length === 1);
+    await until(() => deliveriesOfMessage(broker.db, m.id)[0].state === 'read');
+  });
+
+  it('forwards and delivers when the bind-time fallback applies an intent a refusal had kept', async () => {
+    await boot();
+    await launcher('first-one');
+    const second = await launcher('second-one');
+    const c = await codex();
+    const provisional = nameOf(c.welcome.session_id) as string;
+    const m = await ownerSend(provisional, 'queued');
+    second.close();
+    await settle();
+    await c.client.call('session.bind', { agent_session_id: 'thread-1' });
+    expect(nameOf(c.welcome.session_id)).toBe('first-one');
+    expect(recipients(m.id)).toEqual(['first-one']);
+    await until(() => deliveriesOfMessage(broker.db, m.id)[0].state === 'read');
+    expect(readCodexCalls(join(home, 'codex.jsonl'))).toHaveLength(1);
+  });
+
+  it('messages sent to a name applied at connect are held until the first prompt binds, then delivered', async () => {
+    await boot();
+    await launcher('e2e-codex');
+    const c = await codex();
+    const m = await ownerSend('e2e-codex', 'before-first-prompt');
+    expect(deliveriesOfMessage(broker.db, m.id)[0]).toMatchObject({ state: 'held', hold_reason: 'unbound' });
+    await c.client.call('session.bind', { agent_session_id: 'thread-1' });
+    await until(() => deliveriesOfMessage(broker.db, m.id)[0].state === 'read');
   });
 });

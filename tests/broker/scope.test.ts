@@ -595,4 +595,28 @@ describe('workspace scoping security round 2 (R46)', () => {
     await o.client.call('owner.unlink', { a: repoA, b: repoB });
     await expect(waiting).rejects.toMatchObject({ code: 'not_found' });
   });
+
+  it('a rename away from the provisional name never forwards a message across a scope boundary', async () => {
+    const o = await owner();
+    const a = await join2('alpha-one', repoA);
+    const b = await mcpClient(home, { cwd: repoB });
+    closers.push(() => b.client.close());
+    const provisional = b.welcome.name;
+    await o.client.call('owner.link', { a: repoA, b: repoB });
+    const { id } = await send(a, provisional, { priority: 'low' });
+    const { id: ownerId } = await o.client.call<{ id: string }>('owner.send', {
+      to: provisional,
+      subject: 's',
+      body: 'b',
+      priority: 'low',
+      attach_paths: [],
+    });
+    expect(stateOf(id, provisional)).toMatchObject({ state: 'held' });
+    await o.client.call('owner.unlink', { a: repoA, b: repoB });
+    await b.client.call('session.register', { name: 'beta-one' });
+    // the unlinked sender's message stays behind (and is stuck); the owner's message, which has no scope, moves
+    expect(stateOf(id, provisional)).toBeDefined();
+    expect(stateOf(id, 'beta-one')).toBeUndefined();
+    expect(stateOf(ownerId, 'beta-one')).toMatchObject({ state: 'held' });
+  });
 });

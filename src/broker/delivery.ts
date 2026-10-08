@@ -10,6 +10,7 @@ import {
   deliveriesOfMessage,
   getMessage,
   insertMessage,
+  moveDeliveries,
   type Priority,
   type TransitionPatch,
   transitionIf,
@@ -156,6 +157,32 @@ export class DeliveryEngine {
     for (const x of deliveriesFor(this.d.db, name, ['held', 'pending'])) {
       this.allowed({ message_id: x.message_id, recipient: x.recipient });
     }
+  }
+
+  /**
+   * A session left its provisional name `from` for `to`: its undelivered deliveries follow it (append-only history is
+   * untouched). In-flight pushes stay where they are, and a message the new name's scope cannot receive is not moved
+   * (spec §17). Pending and failed deliveries are dispatched again under the new name (their timers and queued
+   * dispatches were keyed by the old one); held ones are picked up by the `session.available` sweep that follows.
+   */
+  forward(from: string, to: string): void {
+    const moved = moveDeliveries(
+      this.d.db,
+      from,
+      to,
+      (x) =>
+        !this.busy({ message_id: x.message_id, recipient: from }) &&
+        scopeViolation(this.d.db, x.message.from_workspace, to) === null,
+    );
+    for (const row of moved) {
+      this.d.emitFeed('delivery', { ...row, recipient_unread: visibleUnreadCount(this.d.db, to) });
+      if (row.state === 'pending' || row.state === 'failed') {
+        this.dispatch(row.message_id, to).catch((e) =>
+          this.d.log(`dispatch after forward failed: ${(e as Error).message}`),
+        );
+      }
+    }
+    if (moved.length) this.d.log(`forwarded ${moved.length} undelivered message(s) from ${from} to ${to}`);
   }
 
   /** Recipients are dispatched in parallel: one slow transport (a hung `codex queue`) does not delay the others. */

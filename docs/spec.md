@@ -108,10 +108,16 @@ vitest, linted with biome.
   collision rules). This is the iteration-2 spawn provision (§16); it also lets the owner pre-name a manual launch.
   A Codex MCP server started by the shared app-server daemon does not inherit that environment (E-1), so
   `wigwag codex --as <name>` sends `launch.intend {agent: codex, name, cwd}` over an owner connection it keeps open while
-  codex runs. When a Codex session still on its provisional name, created after the intent, calls `session.bind` from the
-  same directory, the broker claims the name for it with the same rules as `WIGWAG_NAME` (live holder or out-of-scope
-  offline holder refuses it). Zero or more than one matching launcher or unbound session means no name is applied. Intents
-  are in memory and end with the launcher's connection.
+  codex runs. The broker applies the intent when the Codex MCP server connects (hello), right after it assigns the
+  provisional name, so the name shows at once and the session stays unbound (`BOUND` no) until the first prompt makes Codex
+  call `session.bind`; `session.bind` repeats the attempt as a fallback. The broker claims the name with the same rules as
+  `WIGWAG_NAME` (live holder or out-of-scope offline holder refuses it), for a Codex session still on its provisional name,
+  in the intent's directory (canonical path), created after the intent. Exactly one matching launcher and one such unbound
+  session must exist: with zero or several, no name is applied, and a refusal for ambiguity removes no intent (only an
+  intent that is applied, or refused by the claim rules, is consumed; the rest end with their launcher's connection).
+  Until the first prompt there is no Codex thread to push into, so messages sent to the name wait as held (`unbound`) and
+  are delivered when the session binds. Intents are in memory and end with the launcher's connection; there is no age
+  limit.
   **Relaunch while the previous thread is still live.** The shared daemon keeps a thread loaded, and its MCP server
   connected, after the TUI quits, and unloads it only when the thread has had no subscriber and been idle for 60 s
   (measured on codex 0.160.1 / daemon 0.161.0; `Shutdown` is dispatched, `thread/closed` is emitted, the MCP server's stdio
@@ -124,6 +130,14 @@ vitest, linted with biome.
   registering another name or going offline, or `codex.name_wait_ms`. Only a live-holder refusal waits; an
   out-of-scope offline holder still refuses for good. No hook is used: Codex 0.160.1 lists a `sessionEnd` hook event, but the MCP
   connection closing already marks the thread's end (a hook would add nothing the broker does not see).
+- **Messages follow a rename.** When a session leaves the provisional name the broker gave it (by `register`, an applied
+  launch intent, or a handed-over launcher name), its `pending`, `held`, `stuck` and `failed` deliveries addressed to the
+  old name move to the new name in one transaction, because inbox and unread look up only the current name. Messages stay
+  append-only (`to_target` keeps the old name); each moved delivery gets a delivery event `forwarded from <old>`. A delivery
+  is not moved when the new name could not receive it under §17 (never across a scope boundary), when its push is in
+  flight, or when the message already has a delivery to the new name (an `all` broadcast that reached both). Pending and
+  failed deliveries are dispatched again, and the session is announced so held backlog is swept and delivered. Leaving a
+  name the session chose itself does not forward.
 - **Rename**: `register(name)` tool. Rejected if a *live* session holds it. If the holder is offline, the new
   session takes the name and inherits its undelivered backlog (delivered as one digest on first wake).
 - **Binding the MCP connection to the agent session:**

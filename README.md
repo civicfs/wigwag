@@ -74,7 +74,7 @@ and `wigwag show` still list the rest.
 Names match `^[a-z][a-z0-9-]{1,47}$`; `owner`, `all` and `wigwag` are reserved. Without `--as` a session gets a provisional
 name such as `claude-myrepo-k3x9`. An agent renames itself with the `register` tool. Codex started through the shared
 daemon never sees the launcher's environment, so `wigwag codex --as x` tells the broker instead: the first Codex session
-that binds in that directory after the launch takes the name (see Limitations for when it does not).
+that connects in that directory after the launch takes the name at once (see Limitations for when it does not).
 
 ## What agents get
 
@@ -331,11 +331,14 @@ directory yourself.
   arrive at the next turn boundary or through `inbox`; they are never recorded as pushed. If Claude is started some other
   way that does enable the channel (a wrapper that changes the process command line), it will be treated as having none.
 - `wigwag codex --as <name>` under the shared Codex daemon: the broker holds the requested name for as long as the
-  launcher runs (it is lost if the broker restarts first) and gives it to the Codex session that binds in the same directory
-  next. It is applied only when exactly one unbound Codex session on its provisional name and one launcher match, and
-  only through the ordinary name rules (a live holder, or an offline holder in an unlinked workspace, refuses it). If
-  another Codex thread starts in the same directory in the same moment it can take the name, and two overlapping
-  launches in one directory get neither; the session then keeps its provisional name and the agent calls `register`.
+  launcher runs (it is lost if the broker restarts first) and gives it to the Codex session that connects in the same
+  directory next, so the name shows in `wigwag who` right away. It is applied only when exactly one unbound Codex session
+  on its provisional name and one launcher match, and only through the ordinary name rules (a live holder, or an offline
+  holder in an unlinked workspace, refuses it). If another Codex thread starts in the same directory in the same moment it
+  can take the name, and two overlapping launches in one directory get neither (neither launcher's request is lost); the
+  session then keeps its provisional name and the agent calls `register`. Until you type a first prompt, Codex has no
+  thread to push into, so the session shows as unbound and messages sent to it wait, then arrive at the first prompt.
+  Messages sent to a provisional name follow the session when it takes another name.
   Matching uses the directory `wigwag codex` was run from, so `codex -C <dir>` can miss. Passing a `-c key=value` override
   to Codex runs an embedded server that receives the name directly.
   A relaunch right after quitting a Codex TUI finds the old thread still live (the shared daemon unloads it about 60 s
