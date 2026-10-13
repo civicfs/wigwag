@@ -211,9 +211,10 @@ returned messages are marked read. Use `include_read` for history, or
 ### Large messages and streams
 
 Bodies above `limits.inline_body_bytes` (16 KiB by default) are stored as blobs.
-Recipients receive a reference; `read_message` retrieves selected text in bounded
-chunks. Large or binary attachments can be exported with `blob_get` and read from
-the destination file. Transport batches are also bounded: Claude channel payloads
+Recipients receive a reference. `read_message` chunks the stored inline message
+text; a spilled body is retrieved with `blob_get`, preferably exported to a file
+and read there in pieces. Large or binary attachments use the same export path.
+There is no offset-based blob-read API yet. Transport batches are also bounded: Claude channel payloads
 use a 12 KB JSON budget and Codex queue arguments use a 96 KiB budget.
 
 Streams are typed, append-only records with subscriptions for logs and progress.
