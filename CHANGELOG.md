@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 0.2.0 release candidate
+## 0.2.0 — 2026-10-13
 
 - Relay assigned workers' native questions between Claude Code and Codex, with
   durable assignment identities, answer provenance, cancellation checks, and
@@ -22,8 +22,8 @@
 - Document clear-text SQLite storage, privacy boundaries, provider integration
   limitations, security review, and public-repository checks.
 
-The npm release has not been published. Automatic worker spawning and task
-transfer after session failure are proposed, not implemented.
+Automatic worker spawning and task transfer after session failure are proposed,
+not implemented. GitHub source releases and npm packages are published separately.
 
 ## 0.1.0
 

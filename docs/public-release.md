@@ -1,8 +1,8 @@
 # Preparing a public release
 
 Publishing GitHub source and publishing an npm version are separate actions.
-The 0.2.0 candidate remains unpublished on npm. Prepare and review the exact
-source/artifact before either action.
+Prepare and review the exact source/artifact before either action. Check the
+registry and GitHub release page for current publication status.
 
 ## Source and history
 
@@ -105,10 +105,10 @@ tokens in npm package settings. No `NPM_TOKEN` or `NODE_AUTH_TOKEN` secret is ne
 
 ### First package registration
 
-`@civicfs/wigwag` is currently unpublished. npm's
+If `@civicfs/wigwag` has not yet been registered, npm's
 [trust-command prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/)
 require an existing package, write access, and account 2FA. A maintainer must
-establish the package before configuring trust; this setup has not been performed.
+establish the package before configuring trust.
 
 One supported bootstrap is an interactive `npm stage publish` of a separate,
 reviewed temporary bootstrap package/version, for example `0.0.0-bootstrap.0`.
@@ -124,6 +124,6 @@ decision; do not run it during repository preparation. It uses the maintainer's
 interactive npm account, not a CI publish-token secret. Confirm package existence
 and publisher configuration before triggering the actual release.
 
-The workflow and configuration instructions are prepared; npm account setup,
-OIDC exchange, provenance generation, hosted tests, and a real publication remain
-unverified until executed after the repository is public.
+Verify npm account setup, OIDC exchange, provenance generation, hosted checks,
+and a real publication during the release. A prepared workflow alone does not
+prove that publishing or installation works.

@@ -38,9 +38,11 @@ currently spawn replacement agents or transfer tasks after a worker fails.
 
 ## Install
 
-Version **0.2.0** is a local release candidate; it has not yet been published to
-npm. Live native-question tests used macOS, Claude Code **2.1.296**, and Codex
-**0.162.1**. Linux has not been tested end to end. See the
+Version **0.2.0** is the first public source release. GitHub releases and npm
+packages are published separately; check the [npm package page](https://www.npmjs.com/package/@civicfs/wigwag)
+for registry availability. Live native-question tests used macOS, Claude Code
+**2.1.296**, and Codex **0.162.1**. Automated CI passes on macOS and Linux; real
+provider integration on Linux has not been tested end to end. See the
 [verification report](docs/native-question-relay-2026-10-13.md).
 
 You need Node **24+**, Git, and the CLI for each provider you use. Claude's channel
@@ -60,7 +62,7 @@ registers both plugins, and runs diagnostics. It changes global Claude and Codex
 plugin configuration. To register only one provider, use
 `wigwag install --claude-only` or `wigwag install --codex-only`.
 
-Once published to npm:
+To install a published npm version:
 
 ```sh
 npm install -g @civicfs/wigwag
