@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { WigwagError } from '../../errors.js';
+import { readBoundedFile } from '../../files.js';
 import { isTextual } from '../../mime.js';
 import { addBlobScope, blobInScope, getBlobMeta, putBlob, readBlob } from '../../store/blobs.js';
 import { kvCas, kvGet, kvHistory, kvList } from '../../store/kv.js';
@@ -105,15 +106,7 @@ export function installData(broker: Broker): void {
     let data: Buffer;
     if (p.path !== undefined) {
       requireAbsolute(p.path);
-      if (!existsSync(p.path)) throw new WigwagError('not_found', `No such file: ${p.path}`);
-      const size = statSync(p.path).size;
-      if (size > limits.max_blob_bytes) {
-        throw new WigwagError(
-          'limit',
-          `File is ${size} bytes; limit is ${limits.max_blob_bytes} (limits.max_blob_bytes)`,
-        );
-      }
-      data = readFileSync(p.path);
+      data = readBoundedFile(p.path, limits.max_blob_bytes);
     } else data = Buffer.from(p.text as string, 'utf8');
     const row = putBlob(
       db,

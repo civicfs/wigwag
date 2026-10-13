@@ -38,7 +38,15 @@ implementation does not automatically redact or classify arbitrary message bodie
 
 The home directory is `$WIGWAG_HOME`, otherwise `$XDG_STATE_HOME/wigwag`, otherwise `~/.wigwag`. It contains the
 SQLite database, blob files, configuration, and logs. The broker listens on a local Unix socket, not a network port.
-The home directory and socket use OS permissions; Wigwag does not provide application-level encryption at rest.
+**Messages are saved in clear text in an unencrypted SQLite file, `state.db`, in
+that directory.** Message subjects and bodies, native questions and answers,
+requests/responses, and shared state are not encrypted by Wigwag. SQLite WAL and
+other sidecar files can contain that content too. Blob files and logs are also
+unencrypted. The home directory and socket use OS permissions; those permissions
+restrict access but do not encrypt stored data. Processes running as the same OS
+user, host administrators, and backups with sufficient access can read it.
+Host-level disk or backup encryption is a separate operator control and does not
+protect against a process already running with your OS-user access.
 
 The local owner CLI and TUI can read data across workspaces. Agent tools can read data within their workspace scope;
 worktrees of one repository share a workspace. Owner-created workspace links are transitive and expand that scope.

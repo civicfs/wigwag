@@ -5,9 +5,10 @@ import { Client } from '../client/client.js';
 import { type Config, loadConfig, resolveHome } from '../config.js';
 import { frameLimit } from '../protocol/frame.js';
 import type { MessageRow } from '../store/messages.js';
+import { terminalText } from '../terminal.js';
 
 export const out = (s: string): void => {
-  process.stdout.write(s.endsWith('\n') ? s : `${s}\n`);
+  process.stdout.write(terminalText(s.endsWith('\n') ? s : `${s}\n`));
 };
 
 export class UsageError extends Error {}

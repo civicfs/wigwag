@@ -203,6 +203,12 @@ vitest, linted with biome.
 
 ## 5. Data model (SQLite, `state.db`, WAL mode)
 
+**Storage is unencrypted. Message subjects and bodies are saved in clear text in
+`state.db`; native question/answer payloads, requests, KV/stream state, and SQLite
+WAL/sidecar files can contain clear-text content too.** Wigwag does not encrypt
+blobs or logs. Filesystem permissions restrict access, but are not encryption or
+an isolation boundary against the same OS user. See [PRIVACY.md](../PRIVACY.md).
+
 All IDs exposed outside the broker are prefixed ULIDs. Integer rowids are internal only.
 
 | Table | Key columns | Notes |

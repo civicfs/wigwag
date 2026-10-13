@@ -42,10 +42,62 @@ describe('tui components', () => {
     expect(f).toMatch(/busy/);
     expect(f).toMatch(/offline/);
   });
+  it('renders terminal commands as visible text, including in details', async () => {
+    const { DetailPane } = await import('../../src/tui/components.js');
+    const unsafe = 'review\u001b]52;c;YQ==\u0007';
+    const feed =
+      render(
+        <FeedPane messages={[{ ...msg, subject: unsafe, body: unsafe }]} selected={0} focused filter={null} />,
+      ).lastFrame() ?? '';
+    const detail = render(<DetailPane detail={{ subject: unsafe }} width={80} />).lastFrame() ?? '';
+    for (const f of [feed, detail]) {
+      expect(f).toContain('review\\u001b]52;c;YQ==\\u0007');
+      expect(f).not.toContain('\u0007');
+      expect(f).not.toContain('\u001b]52;');
+    }
+  });
+
   it('feed shows the full body wrapped, never truncated', () => {
     const f = render(<FeedPane messages={[msg]} selected={0} focused filter={null} />).lastFrame() ?? '';
     for (const w of words) expect(f).toContain(w);
     expect(f).not.toMatch(/…|\.\.\./);
+  });
+  it('shows assigned roles and the worker’s lead without hiding binding warnings', () => {
+    const base = {
+      agent: 'codex' as const,
+      state: 'online-idle' as const,
+      cwd: '/',
+      workspace: '/',
+      workspace_label: 'demo',
+      bound: false,
+      unread: 0,
+      last_seen_at: '',
+    };
+    const f =
+      render(
+        <SessionsPane
+          sessions={[
+            { ...base, id: 'ses-lead', name: 'review-lead', role: 'orchestrator' },
+            {
+              ...base,
+              id: 'ses-worker',
+              name: 'test-worker',
+              role: 'worker',
+              orchestration: {
+                assignment_id: 'task-example',
+                orchestrator_session_id: 'ses-lead',
+                orchestrator_name: 'review-lead',
+              },
+            },
+          ]}
+          selected={0}
+          focused
+          width={50}
+        />,
+      ).lastFrame() ?? '';
+    expect(f).toContain('codex · lead · unbound');
+    expect(f).toContain('worker ← review-lead');
+    expect(f).toContain('codex · worker');
   });
   it('deliveries pane lists throttles first, then stuck deliveries with their error', () => {
     const f =

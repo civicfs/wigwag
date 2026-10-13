@@ -1,8 +1,9 @@
 /** Pure layout helpers: display-width wrapping that matches Ink's, and list windowing. */
 import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
+import { terminalText } from '../terminal.js';
 
-export const displayWidth = (s: string): number => stringWidth(s);
+export const displayWidth = (s: string): number => stringWidth(terminalText(s));
 
 /**
  * The physical rows `text` occupies at `width` columns. Uses the same wrap-ansi call and options as Ink's own text
@@ -10,6 +11,7 @@ export const displayWidth = (s: string): number => stringWidth(s);
  * Empty text renders no rows. An unbounded width (list panes rendered without a size) only splits on newlines.
  */
 export function wrapRows(text: string, width: number): string[] {
+  text = terminalText(text);
   if (text === '') return [];
   if (!Number.isFinite(width)) return text.split('\n');
   return wrapAnsi(text, Math.max(1, Math.floor(width)), { trim: false, hard: true }).split('\n');
@@ -77,7 +79,7 @@ export function detailRows(detail: unknown, innerWidth: number): string[] {
 
 /** First line of an error and whether the rest (more lines, or a first line wider than the pane) needs Enter. */
 export function errorSummary(err: string, innerWidth: number): { first: string; more: boolean } {
-  const lines = err.trimEnd().split('\n');
+  const lines = terminalText(err).trimEnd().split('\n');
   const first = lines[0];
   return { first, more: lines.length > 1 || displayWidth(`  ${first}`) > innerWidth };
 }

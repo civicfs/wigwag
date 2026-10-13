@@ -1,7 +1,9 @@
 /** @jsxImportSource react */
-import { Box, Text, useInput } from 'ink';
+import { Box, useInput } from 'ink';
 import { useState } from 'react';
 import { windowOf, wrapCount, wrapRows } from './layout.js';
+import { Text } from './Text.js';
+import { palette, priorityColor } from './theme.js';
 
 type Field = 'to' | 'priority' | 'subject' | 'attach' | 'body';
 const FIELDS: Field[] = ['to', 'priority', 'subject', 'attach', 'body'];
@@ -75,20 +77,25 @@ export function Compose({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={palette.focus}
       paddingX={1}
       width={width}
       height={height}
       flexShrink={0}
       overflow="hidden"
     >
-      <Text bold wrap="wrap">
+      <Text bold color={palette.focus} wrap="wrap">
         {TITLE}
       </Text>
       <Box flexDirection="column" flexGrow={windowed ? 1 : 0} flexShrink={1} overflow="hidden">
         {lines.slice(start, end).map((l, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional and may repeat
-          <Text key={start + i} color={l.f === field ? 'cyan' : undefined} wrap="wrap">
+          <Text
+            // biome-ignore lint/suspicious/noArrayIndexKey: wrapped rows are positional and may repeat
+            key={start + i}
+            bold={l.f === field}
+            color={l.f === field ? palette.focus : l.f === 'priority' ? priorityColor[d.priority] : undefined}
+            wrap="wrap"
+          >
             {l.text}
           </Text>
         ))}

@@ -1,14 +1,15 @@
 /** @jsxImportSource react */
-import { Box, Text } from 'ink';
+import { Box } from 'ink';
 import type { ReactNode } from 'react';
 import type { OwnerDelivery } from '../broker/handlers/owner.js';
 import type { PublicSession } from '../broker/registry.js';
 import type { MessageRow } from '../store/messages.js';
 import { clampIndex, detailRows, errorSummary, relativeAge, windowOf, wrapCount } from './layout.js';
 import type { Throttle } from './state.js';
+import { Text } from './Text.js';
+import { deliveryColor, palette, priorityColor, sessionColor } from './theme.js';
 
-const border = (focused: boolean) => (focused ? 'cyan' : 'gray');
-const STATE_COLOR: Record<string, string> = { 'online-busy': 'yellow', 'online-idle': 'green', offline: 'gray' };
+const border = (focused: boolean) => (focused ? palette.focus : palette.muted);
 export const SESSIONS_WIDTH = 34;
 export const DETAIL_WIDTH = 60;
 const CHROME = 4; // border (2) + paddingX (2) horizontally; border (2) + title vertically below
@@ -66,7 +67,7 @@ function ListFrame({
       flexShrink={0}
       overflow="hidden"
     >
-      <Text bold wrap="wrap">
+      <Text bold color={focused ? palette.focus : undefined} wrap="wrap">
         {title}
       </Text>
       {n === 0 && empty ? <Text dimColor>{empty}</Text> : null}
@@ -119,29 +120,37 @@ export function SessionsPane({
   const items: Item[] = sessions.map((s, i) => {
     const line1 = `${s.name ?? s.id} ${s.state.replace('online-', '')}${s.unread > 0 ? ` ${s.unread} unread` : ''}`;
     const isThrottled = s.name !== null && throttled.includes(s.name);
-    const line2 = `${s.agent}${s.bound ? '' : ' · unbound'}`;
+    const role =
+      s.role === 'orchestrator' ? 'lead' : s.role === 'orchestrator-worker' ? 'lead + worker' : (s.role ?? 'peer');
+    const lead = s.orchestration?.orchestrator_name ?? s.orchestration?.orchestrator_session_id;
+    const roleText = `${role}${lead ? ` ← ${lead}` : ''}`;
+    const line2 = `${s.agent} · ${roleText}${s.bound ? '' : ' · unbound'}`;
     const wsLine = s.workspace_label ?? '';
     const line3 = `seen ${relativeAge(s.last_seen_at, now)}${isThrottled ? ' · throttled' : ''}`;
+    const active = focused && i === clampIndex(selected, sessions.length);
     return {
       key: s.id,
       height: rows(w, line1, wsLine, line2, line3),
       node: (
         <>
-          <Text inverse={focused && i === clampIndex(selected, sessions.length)} wrap="wrap">
-            {s.name ?? s.id} <Text color={STATE_COLOR[s.state]}>{s.state.replace('online-', '')}</Text>
-            {s.unread > 0 ? <Text color="magenta"> {s.unread} unread</Text> : null}
+          <Text inverse={active} color={active ? palette.focus : undefined} bold wrap="wrap">
+            {s.name ?? s.id}{' '}
+            <Text color={active ? undefined : sessionColor[s.state]}>{s.state.replace('online-', '')}</Text>
+            {s.unread > 0 ? <Text color={active ? undefined : palette.focus}> {s.unread} unread</Text> : null}
           </Text>
           {wsLine ? (
             <Text dimColor wrap="wrap">
               {wsLine}
             </Text>
           ) : null}
-          <Text dimColor wrap="wrap">
-            {line2}
+          <Text wrap="wrap">
+            <Text dimColor>{s.agent} · </Text>
+            <Text color={palette.role}>{roleText}</Text>
+            {s.bound ? null : <Text color={palette.warning}> · unbound</Text>}
           </Text>
           <Text dimColor wrap="wrap">
             seen {relativeAge(s.last_seen_at, now)}
-            {isThrottled ? <Text color="red"> · throttled</Text> : null}
+            {isThrottled ? <Text color={palette.warning}> · throttled</Text> : null}
           </Text>
         </>
       ),
@@ -182,16 +191,20 @@ export function FeedPane({
   const items: Item[] = shown.map((m, i) => {
     const head = `[${m.priority}] ${m.from_name} → ${m.to_target} · ${m.subject}`;
     const foot = `${m.id} · ${m.created_at}`;
+    const active = focused && i === clampIndex(selected, shown.length);
     return {
       key: m.id,
       height: rows(w, head, m.body, foot) + 1,
       node: (
         <Box flexDirection="column" marginBottom={1}>
-          <Text inverse={focused && i === clampIndex(selected, shown.length)} wrap="wrap">
-            <Text color={m.priority === 'urgent' ? 'red' : m.priority === 'low' ? 'gray' : 'white'}>
+          <Text inverse={active} color={active ? palette.focus : undefined} wrap="wrap">
+            <Text bold color={active ? undefined : priorityColor[m.priority]}>
               [{m.priority}]
             </Text>{' '}
-            {m.from_name} → {m.to_target} · {m.subject}
+            <Text color={active ? undefined : palette.focus}>
+              {m.from_name} → {m.to_target}
+            </Text>{' '}
+            · <Text bold>{m.subject}</Text>
           </Text>
           <Text wrap="wrap">{m.body}</Text>
           <Text dimColor wrap="wrap">
@@ -241,7 +254,7 @@ export function DeliveriesPane({
         key: `t:${t.from_name}>${t.to_name}`,
         height: rows(w, text),
         node: (
-          <Text inverse={focused && i === sel} color="red" wrap="wrap">
+          <Text inverse={focused && i === sel} bold color={palette.warning} wrap="wrap">
             {text}
           </Text>
         ),
@@ -251,16 +264,20 @@ export function DeliveriesPane({
       const head = `${d.state.toUpperCase()} ${d.hold_reason ? `(${d.hold_reason}) ` : ''}${d.message_id} ${d.from_name} → ${d.recipient} · ${d.subject} · attempts ${d.attempts}`;
       const err = d.last_error ? errorSummary(d.last_error, w) : null;
       const errText = err ? `  ${err.first}${err.more ? FULL_ERROR_HINT : ''}` : '';
+      const active = focused && throttles.length + j === sel;
       return {
         key: `d:${d.message_id}>${d.recipient}`,
         height: rows(w, head, errText),
         node: (
           <>
-            <Text inverse={focused && throttles.length + j === sel} wrap="wrap">
-              {head}
+            <Text inverse={active} color={active ? palette.focus : undefined} wrap="wrap">
+              <Text bold color={active ? undefined : deliveryColor[d.state]}>
+                {d.state.toUpperCase()}
+              </Text>
+              {head.slice(d.state.length)}
             </Text>
             {err ? (
-              <Text color="red" wrap="wrap">
+              <Text color={palette.danger} wrap="wrap">
                 {errText}
               </Text>
             ) : null}
@@ -302,12 +319,16 @@ export function TablePane({
   const w = innerOf(width);
   const items: Item[] = tableRows.map((r, i) => {
     const text = r.join('  ·  ');
+    const active = focused && i === clampIndex(selected, tableRows.length);
     return {
       key: `${i}:${r.join('|')}`,
       height: rows(w, text),
       node: (
-        <Text inverse={focused && i === clampIndex(selected, tableRows.length)} wrap="wrap">
-          {text}
+        <Text inverse={active} color={active ? palette.focus : undefined} wrap="wrap">
+          <Text bold color={active ? undefined : (deliveryColor[r[0]] ?? palette.focus)}>
+            {r[0]}
+          </Text>
+          {r.length > 1 ? `  ·  ${r.slice(1).join('  ·  ')}` : ''}
         </Text>
       ),
     };
@@ -360,14 +381,16 @@ export function DetailPane({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="white"
+      borderColor={palette.role}
       width={width}
       height={height}
       paddingX={1}
       flexShrink={0}
       overflow="hidden"
     >
-      <Text bold>Detail</Text>
+      <Text bold color={palette.role}>
+        Detail
+      </Text>
       <Box flexDirection="column" flexGrow={height === undefined ? 0 : 1} flexShrink={1} overflow="hidden">
         {all.slice(start, end).map((l, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: rows are positional and may repeat

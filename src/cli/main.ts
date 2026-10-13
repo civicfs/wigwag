@@ -4,6 +4,7 @@ import { type ClaudeHookEvent, runClaudeHook } from '../hooks/claude.js';
 import { install, packageRoot, uninstall } from '../install/install.js';
 import { runMcp } from '../mcp/server.js';
 import { runQuestionHook } from '../questions/hook.js';
+import { terminalText } from '../terminal.js';
 import { runTui } from '../tui/run.js';
 import { applyUpdate, checkUpdate, describeUpdate } from '../update/update.js';
 import { VERSION } from '../version.js';
@@ -151,12 +152,14 @@ async function main(argv: string[]): Promise<void> {
 
 main(process.argv.slice(2)).catch((e: unknown) => {
   if (e instanceof UsageError) {
-    process.stderr.write(`${e.message}\n`);
+    process.stderr.write(terminalText(`${e.message}\n`));
     process.exitCode = 2;
     return;
   }
   process.stderr.write(
-    `wigwag: ${e instanceof WigwagError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e)}\n`,
+    terminalText(
+      `wigwag: ${e instanceof WigwagError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e)}\n`,
+    ),
   );
   process.exitCode = 1;
 });

@@ -37,6 +37,10 @@
     "PRIVACY.md",
     "docs/provider-terms.md",
     "docs/spec.md",
+    "docs/native-question-relay-2026-10-13.md",
+    "docs/task-recovery-design.md",
+    "docs/images",
+    "docs/security-review-2026-10-13.md",
     "LICENSE"
   ],
   "engines": {

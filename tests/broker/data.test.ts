@@ -23,6 +23,21 @@ const join2 = async (name: string) => {
 };
 
 describe('data handlers', () => {
+  it('rejects non-regular upload and owner attachment sources before reading them', async () => {
+    const a = await join2('alpha-one');
+    await expect(a.client.call('blob.put', { path: '/dev/null', media_type: 'text/plain' })).rejects.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringMatching(/regular file/),
+    });
+    const { ownerClient } = await import('../helpers.js');
+    const owner = await ownerClient(home);
+    closers.push(() => owner.close());
+    await expect(
+      owner.call('owner.send', { to: 'alpha-one', body: 'hello', priority: 'normal', attach_paths: ['/dev/null'] }),
+    ).rejects.toMatchObject({ code: 'bad_request', message: expect.stringMatching(/regular file/) });
+    expect(await a.client.call('session.whoami')).toMatchObject({ name: 'alpha-one' });
+  });
+
   it('blob.get to a dangling symlink is a conflict and never writes through it (T9 pin: EEXIST -> conflict)', async () => {
     const a = await join2('alpha-one');
     const dir = mkdtempSync(join(tmpdir(), 'ww-b-'));

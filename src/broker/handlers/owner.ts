@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 import { WigwagError } from '../../errors.js';
+import { readBoundedFile } from '../../files.js';
 import { BLOB_REF_RE } from '../../ids.js';
 import { isTextual, mediaTypeFor } from '../../mime.js';
 import { getBlobMeta, putBlob, readBlob } from '../../store/blobs.js';
@@ -50,14 +51,10 @@ export function installOwner(broker: Broker): void {
   broker.handle('owner.send', async (_c, p) => {
     const attachments = p.attach_paths.map((path) => {
       if (!isAbsolute(path)) throw new WigwagError('bad_request', `Attachment path must be absolute: ${path}`);
-      const size = statSync(path).size;
-      if (size > broker.config.limits.max_blob_bytes) {
-        throw new WigwagError('limit', `${path} is ${size} bytes; limit is ${broker.config.limits.max_blob_bytes}`);
-      }
       return putBlob(
         db,
         broker.home,
-        readFileSync(path),
+        readBoundedFile(path, broker.config.limits.max_blob_bytes),
         { media_type: mediaTypeFor(path), name: basename(path), created_by: 'owner' },
         broker.config.limits.max_blob_bytes,
       ).ref;

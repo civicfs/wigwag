@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, useApp, useInput, useStdout } from 'ink';
 import { type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { Client } from '../client/client.js';
 import { NAME_RE } from '../ids.js';
@@ -18,6 +18,8 @@ import {
 import { type LinkDraft, LinkForm } from './LinkForm.js';
 import { clampIndex, wrapCount } from './layout.js';
 import { EMPTY, type LinkEntry, reduce, type TuiState } from './state.js';
+import { Text } from './Text.js';
+import { palette } from './theme.js';
 
 const TABS = ['Feed', 'Deliveries', 'Requests', 'KV', 'Streams', 'Blobs', 'Links'] as const;
 type Tab = (typeof TABS)[number];
@@ -216,10 +218,22 @@ export function App({ client }: { client: Client }) {
   // free below the output because Ink clears the whole terminal when the output is as tall as the terminal.
   const wide = columns >= WIDE_COLUMNS;
   const tabBar = TABS.map((t, i) => ` ${i + 1} ${t} `).join('');
+  const live = state.sessions.filter((s) => s.state !== 'offline').length;
+  const busy = state.sessions.filter((s) => s.state === 'online-busy').length;
+  const unread = state.sessions.reduce((n, s) => n + s.unread, 0);
+  const attention = state.deliveries.filter((d) => d.state === 'stuck' || d.state === 'failed').length;
+  const activity = `${live} live · ${busy} busy · ${unread} unread`;
+  const attentionText = attention ? ` · ${attention} need attention` : '';
+  const header = `wigwag / owner console · ${activity}${attentionText}`;
   const help = detail ? DETAIL_HELP : HELP;
   const bodyHeight = Math.max(
     6,
-    termRows - 1 - wrapCount(tabBar, columns) - wrapCount(help, columns) - wrapCount(statusLine, columns),
+    termRows -
+      1 -
+      wrapCount(header, columns) -
+      wrapCount(tabBar, columns) -
+      wrapCount(help, columns) -
+      wrapCount(statusLine, columns),
   );
   const mainWidth = Math.max(20, columns - SESSIONS_WIDTH - (detail && wide ? DETAIL_WIDTH : 0));
   const detailWidth = wide ? DETAIL_WIDTH : columns;
@@ -481,18 +495,44 @@ export function App({ client }: { client: Client }) {
   return (
     <Box flexDirection="column">
       <Text wrap="wrap">
+        <Text color={palette.focus} bold>
+          wigwag
+        </Text>
+        <Text dimColor> / owner console · </Text>
+        {activity}
+        <Text bold color={palette.danger}>
+          {attentionText}
+        </Text>
+      </Text>
+      <Text wrap="wrap">
         {TABS.map((t, i) => (
-          <Text key={t} inverse={t === tab}>
+          <Text key={t} inverse={t === tab} bold={t === tab} color={t === tab ? palette.focus : palette.muted}>
             {` ${i + 1} ${t} `}
           </Text>
         ))}
       </Text>
       {body}
-      <Text dimColor wrap="wrap">
-        {help}
+      <Text wrap="wrap">
+        {help.split(' · ').map((hint, i) => {
+          const split = hint.indexOf(' ');
+          return (
+            <Text key={hint}>
+              {i ? <Text dimColor> · </Text> : null}
+              <Text color={palette.focus} bold>
+                {hint.slice(0, split)}
+              </Text>
+              <Text dimColor>{hint.slice(split)}</Text>
+            </Text>
+          );
+        })}
       </Text>
       {statusLine ? (
-        <Text color="yellow" wrap="wrap">
+        <Text
+          color={
+            statusLine.includes('failed') || statusLine.includes('connection closed') ? palette.danger : palette.warning
+          }
+          wrap="wrap"
+        >
           {statusLine}
         </Text>
       ) : null}
