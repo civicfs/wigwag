@@ -26,3 +26,8 @@ coverage/
 node_modules.shared
 # Internal execution ledgers stay local; public design docs may be tracked.
 /docs/superpowers/plans/
+# npm credentials and private certificate bundles
+/.npmrc
+/.netrc
+*.p12
+*.pfx

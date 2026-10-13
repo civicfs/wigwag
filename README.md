@@ -381,6 +381,13 @@ npm run check:public -- --history
 This checks tracked files and reachable branch history for known sensitive paths
 and credential patterns. It supplements review and cannot detect every secret.
 
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for local checks and review expectations.
+Report vulnerabilities using [SECURITY.md](SECURITY.md). Release changes are
+listed in [CHANGELOG.md](CHANGELOG.md). Maintainers use the
+[public release and npm trusted-publishing guide](docs/public-release.md).
+
 ## Development and uninstall
 
 ```sh

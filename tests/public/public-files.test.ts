@@ -22,6 +22,15 @@ describe('public repository guard', () => {
     expect(result.stderr).toContain('private/generated file');
     expect(result.stderr).not.toContain('fictional-sensitive-value');
   });
+  it('rejects npm auth configuration and private certificate bundles', () => {
+    for (const name of ['.npmrc', '.netrc', 'private.p12', 'private.pfx']) {
+      const result = check(name, 'fictional-sensitive-value');
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('private/generated file');
+      expect(result.stderr).not.toContain('fictional-sensitive-value');
+    }
+  });
+
   it('rejects secret-shaped strings without exposing them', () => {
     const value = 'sk-proj-' + 'x'.repeat(32);
     const result = check('accident.txt', value);

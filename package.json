@@ -41,7 +41,11 @@
     "docs/task-recovery-design.md",
     "docs/images",
     "docs/security-review-2026-10-13.md",
-    "LICENSE"
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md",
+    "docs/public-release.md"
   ],
   "engines": {
     "node": ">=24"
@@ -51,8 +55,10 @@
     "test": "vitest run",
     "lint": "biome check --write .",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run typecheck && biome check . && npm run check:public -- --history",
-    "check:public": "node scripts/check-public.mjs"
+    "prepublishOnly": "npm run build && npm run typecheck && biome check . && npm run check:public -- --history && npm run check:package",
+    "check:public": "node scripts/check-public.mjs",
+    "lint:check": "biome check .",
+    "check:package": "node scripts/check-package.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
@@ -74,5 +80,9 @@
     "tsup": "8.5.1",
     "typescript": "7.0.2",
     "vitest": "5.0.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

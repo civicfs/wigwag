@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const files = execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
-const forbidden = /(?:^|\/)(?:\.env(?:\..*)?|auth\.json|id_rsa|id_ed25519|\.DS_Store|node_modules(?:\.shared)?|dist|coverage|\.superpowers|\.wigwag|\.claude|\.codex)(?:\/|$)|\.(?:db(?:-[^/]*)?|sqlite3?(?:-[^/]*)?|pem|key|tgz|log)$/;
+const forbidden = /(?:^|\/)(?:\.env(?:\..*)?|\.npmrc|\.netrc|auth\.json|id_rsa|id_ed25519|\.DS_Store|node_modules(?:\.shared)?|dist|coverage|\.superpowers|\.wigwag|\.claude|\.codex)(?:\/|$)|\.(?:db(?:-[^/]*)?|sqlite3?(?:-[^/]*)?|pem|key|p12|pfx|tgz|log)$/;
 const rules = [
   ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
   ['credential pattern', /\b(?:sk-(?:ant-|proj-)?[A-Za-z0-9_-]{24,}|gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16})\b/],
