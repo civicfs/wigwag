@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { startBroker } from '../../src/broker/assemble.js';
 import { configPath, loadConfig } from '../../src/config.js';
 import { WigwagError } from '../../src/errors.js';
@@ -52,6 +52,35 @@ async function start(agent: 'claude' | 'codex', name: string, extraEnv: Record<s
 const text = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
 
 describe('MCP server', () => {
+  it('who exposes live sessions by default and accepts bounded history pages over MCP', async () => {
+    home = tmpHome();
+    const a = await start('claude', 'alpha-one');
+    const b = await start('codex', 'old-codex');
+    // MCP initialization completes before the broker hello: wait for registration before disconnecting.
+    await b.client.callTool({ name: 'whoami', arguments: {} });
+    await b.client.close();
+    const owner = await ownerClient(home);
+    try {
+      await vi.waitFor(
+        async () => {
+          const sessions = await owner.call<Array<{ name: string; state: string }>>('session.who');
+          expect(sessions.find((s) => s.name === 'old-codex')?.state).toBe('offline');
+        },
+        { timeout: WAIT_MS },
+      );
+      const live = JSON.parse(text(await a.client.callTool({ name: 'who', arguments: {} })));
+      expect(live.map((s: { name: string }) => s.name)).toEqual(['alpha-one']);
+      const history = await a.client.callTool({ name: 'who', arguments: { include_offline: true, limit: 1 } });
+      const next = await a.client.callTool({ name: 'who', arguments: { include_offline: true, limit: 1, offset: 1 } });
+      const rows = [...JSON.parse(text(history)), ...JSON.parse(text(next))];
+      expect(rows.map((s: { name: string }) => s.name).sort()).toEqual(['alpha-one', 'old-codex']);
+      const bad = await a.client.callTool({ name: 'who', arguments: { limit: 51 } });
+      expect(bad.isError).toBe(true);
+    } finally {
+      owner.close();
+    }
+  });
+
   it('claude ↔ claude: send via tool arrives as a channel notification', async () => {
     home = tmpHome();
     const a = await start('claude', 'alpha-one');

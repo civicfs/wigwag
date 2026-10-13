@@ -45,7 +45,19 @@ export const METHODS = {
 
   'session.register': m('session', z.object({ name: NameZ })),
   'session.whoami': m('session', z.object({})),
-  'session.who': m('session+owner', z.object({})),
+  'session.who': m(
+    'session+owner',
+    z.object({
+      include_offline: z.boolean().optional().describe('Include offline sessions (agents default to live sessions).'),
+      limit: z.number().int().min(1).max(50).optional().describe('Page size, 1-50; agents default to 25.'),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .default(0)
+        .describe('Skip this many matching sessions; increment to read the next page.'),
+    }),
+  ),
   'session.bind': m('session', z.object({ agent_session_id: z.string().min(1) })),
   'session.turn': m('session', z.object({ phase: z.enum(['started', 'ended']) })),
   'session.digest': m('session', z.object({})),

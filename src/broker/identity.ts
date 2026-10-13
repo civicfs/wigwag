@@ -223,10 +223,14 @@ export function installIdentity(broker: Broker): void {
 
   broker.handle('session.whoami', ({ conn }) => publicSession(db, me(conn.sessionId)));
   // Spec §17: an agent sees the sessions in its scope; the owner sees every workspace.
-  broker.handle('session.who', ({ conn }) => {
-    const scope = conn.role === 'owner' ? null : scopeOf(db, me(conn.sessionId).workspace);
+  broker.handle('session.who', ({ conn }, { include_offline, limit, offset }) => {
+    const owner = conn.role === 'owner';
+    const scope = owner ? null : scopeOf(db, me(conn.sessionId).workspace);
+    const includeOffline = include_offline ?? owner;
+    const pageSize = limit ?? (owner ? undefined : 25);
     return listSessions(db)
-      .filter((s) => scope === null || scope.has(s.workspace))
+      .filter((s) => (scope === null || scope.has(s.workspace)) && (includeOffline || s.state !== 'offline'))
+      .slice(offset, pageSize === undefined ? undefined : offset + pageSize)
       .map((s) => publicSession(db, s));
   });
 

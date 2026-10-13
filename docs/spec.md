@@ -124,7 +124,10 @@ vitest, linted with biome.
   session must exist: with zero or several, no name is applied, and a refusal for ambiguity removes no intent (only an
   intent that is applied, or refused by the claim rules, is consumed; the rest end with their launcher's connection).
   Until the first prompt there is no Codex thread to push into, so messages sent to the name wait as held (`unbound`) and
-  are delivered when the session binds. Intents are in memory and end with the launcher's connection; there is no age
+  are delivered when the session binds. For fresh named launches without a supplied prompt, `wigwag codex` adds a
+  readiness prompt that checks `whoami` and ends its turn, triggering binding without owner input. Supplied prompts,
+  subcommands, and unrecognized options pass through unchanged. Hook trust is still required.
+  Intents are in memory and end with the launcher's connection; there is no age
   limit.
   **Relaunch while the previous thread is still live.** The shared daemon keeps a thread loaded, and its MCP server
   connected, after the TUI quits, and unloads it only when the thread has had no subscriber and been idle for 60 s
@@ -463,7 +466,7 @@ Sessions in the same workspace reach each other automatically; anything across w
 | Messages and requests | Allowed when sender and recipient workspaces share a scope. `to: all` reaches only names in the sender's scope. A send to a live or remembered name outside scope is rejected with `forbidden` naming both workspaces and the `wigwag link` command. A held message whose recipient later registers out of scope becomes `stuck` with that reason and the sender gets a `low` notice. |
 | Owner and system | `owner` and `wigwag` may message any workspace. The owner CLI/TUI sees every workspace. |
 | KV, streams, blobs | Each item records the workspace that created it. Reads and lists see items from every workspace in the caller's scope. A write to an existing key/stream in scope updates that item; a new key/stream is created in the caller's workspace. If linking makes one key/stream name exist in several workspaces of one scope, operations on it fail with `conflict` listing the workspaces until the owner unlinks or one side deletes. Blobs are content-addressed and shared; `blob.get` requires the blob to have been stored or attached from a workspace in the caller's scope. |
-| `who` | Agents see sessions in their scope; the owner sees all, with workspace shown. |
+| `who` | Agents see live sessions in their scope, default 25 per page. `include_offline` adds history; `limit` is 1-50 and `offset` skips matching rows. Increment offset by the number returned until an empty page. The owner CLI still sees all, with workspace shown. |
 | Links | Owner-only: `wigwag link <a> <b>`, `wigwag unlink <a> <b>`, `wigwag links` (and the TUI). `<a>`/`<b>` are workspace paths or a session name (resolved to its workspace). Links and unlinks are recorded append-only. Agents cannot create links. |
 | Error code | New `forbidden` error code. |
 | Names across workspaces | A session may take over an offline name only if its workspace is in scope of the previous holder's workspace; otherwise `name_taken` with link guidance. Every agent read of a message, request, response or attachment is authorized by the message's workspace of origin (data notices carry the data's workspace), never by name alone. When a name is claimed, held messages that are out of scope become `stuck`. |

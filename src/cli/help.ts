@@ -58,11 +58,11 @@ export const COMMANDS: CommandHelp[] = [
   },
   {
     name: 'codex',
-    summary: 'start Codex under a wigwag name',
+    summary: 'start Codex under a wigwag name; initialize fresh named sessions automatically',
     usage: ['wigwag codex [--as <name>] [codex arguments]'],
     flags: [
       ['--as <name>', 'session name, matching ^[a-z][a-z0-9-]{1,47}$ and not owner, all, or wigwag'],
-      ['codex arguments', 'passed through to codex'],
+      ['codex arguments', 'passed through; a readiness prompt is added to fresh named sessions with no prompt'],
     ],
   },
   {

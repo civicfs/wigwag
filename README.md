@@ -60,6 +60,12 @@ package ships the plugin manifests, so `wigwag install` registers them from the 
 After installing, Codex asks you to trust the plugin's hooks the first time you start it (or open `/hooks` and press
 `t`). Until you do, Codex sessions do not bind to their wigwag session.
 
+For a fresh named session with no prompt supplied, `wigwag codex --as <name>` now submits a small initialization
+prompt automatically. It checks the binding, reports readiness, and ends the turn, so peer messages can wake the
+session without your typing a first prompt. A prompt you supply and subcommands such as `resume` pass through unchanged.
+Unrecognized Codex options also pass through unchanged; with those options or plain `codex`, send an initial prompt
+once to bind the session. Initialization does not bypass hook trust.
+
 ## Start sessions
 
 The Claude launcher below always adds `--dangerously-load-development-channels`, a local development/testing
@@ -90,7 +96,7 @@ that connects in that directory after the launch takes the name at once (see Lim
 | Tool | What it does |
 |---|---|
 | `register` | Take a role name for this session (rejected while a live session holds it) |
-| `whoami`, `who` | This session, and the sessions in its scope |
+| `whoami`, `who` | This session, and live sessions in its scope; `who` defaults to 25 results, accepts `limit` up to 50 and `offset`, and includes history with `include_offline: true`. Increase `offset` by the number returned until a page is empty. |
 | `send` | Message a session or `all` (priority urgent, normal or low; body required, subject optional and defaults to `(no subject)`) |
 | `reply` | Reply to a message by id |
 | `inbox`, `ack` | List and acknowledge held or unread messages |
@@ -307,7 +313,7 @@ once: it adds any key the new version needs and leaves your values alone.
 | Broker or delivery errors | `~/.wigwag/logs/broker.log` |
 | Claude hook errors | `~/.wigwag/logs/hooks.log` |
 | A message that never arrived | `wigwag deliveries --stuck`, then `wigwag show <msg-id>` |
-| Codex session shows `BOUND no` | Trust the hooks in Codex (`/hooks`, `t`), then send a prompt |
+| Codex session shows `BOUND no` | Trust the hooks in Codex (`/hooks`, `t`), then send a prompt. Fresh named Wigwag launches submit a readiness prompt automatically. |
 | Claude session never receives pushes | Start it with `wigwag claude`, not plain `claude` |
 
 ## Trust
@@ -358,8 +364,9 @@ already delivered to another session or inference provider. See [retention and d
   on its provisional name and one launcher match, and only through the ordinary name rules (a live holder, or an offline
   holder in an unlinked workspace, refuses it). If another Codex thread starts in the same directory in the same moment it
   can take the name, and two overlapping launches in one directory get neither (neither launcher's request is lost); the
-  session then keeps its provisional name and the agent calls `register`. Until you type a first prompt, Codex has no
-  thread to push into, so the session shows as unbound and messages sent to it wait, then arrive at the first prompt.
+  session then keeps its provisional name and the agent calls `register`. Codex needs an initial prompt to bind its
+  thread. Fresh named Wigwag launches supply a readiness prompt automatically; with plain `codex` or arguments that
+  suppress initialization, the session stays unbound and messages wait until your first prompt.
   Messages sent to a provisional name follow the session when it takes another name.
   Matching uses the directory `wigwag codex` was run from, so `codex -C <dir>` can miss. Passing a `-c key=value` override
   to Codex runs an embedded server that receives the name directly.

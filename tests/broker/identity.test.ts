@@ -10,7 +10,7 @@ import { loadConfig } from '../../src/config.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
-import { bindAgentSession, getSession } from '../../src/store/sessions.js';
+import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { GIT_TIMEOUT_MS } from '../../src/workspace.js';
 import { fakeGitDir, ownerClient, startTestBroker } from '../helpers.js';
 
@@ -85,6 +85,57 @@ describe('identity', () => {
     cleanup.push(() => o.close());
     const who = await o.call<Array<{ name: string | null; state: string }>>('session.who');
     expect(who.find((s) => s.name === 'gone-soon')?.state).toBe('offline');
+  });
+
+  it('agent who excludes offline history by default and pages it when explicitly requested', async () => {
+    const { home, broker } = await boot();
+    const a = await mcp(home, { requested_name: 'active-one' });
+    const workspace = getSession(broker.db, a.welcome.session_id)?.workspace;
+    for (let i = 0; i < 230; i++) {
+      const s = createSession(broker.db, {
+        agent: 'codex',
+        cwd: '/Users/x/code/myproject',
+        workspace,
+        pid_chain: [],
+        mcp_ppid: null,
+      });
+      claimName(broker.db, s.id, `old-${i}`);
+      setState(broker.db, s.id, 'offline');
+    }
+    type Who = Array<{ id: string; name: string; state: string }>;
+    const live = await a.client.call<Who>('session.who');
+    expect(live.map((s) => s.name)).toEqual(['active-one']);
+    const first = await a.client.call<Who>('session.who', { include_offline: true, limit: 20 });
+    const next = await a.client.call<Who>('session.who', { include_offline: true, limit: 20, offset: 20 });
+    expect(first).toHaveLength(20);
+    expect(next).toHaveLength(20);
+    expect(new Set([...first, ...next].map((s) => s.id)).size).toBe(40);
+    expect([...first, ...next].some((s) => s.state === 'offline')).toBe(true);
+    expect(await a.client.call('session.who', { include_offline: true, offset: 231 })).toEqual([]);
+    const owner = await ownerClient(home);
+    cleanup.push(() => owner.close());
+    expect(await owner.call('session.who')).toHaveLength(231);
+  });
+
+  it('agent who also bounds the live list and rejects oversized or invalid pages', async () => {
+    const { home, broker } = await boot();
+    const a = await mcp(home);
+    const workspace = getSession(broker.db, a.welcome.session_id)?.workspace;
+    for (let i = 0; i < 60; i++) {
+      const s = createSession(broker.db, {
+        agent: 'codex',
+        cwd: '/Users/x/code/myproject',
+        workspace,
+        pid_chain: [],
+        mcp_ppid: null,
+      });
+      claimName(broker.db, s.id, `live-${i}`);
+    }
+    expect(await a.client.call('session.who')).toHaveLength(25);
+    expect(await a.client.call('session.who', { limit: 50 })).toHaveLength(50);
+    for (const params of [{ limit: 51 }, { limit: 0 }, { offset: -1 }, { offset: 0.5 }]) {
+      await expect(a.client.call('session.who', params)).rejects.toMatchObject({ code: 'bad_request' });
+    }
   });
 
   it('resumes the same session and name after a broker restart', async () => {

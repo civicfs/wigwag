@@ -67,7 +67,12 @@ export const TOOLS: ToolDef[] = [
     "Set this session's wigwag name (a role, e.g. codex-merger). Rejected if a live session holds it.",
   ),
   t('whoami', 'session.whoami', "Show this session's wigwag name, state and unread count."),
-  t('who', 'session.who', 'List wigwag sessions: name, agent, busy/idle/offline, unread.'),
+  t(
+    'who',
+    'session.who',
+    'List live wigwag sessions in this workspace scope (25 per page, maximum 50). ' +
+      'Set include_offline=true for history. Increase offset by the number returned for the next page; an empty page ends the list.',
+  ),
   t('send', 'msg.send', 'Send a message to a session name or "all". priority: urgent | normal | low.'),
   t('reply', 'msg.reply', 'Reply to a message by msg_id; goes to its sender.'),
   t(
