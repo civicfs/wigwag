@@ -4,15 +4,16 @@ import { WigwagError } from '../../errors.js';
 import { readBoundedFile } from '../../files.js';
 import { isTextual } from '../../mime.js';
 import { addBlobScope, blobInScope, getBlobMeta, putBlob, readBlob } from '../../store/blobs.js';
-import { kvCas, kvGet, kvHistory, kvList } from '../../store/kv.js';
+import { kvCas, kvGet, kvHistory, kvScan } from '../../store/kv.js';
 import { inScope, type Scope } from '../../store/links.js';
 import { getMessage } from '../../store/messages.js';
 import { getSession, holderOf, type SessionRow } from '../../store/sessions.js';
-import { appendRecord, createStream, getStream, listStreams, readRecords } from '../../store/streams.js';
+import { appendRecord, createStream, getStream, listStreams, scanRecords } from '../../store/streams.js';
 import { addSubscription, subscribersFor } from '../../store/subs.js';
 import type { Connection } from '../connection.js';
 import { canSee, connScope } from '../scope.js';
 import type { Broker } from '../server.js';
+import { dataPage, decodeKvCursor, encodeKvCursor, kvCursorContext } from './data-pages.js';
 import { myName, prepareBody } from './messages.js';
 
 const requireAbsolute = (p: string) => {
@@ -153,7 +154,44 @@ export function installData(broker: Broker): void {
   });
 
   broker.handle('kv.get', ({ conn }, p) => ({ entry: kvGet(db, scopeOf(conn), p.key) }));
-  broker.handle('kv.list', ({ conn }, p) => ({ entries: kvList(db, scopeOf(conn), p.prefix) }));
+  const exportRow = (row: unknown, workspace: string) => {
+    const blob = putBlob(
+      db,
+      broker.home,
+      Buffer.from(JSON.stringify(row)),
+      {
+        media_type: 'application/json',
+        name: 'data-entry.json',
+        created_by: 'wigwag',
+      },
+      limits.max_blob_bytes,
+    );
+    // Preserve provenance: reading linked data must not grant access after that link is removed.
+    addBlobScope(db, blob.ref, workspace);
+    return { blob_ref: blob.ref, bytes: blob.size };
+  };
+
+  broker.handle('kv.list', ({ conn }, p) => {
+    const scope = scopeOf(conn);
+    const context = kvCursorContext(scope, p.prefix);
+    const after = decodeKvCursor(p.cursor, context);
+    return dataPage(
+      kvScan(db, scope, p.prefix, p.limit + 1, after),
+      p.limit,
+      (entries, last, has_more) => ({
+        entries,
+        has_more,
+        next_cursor: has_more && last ? encodeKvCursor(last, context) : null,
+      }),
+      (row) => ({
+        key: row.key,
+        workspace: row.workspace,
+        version: row.version,
+        value_omitted: true,
+        ...exportRow(row, row.workspace),
+      }),
+    );
+  });
   broker.handle('kv.history', ({ conn }, p) => ({ versions: kvHistory(db, scopeOf(conn), p.key) }));
 
   broker.handle('kv.cas', async ({ conn }, p) => {
@@ -217,9 +255,17 @@ export function installData(broker: Broker): void {
     return { seq };
   });
 
-  broker.handle('stream.read', ({ conn }, p) => ({
-    records: readRecords(db, scopeOf(conn), p.name, p.after_seq, p.limit),
-  }));
+  broker.handle('stream.read', ({ conn }, p) => {
+    const scope = scopeOf(conn);
+    const stream = getStream(db, scope, p.name);
+    if (!stream) throw new WigwagError('not_found', `Stream not found: ${p.name}`);
+    return dataPage(
+      scanRecords(db, scope, p.name, p.after_seq, p.limit + 1),
+      p.limit,
+      (records, last, has_more) => ({ records, has_more, next_after_seq: has_more && last ? last.seq : null }),
+      (row) => ({ seq: row.seq, record_omitted: true, ...exportRow(row, stream.workspace) }),
+    );
+  });
 
   broker.handle('stream.subscribe', ({ conn }, p) => {
     if (!getStream(db, scopeOf(conn), p.name)) throw new WigwagError('not_found', `Stream not found: ${p.name}`);

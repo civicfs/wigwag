@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { OwnerDelivery } from '../../broker/handlers/owner.js';
 import type { PublicSession } from '../../broker/registry.js';
-import { FEED_LIMIT_MAX, type FeedData, STREAM_READ_LIMIT_MAX } from '../../protocol/rpc.js';
+import { FEED_LIMIT_MAX, type FeedData, KV_LIST_LIMIT_MAX, STREAM_READ_LIMIT_MAX } from '../../protocol/rpc.js';
 import type { MessageRow } from '../../store/messages.js';
 import { resolveWorkspace, workspaceLabel } from '../../workspace.js';
 import { usageError } from '../help.js';
@@ -143,22 +143,38 @@ export async function cmdShow(args: string[]): Promise<void> {
 }
 
 export async function cmdKv(args: string[]): Promise<void> {
-  const [sub, arg] = args;
-  if (!(((sub === 'get' || sub === 'history') && arg && args.length === 2) || (sub === 'list' && args.length <= 2))) {
+  const [sub, ...rest] = args;
+  const { values, positionals } = parseCli({
+    args: rest,
+    allowPositionals: true,
+    options: { limit: { type: 'string' }, cursor: { type: 'string' }, json: { type: 'boolean' } },
+  });
+  const arg = positionals[0];
+  if (
+    !(((sub === 'get' || sub === 'history') && arg && rest.length === 1) || (sub === 'list' && positionals.length <= 1))
+  ) {
     throw usageError('kv');
   }
+  const limit = parseCount(values.limit, '--limit', 50, { min: 1, max: KV_LIST_LIMIT_MAX });
   await withOwner(async (c) => {
     if (sub === 'get' && arg) return out(JSON.stringify(await c.call('kv.get', { key: arg }), null, 2));
     if (sub === 'history' && arg) return out(JSON.stringify(await c.call('kv.history', { key: arg }), null, 2));
     if (sub === 'list') {
-      const { entries } = await c.call<{
-        entries: Array<{ key: string; version: number; updated_by: string; value: unknown }>;
-      }>('kv.list', { prefix: arg ?? '' });
+      const page = await c.call<{
+        entries: Array<{ key: string; version: number; updated_by?: string; value?: unknown; blob_ref?: string }>;
+        next_cursor: string | null;
+      }>('kv.list', { prefix: arg ?? '', limit, cursor: values.cursor });
+      if (values.json) return out(JSON.stringify(page, null, 2));
       return out(
         table([
           ['KEY', 'VERSION', 'BY', 'VALUE'],
-          ...entries.map((e) => [e.key, String(e.version), e.updated_by, JSON.stringify(e.value)]),
-        ]),
+          ...page.entries.map((e) => [
+            e.key,
+            String(e.version),
+            e.updated_by ?? '-',
+            e.blob_ref ? `[full entry: ${e.blob_ref}]` : JSON.stringify(e.value),
+          ]),
+        ]) + (page.next_cursor ? `\nMore keys: repeat with --cursor ${page.next_cursor}` : ''),
       );
     }
     throw usageError('kv');

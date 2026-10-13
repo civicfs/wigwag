@@ -321,8 +321,33 @@ duplicate a push; the rendered `msg_id` lets the agent recognize a duplicate. Ac
 | Feature | Operations | Rules |
 |---|---|---|
 | Blobs | `blob_put(path | text, media_type, name?)` → `sha256:<hex>`; `blob_get(ref, dest_path?)` | Immutable, content-addressed, dedup by hash. `blob_get` writes to `dest_path` or returns inline text if ≤ `limits.inline_blob_bytes` and textual. Max size `limits.max_blob_bytes`. Paths are read by the MCP server process, so same host only (R4). |
-| KV | `kv_get(key)`, `kv_list(prefix)`, `kv_cas(key, expected_version | null, value)`, `kv_delete(key, expected_version)`, `kv_watch(prefix, priority)`, `kv_history(key)` | `null` expected = create-only. CAS failure returns current `{version, value, updated_by}`. Key pattern `^[a-z0-9][a-z0-9._/-]{0,199}$`. Value is JSON ≤ `limits.max_kv_value_bytes`. The MCP tool layer repairs representations some clients send (Claude Code 2.1.294): `expected_version` `"null"` means null and a decimal string means that integer; a JSON-typed argument (`value`, `record`, `json_schema`, `filter`) given as a string is decoded when it is valid JSON text (to store the string `42`, pass `"\"42\""`). The decoded input is then validated strictly. |
+| KV | `kv_get(key)`, `kv_list(prefix, limit?, cursor?)`, `kv_cas(key, expected_version | null, value)`, `kv_delete(key, expected_version)`, `kv_watch(prefix, priority)`, `kv_history(key)` | `null` expected = create-only. CAS failure returns current `{version, value, updated_by}`. Key pattern `^[a-z0-9][a-z0-9._/-]{0,199}$`. Value is JSON ≤ `limits.max_kv_value_bytes`. The MCP tool layer repairs representations some clients send (Claude Code 2.1.294): `expected_version` `"null"` means null and a decimal string means that integer; a JSON-typed argument (`value`, `record`, `json_schema`, `filter`) given as a string is decoded when it is valid JSON text (to store the string `42`, pass `"\"42\""`). The decoded input is then validated strictly. |
 | Streams | `stream_create(name, json_schema?, description)`, `stream_append(name, record)`, `stream_read(name, after_seq, limit)`, `stream_subscribe(name, priority, filter?)`, `stream_list()` | Records validated with ajv against the stream schema at append; invalid → error with ajv messages. `filter` is an exact-match object on top-level fields. |
+
+`kv_list` and `stream_read` pages are capped at 12,000 UTF-8 bytes of
+`JSON.stringify(result, null, 2)`, including metadata and escaped payloads, for both
+session and owner callers. KV defaults to 50 entries (maximum 1000); streams
+default to 100 records (maximum 1000). KV returns `{entries, has_more, next_cursor}`;
+stream reads return `{records, has_more, next_after_seq}`. Continuations are null
+at the end. Repeat with `cursor: next_cursor` and the same prefix, or
+`after_seq: next_after_seq`. An unreturned row never advances the continuation.
+
+KV uses SQL keyset ordering `(key, workspace)`, omits tombstones, retains duplicate
+names across linked workspaces, and reapplies scope on every read. Versioned opaque
+cursors carry that position and a hash of the prefix and workspace scope. Malformed
+cursors or changed prefix/scope return `bad_request`; cursors confer no authority.
+Deleting the cursor row does not prevent continuation. Pages are not a snapshot;
+concurrent changes before the cursor require a new scan. Stream append-only
+continuations use the last returned sequence number.
+
+An item that cannot fit alone becomes a reference: KV returns
+`{key, workspace, version, value_omitted: true, blob_ref, bytes}`; streams return
+`{seq, record_omitted: true, blob_ref, bytes}`. Each immutable JSON blob contains
+the complete original row, uses `limits.max_blob_bytes` and ordinary blob retention,
+and is scoped to the item's owning workspace, not the reader's workspace. Use
+`blob_get` with `dest_path`, then read the file in chunks. Oversized exports or
+metadata that cannot fit the page budget fail explicitly with `limit`. The budget
+does not apply to `kv_get`, `kv_history`, or `stream_list`.
 | Request/response | `request(to, subject, body, attachments?, expires_in_s?)` → `req-…`; `respond(request_id, body, attachments?, status: ok|error)`; `await_response(request_id, wait_s)`; `requests(status)` | Request delivered like a message (`kind=request`). Response delivered to the requester at `normal`. `await_response` blocks up to `wait_s` ≤ `limits.max_await_s` for quick exchanges; otherwise the response arrives as a push. Expiry → `low` notice to requester. One response per request; second `respond` is rejected. |
 
 ## 8. MCP tool surface (both agents)

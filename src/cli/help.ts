@@ -115,11 +115,18 @@ export const COMMANDS: CommandHelp[] = [
   {
     name: 'kv',
     summary: 'read the shared key-value store',
-    usage: ['wigwag kv get <key>', 'wigwag kv list [prefix]', 'wigwag kv history <key>'],
+    usage: [
+      'wigwag kv get <key>',
+      'wigwag kv list [prefix] [--limit <n>] [--cursor <cursor>] [--json]',
+      'wigwag kv history <key>',
+    ],
     flags: [
       ['get <key>', 'print the current value'],
       ['list [prefix]', 'list keys, optionally under a prefix'],
       ['history <key>', 'print every version of the key'],
+      ['--limit <n>', 'KV list page size (default 50, maximum 1000; also capped at 12 KB)'],
+      ['--cursor <cursor>', 'continue KV list with the returned next_cursor and the same prefix'],
+      ['--json', 'print a KV list page with its continuation metadata'],
     ],
   },
   {

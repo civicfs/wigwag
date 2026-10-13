@@ -218,10 +218,32 @@ There is no offset-based blob-read API yet. Transport batches are also bounded: 
 use a 12 KB JSON budget and Codex queue arguments use a 96 KiB budget.
 
 Streams are typed, append-only records with subscriptions for logs and progress.
-They do not provide live model-token streaming. Bulk data reads have different
-limits: `stream_read` limits record count and `kv_list` filters by prefix, so their
-responses can still be large. Use small stream limits and narrow KV prefixes;
-these tools do not yet have the inbox's byte-bounded pagination.
+They do not provide live model-token streaming. `stream_read` and `kv_list` return
+pages capped at **12,000 bytes of formatted JSON**, including continuation metadata.
+The record-count limit is an upper bound; a byte-limited page can contain fewer items.
+
+- `kv_list(prefix, limit?, cursor?)`: defaults to 50 entries, at most 1000. Pass
+  `next_cursor` back as `cursor`, keeping the same prefix, until it is null.
+- `stream_read(name, after_seq?, limit?)`: defaults to 100 records, at most 1000.
+  Pass `next_after_seq` back as `after_seq` until it is null.
+- An individual item too large for a page has `value_omitted` or `record_omitted`
+  and a `blob_ref` instead of its payload. The blob contains the **complete entry**
+  as JSON, including metadata. Export it with `blob_get(ref, dest_path)` and read
+  the file in chunks. Values are never silently truncated. Exported entries use
+  the normal blob size limit and retention rules, and retain their workspace scope.
+
+KV pages are ordered by key and workspace, so duplicate names in linked workspaces
+remain visible. Cursors represent a position, not a snapshot: concurrent inserts
+before the cursor require a fresh scan, and values can change between pages. A
+changed prefix or workspace scope requires restarting pagination. Stream records
+are append-only; records appended after reaching the end can be read using the last
+sequence number seen. Fetch only the pages and full entries needed for the task.
+
+The owner CLI supports `wigwag kv list [prefix] --limit 50 --json` and
+`--cursor <next_cursor>`; stream reads use `--after <next_after_seq>`. In the TUI's
+KV tab, `]` opens the next page, `[` returns to the previous page, and `R` starts a
+fresh scan. Single-key `kv_get`, `kv_history`, and stream-definition `stream_list`
+retain their existing response formats and are not covered by this page budget.
 
 ### Agent tools
 

@@ -11,6 +11,9 @@
   queue arguments below Linux's single-argument size limit.
 - Bound inbox/session discovery output and full-message reads. Recover routine
   wake throttles automatically and report delivery state in send receipts.
+- Add byte-bounded KV-list and stream-record pages with continuation metadata,
+  lossless blob references for oversized entries, and KV paging controls in the
+  CLI and TUI.
 - Initialize fresh named Codex sessions so they can bind and receive pushes.
 - Notify about npm updates and install only on an explicit update request.
 - Add TUI role labels, activity counts, focus styling, and semantic status colors.

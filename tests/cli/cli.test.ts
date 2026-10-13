@@ -30,6 +30,38 @@ afterEach(async () => {
 });
 
 describe('cli', () => {
+  it('KV list exposes bounded pages and accepts its continuation cursor', async () => {
+    const { home, broker } = await startTestBroker();
+    const peer = await mcpClient(home, { requested_name: 'alpha-one' });
+    try {
+      for (const key of ['lane/a', 'lane/b', 'lane/c']) {
+        await peer.client.call('kv.cas', { key, expected_version: null, value: key });
+      }
+      const first = await runCli(home, ['kv', 'list', 'lane/', '--limit', '1', '--json']);
+      expect(first.code, first.stderr).toBe(0);
+      const page = JSON.parse(first.stdout);
+      expect(page).toMatchObject({ entries: [{ key: 'lane/a' }], has_more: true, next_cursor: expect.any(String) });
+      const second = await runCli(home, [
+        'kv',
+        'list',
+        'lane/',
+        '--limit',
+        '1',
+        '--cursor',
+        page.next_cursor,
+        '--json',
+      ]);
+      expect(second.code, second.stderr).toBe(0);
+      expect(JSON.parse(second.stdout)).toMatchObject({ entries: [{ key: 'lane/b' }], has_more: true });
+      const table = await runCli(home, ['kv', 'list', 'lane/', '--limit', '1']);
+      expect(table.stdout).toContain('lane/a');
+      expect(table.stdout).not.toContain('lane/b');
+      expect(table.stdout).toContain('--cursor');
+    } finally {
+      peer.client.close();
+      await broker.stop();
+    }
+  });
   it('restarts and verifies the replacement broker version', async () => {
     const home = tmpHome();
     homes.push(home);
@@ -273,6 +305,9 @@ describe('cli', () => {
       ['send', 'x-y', '--priority'],
       ['send', 'a', 'b', '--priority', 'low', '--subject', 's', '--body', 'b'],
       ['kv', 'get'],
+      ['kv', 'list', '--limit', '0'],
+      ['kv', 'list', '--limit', '1001'],
+      ['kv', 'list', 'a', 'b'],
       ['streams', 'read'],
       ['streams', 'read', 'n', '--limit', 'abc'],
       ['tail', '--limit', 'abc'],

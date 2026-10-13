@@ -151,15 +151,25 @@ export function readRecords(
   afterSeq: number,
   limit: number,
 ): Array<{ seq: number; record: unknown; appended_by: string; at: string }> {
+  return [...scanRecords(db, scope, name, afterSeq, limit)];
+}
+
+export type StreamRecord = { seq: number; record: unknown; appended_by: string; at: string };
+
+/** Lazily decode only the records consumed by the response-size budget. */
+export function* scanRecords(
+  db: Db,
+  scope: Scope,
+  name: string,
+  afterSeq: number,
+  limit: number,
+): Generator<StreamRecord> {
   const s = mustGet(db, scope, name);
-  return (
-    db
-      .prepare('SELECT * FROM stream_records WHERE workspace = ? AND stream = ? AND seq > ? ORDER BY seq LIMIT ?')
-      .all(s.workspace, name, afterSeq, limit) as Array<{
-      seq: number;
-      record_json: string;
-      appended_by: string;
-      at: string;
-    }>
-  ).map((r) => ({ seq: r.seq, record: JSON.parse(r.record_json), appended_by: r.appended_by, at: r.at }));
+  const rows = db
+    .prepare('SELECT * FROM stream_records WHERE workspace = ? AND stream = ? AND seq > ? ORDER BY seq LIMIT ?')
+    .iterate(s.workspace, name, afterSeq, limit);
+  for (const row of rows) {
+    const r = row as { seq: number; record_json: string; appended_by: string; at: string };
+    yield { seq: r.seq, record: JSON.parse(r.record_json), appended_by: r.appended_by, at: r.at };
+  }
 }

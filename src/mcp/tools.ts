@@ -129,7 +129,11 @@ export const TOOLS: ToolDef[] = [
     'Fetch a blob by ref: small text inline, or write to an absolute dest_path (never overwrites).',
   ),
   t('kv_get', 'kv.get', 'Read a shared key.'),
-  t('kv_list', 'kv.list', 'List shared keys under a prefix.'),
+  t(
+    'kv_list',
+    'kv.list',
+    'List shared keys under a prefix in pages capped at 12 KB (default limit 50, max 1000). Follow next_cursor as cursor with the same prefix until null. Oversized entries have value_omitted and blob_ref: export via blob_get with dest_path and read the JSON file in chunks.',
+  ),
   t(
     'kv_cas',
     'kv.cas',
@@ -157,7 +161,11 @@ export const TOOLS: ToolDef[] = [
       coerce: coerceKeys({ record: decodeJson }),
     },
   ),
-  t('stream_read', 'stream.read', 'Read stream records after a sequence number.'),
+  t(
+    'stream_read',
+    'stream.read',
+    'Read stream records in pages capped at 12 KB (default limit 100, max 1000). Follow next_after_seq as after_seq until null. Oversized records have record_omitted and blob_ref: export via blob_get with dest_path and read the JSON file in chunks.',
+  ),
   t(
     'stream_subscribe',
     'stream.subscribe',

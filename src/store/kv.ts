@@ -77,14 +77,25 @@ export const kvGet = (db: Db, scope: Scope, key: string): KvRow | null => resolv
 
 /** Live keys under `prefix` from every workspace in scope; a name owned by several workspaces appears once per workspace. */
 export function kvList(db: Db, scope: Scope, prefix: string): KvRow[] {
+  return [...kvScan(db, scope, prefix)];
+}
+
+/** Keyset scan: a deleted cursor row still has a well-defined position. Scope is always re-applied. */
+export function* kvScan(
+  db: Db,
+  scope: Scope,
+  prefix: string,
+  limit = -1,
+  after?: { key: string; workspace: string },
+): Generator<KvRow> {
   const c = scopeClause(scope);
-  return (
-    db
-      .prepare(
-        `SELECT * FROM kv WHERE substr(key, 1, ?) = ? AND value_json IS NOT NULL${c.sql} ORDER BY key, workspace`,
-      )
-      .all(prefix.length, prefix, ...c.args) as Raw[]
-  ).map(toRow);
+  const position = after ? ' AND (key, workspace) > (?, ?)' : '';
+  const rows = db
+    .prepare(
+      `SELECT * FROM kv WHERE substr(key, 1, ?) = ? AND value_json IS NOT NULL${c.sql}${position} ORDER BY key, workspace LIMIT ?`,
+    )
+    .iterate(prefix.length, prefix, ...c.args, ...(after ? [after.key, after.workspace] : []), limit);
+  for (const row of rows) yield toRow(row as Raw);
 }
 
 export function kvHistory(db: Db, scope: Scope, key: string): KvRow[] {

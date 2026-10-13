@@ -18,6 +18,7 @@ const OptionalSubject = Subject.default(NO_SUBJECT);
 /** Paging maxima (spec §11 fixed constants), shared with the CLI's range checks (R38). */
 export const FEED_LIMIT_MAX = 1000;
 export const STREAM_READ_LIMIT_MAX = 1000;
+export const KV_LIST_LIMIT_MAX = 1000;
 
 export const HelloZ = z
   .object({
@@ -175,7 +176,19 @@ export const METHODS = {
   'blob.get': m('session+owner', z.object({ ref: BlobRefZ, dest_path: z.string().optional() })),
 
   'kv.get': m('session+owner', z.object({ key: z.string() })),
-  'kv.list': m('session+owner', z.object({ prefix: z.string().default('') })),
+  'kv.list': m(
+    'session+owner',
+    z.object({
+      prefix: z.string().max(200).default(''),
+      limit: z.number().int().positive().max(KV_LIST_LIMIT_MAX).default(50),
+      cursor: z
+        .string()
+        .min(1)
+        .max(8192)
+        .optional()
+        .describe('Pass next_cursor from the previous page; keep the same prefix.'),
+    }),
+  ),
   'kv.history': m('session+owner', z.object({ key: z.string() })),
   'kv.cas': m(
     'session',

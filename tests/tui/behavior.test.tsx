@@ -38,6 +38,29 @@ describe('detail text is reachable', () => {
 });
 
 describe('KV and Streams detail', () => {
+  it('KV next and previous page controls preserve access to rows beyond the first page', async () => {
+    const ui = mount(empty, () => ({}), 100, 30, {
+      'kv.list': (p) => ({
+        entries: [{ key: p.cursor ? 'second-key' : 'first-key', version: 1, updated_by: 'a-a', value: 1 }],
+        has_more: !p.cursor,
+        next_cursor: p.cursor ? null : 'next-page',
+      }),
+    });
+    try {
+      await until(() => ui.frame().includes('1 Feed'));
+      ui.stdin.write('4');
+      await until(() => ui.frame().includes('first-key'));
+      expect(ui.frame()).toContain('] next');
+      ui.stdin.write(']');
+      await until(() => ui.frame().includes('second-key'));
+      expect(ui.frame()).not.toContain('first-key');
+      ui.stdin.write('[');
+      await until(() => ui.frame().includes('first-key'));
+      expect(ui.frame()).not.toContain('second-key');
+    } finally {
+      ui.app.unmount();
+    }
+  });
   it('Enter on a KV row shows every field of the entry; Streams likewise', async () => {
     const value = { step: 3, note: 'merging', long: Array.from({ length: 80 }, (_, i) => `k${i}`).join(' ') };
     const ui = mount(empty, () => ({}), 100, 30, {

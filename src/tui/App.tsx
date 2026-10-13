@@ -27,7 +27,7 @@ type TableTab = 'Requests' | 'KV' | 'Streams' | 'Blobs';
 const isTableTab = (t: Tab): t is TableTab => t !== 'Feed' && t !== 'Deliveries' && t !== 'Links';
 
 /** One loaded table tab. `items` holds the raw entries so Enter can show every field of the row. */
-type Table = { tab: TableTab; rows: string[][]; ids: string[]; items: unknown[] };
+type Table = { tab: TableTab; rows: string[][]; ids: string[]; items: unknown[]; nextCursor?: string | null };
 
 /** The detail pane sits beside the main pane at this width or wider; narrower, it replaces the whole body. */
 export const WIDE_COLUMNS = 120;
@@ -35,7 +35,7 @@ const HELP = 'q quit · Tab focus · ↑↓ select · Enter open · c compose ·
 const DETAIL_HELP = 'q quit · ↑↓ scroll detail · Esc back to the list';
 const EMPTY_TABLE: Omit<Table, 'tab'> = { rows: [], ids: [], items: [] };
 
-async function loadTable(client: Client, tab: TableTab): Promise<Table> {
+async function loadTable(client: Client, tab: TableTab, kvCursor?: string): Promise<Table> {
   if (tab === 'Requests') {
     const { requests } = await client.call<{
       requests: Array<{ request_id: string; status: string; from: string; to: string; subject: string }>;
@@ -48,14 +48,21 @@ async function loadTable(client: Client, tab: TableTab): Promise<Table> {
     };
   }
   if (tab === 'KV') {
-    const { entries } = await client.call<{
-      entries: Array<{ key: string; version: number; updated_by: string; value: unknown }>;
-    }>('kv.list', {});
+    const { entries, next_cursor } = await client.call<{
+      entries: Array<{ key: string; version: number; updated_by?: string; value?: unknown; blob_ref?: string }>;
+      next_cursor?: string | null;
+    }>('kv.list', { cursor: kvCursor });
     return {
       tab,
-      rows: entries.map((e) => [e.key, `v${e.version}`, e.updated_by, JSON.stringify(e.value)]),
+      rows: entries.map((e) => [
+        e.key,
+        `v${e.version}`,
+        e.updated_by ?? '-',
+        e.blob_ref ? `[full entry: ${e.blob_ref}]` : JSON.stringify(e.value),
+      ]),
       ids: entries.map((e) => e.key),
       items: entries,
+      nextCursor: next_cursor,
     };
   }
   if (tab === 'Streams') {
@@ -110,6 +117,8 @@ export function App({ client }: { client: Client }) {
   const [detail, setDetail] = useState<unknown>(null);
   const [detailTop, setDetailTop] = useState(0);
   const [table, setTable] = useState<Table | null>(null);
+  const [kvCursors, setKvCursors] = useState<Array<string | undefined>>([undefined]);
+  const kvCursor = kvCursors.at(-1);
   const [reload, setReload] = useState(0);
   const [loading, setLoading] = useState<string[]>([]);
   const [composing, setComposing] = useState(false);
@@ -177,7 +186,7 @@ export function App({ client }: { client: Client }) {
     const mine = ++generation.current;
     track(
       tab,
-      loadTable(client, tab)
+      loadTable(client, tab, kvCursor)
         .then((t) => {
           if (mine === generation.current) setTable(t);
         })
@@ -188,7 +197,7 @@ export function App({ client }: { client: Client }) {
     return () => {
       generation.current++;
     };
-  }, [client, tab, reload, track]);
+  }, [client, tab, reload, track, kvCursor]);
 
   const shownTable = table && isTableTab(tab) && table.tab === tab ? table : EMPTY_TABLE;
   const feed = filter
@@ -292,8 +301,23 @@ export function App({ client }: { client: Client }) {
       }
       if (input === 'R') {
         refresh();
+        if (tab === 'KV') setKvCursors([undefined]);
         setReload((r) => r + 1);
         return;
+      }
+      if (tab === 'KV' && !detail && focus === 'main') {
+        if (input === ']' && shownTable.nextCursor) {
+          setKvCursors((c) => [...c, shownTable.nextCursor as string]);
+          setTable(null);
+          setSel((s) => ({ ...s, main: 0 }));
+          return;
+        }
+        if (input === '[' && kvCursors.length > 1) {
+          setKvCursors((c) => c.slice(0, -1));
+          setTable(null);
+          setSel((s) => ({ ...s, main: 0 }));
+          return;
+        }
       }
       if (input === 'c') return setComposing(true);
       if (input === 'l') return setLinking(true);
@@ -442,7 +466,11 @@ export function App({ client }: { client: Client }) {
       />
     ) : (
       <TablePane
-        title={tab}
+        title={
+          tab === 'KV'
+            ? `KV · page ${kvCursors.length}${kvCursors.length > 1 ? ' · [ previous' : ''}${shownTable.nextCursor ? ' · ] next' : ''}`
+            : tab
+        }
         rows={shownTable.rows}
         selected={selMain}
         focused={mainFocused}
