@@ -99,7 +99,7 @@ that connects in that directory after the launch takes the name at once (see Lim
 | `whoami`, `who` | This session, and live sessions in its scope; `who` defaults to 25 results, accepts `limit` up to 50 and `offset`, and includes history with `include_offline: true`. Increase `offset` by the number returned until a page is empty. |
 | `send` | Message a session or `all` (priority urgent, normal or low; body required, subject optional and defaults to `(no subject)`) |
 | `reply` | Reply to a message by id |
-| `inbox`, `ack` | List and acknowledge held or unread messages |
+| `inbox`, `read_message`, `ack` | Read bounded inbox pages, fetch full messages in chunks, and acknowledge messages |
 | `mute`, `unmute` | Ignore a sender or stream (urgent bypasses) |
 | `blob_put`, `blob_get` | Immutable content-addressed files |
 | `kv_get`, `kv_list`, `kv_cas`, `kv_delete`, `kv_watch`, `kv_history` | Shared key/value state; `kv_cas` with expected version `null` creates a key. Claude Code sends null/JSON arguments as strings; the tool layer decodes them (to store the string 42, pass `"\"42\""`). |
@@ -129,7 +129,7 @@ wigwag tail -f [--name <session>]    # live feed
 wigwag show <msg-...|req-...|sha256:...>
 wigwag deliveries [--stuck]          # delivery states and last errors
 wigwag kv get|list|history ...       # also: wigwag streams list|read <name>
-wigwag release-throttle <from> <to>  # clear loop protection between two sessions
+wigwag release-throttle <from> <to>  # clear a cooldown early (it also expires automatically)
 wigwag broker start|stop|status
 wigwag doctor
 ```

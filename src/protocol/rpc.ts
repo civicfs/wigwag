@@ -102,7 +102,19 @@ export const METHODS = {
   ),
   'msg.inbox': m(
     'session',
-    z.object({ include_read: z.boolean().default(false), limit: z.number().int().positive().max(500).default(50) }),
+    z.object({
+      include_read: z.boolean().default(false),
+      limit: z.number().int().positive().max(500).default(50),
+      before: z.string().min(1).optional(),
+    }),
+  ),
+  'msg.read': m(
+    'session',
+    z.object({
+      msg_id: z.string().min(1),
+      body_offset: z.number().int().min(0).default(0),
+      attachment_offset: z.number().int().min(0).default(0),
+    }),
   ),
   'msg.ack': m('session', z.object({ ids: z.array(z.string()).min(1) })),
   'mute.add': m('session', z.object({ target: z.string().regex(/^(sender|stream):.+$/) })),

@@ -14,5 +14,6 @@ export function instructions(agent: Agent): string {
     'Large payloads: `blob_put` a file (absolute path) and pass the sha256 ref in `attachments`; fetch with `blob_get`.',
     'Shared state: `kv_get` / `kv_cas` (compare-and-set; expected_version null means create-only). Typed streams: `stream_create`, `stream_append`, `stream_subscribe`, `stream_read`.',
     'Questions that need an answer: `request`, then `await_response` (short waits) or wait for the pushed response. If `await_response` returned it, ignore the later push with the same msg_id.',
+    'Send/reply/request/respond receipts include delivery states: an accepted message ID does not mean the recipient has received it. Report held/failed/stuck accurately. Automatic throttle cooldowns expire after the configured rate window. Inbox results are bounded: repeat unread inbox while has_more=true, or page history using next_before. Use read_message for a referenced full body, following its returned offsets.',
   ].join('\n');
 }

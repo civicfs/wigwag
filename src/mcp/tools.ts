@@ -78,7 +78,12 @@ export const TOOLS: ToolDef[] = [
   t(
     'inbox',
     'msg.inbox',
-    'Fetch undelivered messages (marks them read); pushed and digested ones are already read. include_read to see history.',
+    'Fetch a bounded page of unread messages; only returned messages are marked read. Repeat until has_more=false. For include_read history, pass next_before as before for the next page. Oversized bodies are available through read_message.',
+  ),
+  t(
+    'read_message',
+    'msg.read',
+    'Read a stored message in bounded chunks. Follow next_body_offset as body_offset and next_attachment_offset as attachment_offset until each is null. The full original remains stored.',
   ),
   t('ack', 'msg.ack', 'Mark message ids as read.'),
   t(

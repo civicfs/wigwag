@@ -9,6 +9,14 @@ with `--model sonnet` (or lower) and record the model shown in the pane. Launch 
 `-c key=value` override makes the Codex TUI run an embedded app-server instead of the shared daemon, which hides E-1.
 Install first with `./install.sh`; the first Codex start after install asks to trust the new hooks (`/hooks`, `t`).
 
+Delivery recovery checks: send more than `rate.wake_pushes` diagnostic messages
+within one rate window. Verify held receipts show `throttled`, then verify the
+cooldown expires and dispatches the backlog without manual release. Repeat across
+a broker restart. With a large unread backlog, verify each inbox page stays below
+12,000 formatted JSON bytes, only returned messages are read, and repeated pages
+recover every original ID. An oversized single message must provide bounded
+`read_message` offsets or an explicit `blob_get`-to-file fallback.
+
 | # | Criterion | Steps | Expected |
 |---|---|---|---|
 | E1 | Claude → idle Codex wakes | T1: `wigwag codex --as e2e-codex`; trust hooks if prompted, then wait for the automatic readiness prompt to complete without typing. Check `wigwag who` shows BOUND `yes` (if the name is not applied, E-1, ask Codex to call the wigwag `register` tool with `e2e-codex`). T2: `wigwag claude --as e2e-claude`; ask it: "use the wigwag send tool to send e2e-codex a normal message with a subject asking it to reply with PONG-E1 via the reply tool" | Codex initializes and then starts a peer-message turn without typing; Claude receives a channel message containing PONG-E1 |

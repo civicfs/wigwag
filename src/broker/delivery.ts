@@ -16,7 +16,7 @@ import {
   transitionIf,
 } from '../store/messages.js';
 import { holderOf, type SessionRow } from '../store/sessions.js';
-import { addThrottle, isMuted, isThrottled, releaseThrottle } from '../store/subs.js';
+import { activeThrottles, addThrottle, isMuted, isThrottled, releaseThrottle } from '../store/subs.js';
 import type { TransportRegistry } from '../transports/types.js';
 import { decide } from './policy.js';
 import { WakeLimiter } from './ratelimit.js';
@@ -59,6 +59,7 @@ export class DeliveryEngine {
   private readonly abortPushes = new AbortController();
   private drained = false;
   private stopped = false;
+  private readonly throttleSchedules = new Map<string, symbol>();
 
   constructor(private readonly d: EngineDeps) {
     this.now = d.now ?? Date.now;
@@ -228,6 +229,7 @@ export class DeliveryEngine {
       throttled: isThrottled(this.d.db, msg.from_name, recipient),
     });
     if (dec.action === 'hold') {
+      if (dec.reason === 'throttled') this.scheduleThrottle(msg.from_name, recipient);
       this.move(k, 'held', {
         hold_reason: dec.reason,
         ...(rs.state === 'no-channel'
@@ -244,6 +246,7 @@ export class DeliveryEngine {
       this.d.emitFeed('throttle', { from: msg.from_name, to: recipient, active: true });
       this.d.log(`throttled ${msg.from_name} -> ${recipient}`);
       this.move(k, 'held', { hold_reason: 'throttled' });
+      this.scheduleThrottle(msg.from_name, recipient);
       return;
     }
     await this.push(rs.session as SessionRow, [k]);
@@ -393,6 +396,27 @@ export class DeliveryEngine {
     this.timers.add(t);
   }
 
+  private scheduleThrottle(from: string, to: string): void {
+    const key = `${from}\u0000${to}`;
+    if (this.throttleSchedules.has(key) || this.stopped) return;
+    const current = activeThrottles(this.d.db).find((t) => t.from_name === from && t.to_name === to);
+    if (!current) return;
+    const token = Symbol();
+    this.throttleSchedules.set(key, token);
+    const deadline = Date.parse(current.created_at) + this.d.config.rate.window_s * 1000;
+    const arm = () =>
+      this.schedule(Math.min(2147483647, Math.max(0, deadline - this.now())), async () => {
+        if (this.throttleSchedules.get(key) !== token) return;
+        if (deadline > this.now()) {
+          arm();
+          return;
+        }
+        this.throttleSchedules.delete(key);
+        if (isThrottled(this.d.db, from, to)) await this.release(from, to);
+      });
+    arm();
+  }
+
   /** System notice from "wigwag" to a session name. */
   async notice(
     to: string,
@@ -476,6 +500,7 @@ export class DeliveryEngine {
   }
 
   private async releaseNow(from: string, to: string): Promise<void> {
+    this.throttleSchedules.delete(`${from}\u0000${to}`);
     releaseThrottle(this.d.db, from, to);
     this.limiter.reset(from, to);
     this.d.emitFeed('throttle', { from, to, active: false });
@@ -507,6 +532,7 @@ export class DeliveryEngine {
 
   /** Broker start: every session is offline, so pending become held(offline); failed are rescheduled. */
   async resumeAll(): Promise<void> {
+    for (const t of activeThrottles(this.d.db)) this.scheduleThrottle(t.from_name, t.to_name);
     for (const x of deliveriesByState(this.d.db, ['pending'])) await this.dispatch(x.message_id, x.recipient);
     for (const x of deliveriesByState(this.d.db, ['failed'])) {
       const at = x.next_attempt_at ? Date.parse(x.next_attempt_at) : this.now();
@@ -515,6 +541,7 @@ export class DeliveryEngine {
   }
 
   stop(): void {
+    this.throttleSchedules.clear();
     this.stopped = true;
     for (const t of this.timers) clearTimeout(t);
     this.timers.clear();

@@ -292,8 +292,17 @@ so explicitly with size and ref.
 
 ### Loop protection
 
-Per sender→recipient pair, more than `rate.wake_pushes` wake-pushes within `rate.window_s` downgrades further
-messages on that pair to `held` and posts an owner-visible notice in the TUI. The owner clears it from the TUI.
+Per sender→recipient pair, more than `rate.wake_pushes` wake-pushes within `rate.window_s` temporarily downgrades
+further messages to `held`. The cooldown expires after `rate.window_s`, including across broker restarts, and
+the backlog is dispatched automatically. The owner can release it earlier from the TUI or CLI. Agent send/reply/
+request/respond receipts include delivery states: an accepted message ID is not proof of delivery.
+
+MCP inbox responses are capped at 12,000 formatted JSON bytes. Only messages included in the returned page are
+marked read. Repeat unread inbox while `has_more` is true; page read history with `next_before` passed as `before`.
+An oversized message is represented by an explicit reference to its unchanged stored original. `read_message`
+returns bounded body and attachment chunks; follow `next_body_offset` and `next_attachment_offset`. Existing MCP
+clients without that tool can fetch the returned message blob to an absolute `dest_path` and read it in chunks.
+Claude channel backlogs are also divided into bounded batches, preserving each original message ID.
 
 ### Durability
 

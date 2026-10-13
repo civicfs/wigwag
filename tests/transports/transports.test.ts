@@ -51,6 +51,37 @@ afterEach(() => {
   delete process.env.FAKE_CODEX_MODE;
 });
 
+describe('bounded Claude channel batches', () => {
+  it('splits backlogs into bounded pushes and acknowledges every original item once', async () => {
+    const pushed: Array<{ content: string }> = [];
+    const acked: RenderItem[] = [];
+    const conn = {
+      event: (_name: string, data: { content: string }) => {
+        pushed.push(data);
+        return true;
+      },
+    } as Connection;
+    const t = new ClaudeChannelTransport(() => conn);
+    const original = items(46, 'body '.repeat(200));
+    await t.push(session({ agent: 'claude' }), original, { onPushed: (batch) => acked.push(...batch) });
+    expect(pushed.length).toBeGreaterThan(1);
+    for (const p of pushed) expect(Buffer.byteLength(JSON.stringify(p))).toBeLessThanOrEqual(12000);
+    expect(acked.map((x) => x.msg.id)).toEqual(original.map((x) => x.msg.id));
+  });
+  it('references a single oversized body explicitly instead of emitting an oversized channel payload', async () => {
+    const pushed: Array<{ content: string }> = [];
+    const conn = {
+      event: (_name: string, data: { content: string }) => {
+        pushed.push(data);
+        return true;
+      },
+    } as Connection;
+    await new ClaudeChannelTransport(() => conn).push(session({ agent: 'claude' }), items(1, 'x'.repeat(30000)));
+    expect(Buffer.byteLength(JSON.stringify(pushed[0]))).toBeLessThanOrEqual(12000);
+    expect(pushed[0].content).toContain('read_message');
+  });
+});
+
 describe('CodexQueueTransport', () => {
   it('runs codex queue --thread <id> --message <text>', async () => {
     const log = join(tmpHome(), 'calls.jsonl');

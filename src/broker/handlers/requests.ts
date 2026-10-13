@@ -4,7 +4,7 @@ import { findRequest, findResponse, type MessageRow } from '../../store/messages
 import type { Connection } from '../connection.js';
 import { connCanSee } from '../scope.js';
 import type { Broker } from '../server.js';
-import { markRead, myName, sendMessage, stillMine } from './messages.js';
+import { deliveryReceipt, markRead, myName, sendMessage, stillMine } from './messages.js';
 
 export type RequestSummary = {
   request_id: string;
@@ -157,7 +157,7 @@ export function installRequests(broker: Broker): void {
       expires_at: p.expires_in_s ? new Date(Date.now() + p.expires_in_s * 1000).toISOString() : null,
       onInserted: scheduleExpiry,
     });
-    return { request_id, message_id: m.id };
+    return { request_id, message_id: m.id, deliveries: deliveryReceipt(broker, m.id) };
   });
 
   broker.handle('req.respond', async ({ conn }, p) => {
@@ -180,7 +180,7 @@ export function installRequests(broker: Broker): void {
     });
     if (stillMine(broker, conn, me, req)) markRead(broker, req.id, me); // R46-N2: re-check after the awaited push
     settleAll(p.request_id, m);
-    return { message_id: m.id };
+    return { message_id: m.id, deliveries: deliveryReceipt(broker, m.id) };
   });
 
   broker.handle('req.await', async ({ conn }, p) => {

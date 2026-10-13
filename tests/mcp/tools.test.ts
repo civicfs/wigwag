@@ -10,6 +10,7 @@ const SPEC_TOOLS = [
   'send',
   'reply',
   'inbox',
+  'read_message',
   'ack',
   'mute',
   'unmute',

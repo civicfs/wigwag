@@ -4,6 +4,7 @@ import { inScope, scopeFor } from '../../store/links.js';
 import {
   type DeliveryState,
   deliveriesFor,
+  deliveriesOfMessage,
   getMessage,
   insertMessage,
   type MessageKind,
@@ -18,6 +19,16 @@ import { connCanSee, scopeViolation, senderWorkspace, visibleUnreadCount } from 
 import type { Broker } from '../server.js';
 
 export type InboxItem = { message: MessageRow; delivery_state: DeliveryState; attachments: BlobRow[] };
+/** Bound the formatted MCP text, including JSON indentation, below Claude's tool-result limit. */
+export const INBOX_RESULT_BYTES = 12000;
+
+export function deliveryReceipt(broker: Broker, id: string) {
+  return deliveriesOfMessage(broker.db, id).map((d) => ({
+    recipient: d.recipient,
+    state: d.state,
+    hold_reason: d.hold_reason,
+  }));
+}
 
 export function myName(broker: Broker, conn: Connection): string {
   const s = conn.sessionId ? getSession(broker.db, conn.sessionId) : undefined;
@@ -136,7 +147,7 @@ export function installMessages(broker: Broker): void {
 
   broker.handle('msg.send', async ({ conn }, p) => {
     const m = await sendMessage(broker, { from: myName(broker, conn), kind: 'message', ...p });
-    return { id: m.id };
+    return { id: m.id, deliveries: deliveryReceipt(broker, m.id) };
   });
 
   broker.handle('msg.reply', async ({ conn }, p) => {
@@ -156,24 +167,93 @@ export function installMessages(broker: Broker): void {
     });
     // R46-N2: the send awaited a push; links or the caller's name may have changed since. Re-check before marking.
     if (stillMine(broker, conn, me, orig)) markRead(broker, orig.id, me); // false when not addressed to me; allowed
-    return { id: m.id };
+    return { id: m.id, deliveries: deliveryReceipt(broker, m.id) };
   });
 
   broker.handle('msg.inbox', ({ conn }, p) => {
     const me = myName(broker, conn);
-    const rows = deliveriesFor(db, me, p.include_read ? [...UNREAD, 'read'] : UNREAD)
+    const candidates = deliveriesFor(db, me, p.include_read ? [...UNREAD, 'read'] : UNREAD)
       .filter((r) => connCanSee(db, conn, r.message)) // R42-B: never return or mark read what the caller cannot see
-      .slice(-p.limit);
-    const messages: InboxItem[] = rows.map((r) => ({
-      message: r.message,
-      delivery_state: r.state,
-      attachments: r.message.attachments.flatMap((ref) => {
-        const b = getBlobMeta(db, ref);
-        return b ? [b] : [];
-      }),
-    }));
-    for (const r of rows) if (r.state !== 'read') markRead(broker, r.message_id, me);
-    return { messages };
+      .filter((r) => p.before === undefined || r.message_id < p.before);
+    const messages: InboxItem[] = [];
+    for (const r of candidates.slice(-p.limit).reverse()) {
+      let item: InboxItem = {
+        message: r.message,
+        delivery_state: r.state,
+        attachments: r.message.attachments.flatMap((ref) => {
+          const b = getBlobMeta(db, ref);
+          return b ? [b] : [];
+        }),
+      };
+      if (Buffer.byteLength(JSON.stringify({ messages: [item] }, null, 2)) > INBOX_RESULT_BYTES - 512) {
+        // Preserve the durable original; explicitly point to bounded reads rather than truncate its body.
+        const blob = putBlob(
+          db,
+          broker.home,
+          Buffer.from(JSON.stringify(r.message, null, 2)),
+          { media_type: 'application/json', name: 'message.json', created_by: me },
+          broker.config.limits.max_blob_bytes,
+        );
+        const self = conn.sessionId ? getSession(db, conn.sessionId) : undefined;
+        if (self) addBlobScope(db, blob.ref, self.workspace);
+        item = {
+          message: {
+            ...r.message,
+            body: `[Full stored message (${blob.size} bytes) available with read_message, msg_id ${r.message_id}. If that tool is not listed yet, use blob_get ref ${blob.ref} with an absolute dest_path, then read that file in chunks.]`,
+            attachments: [blob.ref],
+            stream: null,
+          },
+          delivery_state: r.state,
+          attachments: [blob],
+        };
+      }
+      if (Buffer.byteLength(JSON.stringify({ messages: [item, ...messages] }, null, 2)) > INBOX_RESULT_BYTES - 512)
+        break;
+      messages.unshift(item);
+    }
+    for (const item of messages) if (item.delivery_state !== 'read') markRead(broker, item.message.id, me);
+    const has_more = candidates.length > messages.length;
+    return { messages, has_more, next_before: has_more ? (messages[0]?.message.id ?? null) : null };
+  });
+
+  broker.handle('msg.read', ({ conn }, p) => {
+    const me = myName(broker, conn);
+    const m = getMessage(db, p.msg_id);
+    if (
+      !m ||
+      !connCanSee(db, conn, m) ||
+      (m.from_name !== me && !deliveriesOfMessage(db, m.id).some((d) => d.recipient === me))
+    )
+      throw new WigwagError('not_found', `Message not found: ${p.msg_id}`);
+    if (p.body_offset > m.body.length || (p.body_offset > 0 && /[\uDC00-\uDFFF]/u.test(m.body[p.body_offset] ?? '')))
+      throw new WigwagError('bad_request', 'body_offset is outside the body or splits a Unicode character');
+    let body = '';
+    let next = p.body_offset;
+    for (const char of m.body.slice(p.body_offset)) {
+      if (Buffer.byteLength(JSON.stringify(body + char)) > 6000) break;
+      body += char;
+      next += char.length;
+    }
+    const attachments = m.attachments.slice(p.attachment_offset, p.attachment_offset + 10);
+    return {
+      id: m.id,
+      from: m.from_name,
+      to: m.to_target,
+      subject: m.subject,
+      kind: m.kind,
+      priority: m.priority,
+      request_id: m.request_id,
+      reply_to: m.reply_to,
+      created_at: m.created_at,
+      body,
+      body_offset: p.body_offset,
+      next_body_offset: next < m.body.length ? next : null,
+      attachments,
+      next_attachment_offset:
+        p.attachment_offset + attachments.length < m.attachments.length
+          ? p.attachment_offset + attachments.length
+          : null,
+    };
   });
 
   broker.handle('msg.ack', ({ conn }, p) => {
