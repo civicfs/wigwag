@@ -4,8 +4,8 @@ import { WigwagError } from '../errors.js';
 import type { SessionRow } from '../store/sessions.js';
 import type { Transport } from './types.js';
 
-/** One `codex queue --message` argument stays far below ARG_MAX on macOS (1 MiB) and Linux. Not a tunable. */
-export const CODEX_ARG_BUDGET_BYTES = 262144;
+/** Below Linux's 128 KiB single-argument ceiling (including NUL), with room for rendering. Not a tunable. */
+export const CODEX_ARG_BUDGET_BYTES = 96 * 1024;
 
 function chunk(items: RenderItem[]): RenderItem[][] {
   const out: RenderItem[][] = [];

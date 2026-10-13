@@ -117,8 +117,11 @@ describe('CodexQueueTransport', () => {
     await new CodexQueueTransport(FAKE_CODEX, 5000).push(session(), items(5, big));
     const calls = readFileSync(log, 'utf8').trim().split('\n');
     expect(calls.length).toBeGreaterThan(1);
-    for (const c of calls)
-      expect(Buffer.byteLength(JSON.parse(c).argv[4], 'utf8')).toBeLessThanOrEqual(CODEX_ARG_BUDGET_BYTES);
+    for (const c of calls) {
+      const bytes = Buffer.byteLength(JSON.parse(c).argv[4], 'utf8');
+      expect(bytes).toBeLessThanOrEqual(CODEX_ARG_BUDGET_BYTES);
+      expect(bytes).toBeLessThan(128 * 1024); // Linux single-argument ceiling, including the NUL terminator.
+    }
   });
   it('rejects an item over the argv budget without sending anything', async () => {
     const log = join(tmpHome(), 'calls.jsonl');

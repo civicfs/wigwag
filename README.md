@@ -208,6 +208,20 @@ for older pages; `read_message` retrieves a selected message in chunks. Only
 returned messages are marked read. Use `include_read` for history, or
 `wigwag show <msg-id>` from the owner CLI.
 
+### Large messages and streams
+
+Bodies above `limits.inline_body_bytes` (16 KiB by default) are stored as blobs.
+Recipients receive a reference; `read_message` retrieves selected text in bounded
+chunks. Large or binary attachments can be exported with `blob_get` and read from
+the destination file. Transport batches are also bounded: Claude channel payloads
+use a 12 KB JSON budget and Codex queue arguments use a 96 KiB budget.
+
+Streams are typed, append-only records with subscriptions for logs and progress.
+They do not provide live model-token streaming. Bulk data reads have different
+limits: `stream_read` limits record count and `kv_list` filters by prefix, so their
+responses can still be large. Use small stream limits and narrow KV prefixes;
+these tools do not yet have the inbox's byte-bounded pagination.
+
 ### Agent tools
 
 | Tools | Purpose |

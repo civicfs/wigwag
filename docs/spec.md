@@ -385,7 +385,7 @@ TUI (`wigwag tui`, Ink):
   existing rule that approvals come from the owner in the session that will act, never through a relay.
 - Blob paths for `blob_put` are read with the MCP server's permissions; no path allowlist in v1 (same-user host).
 - No secrets in config; nothing in the broker needs credentials.
-- Fixed constants (not deployment tunables, by owner-reviewed ruling): SQLite busy_timeout 5000 ms, SQLite busy-retry max sleep 50 ms, protocol paging defaults (50/100/200) and maxima (inbox 500; feed, snapshot feed, blobs and stream reads 1000; the CLI range-checks against the same maxima), autospawn poll interval 50 ms, frame overhead 1 MiB over the blob limit, Codex argv budget 256 KiB, `codex queue` output buffer (execFile maxBuffer) 1 MiB, pid-chain depth 16, MCP reconnect backoff cap 16 × `retry.base_ms`, git workspace lookup timeout 2000 ms (SIGKILL on timeout; the broker caches repository results by canonical cwd for its lifetime and retries fallback results).
+- Fixed constants (not deployment tunables, by owner-reviewed ruling): SQLite busy_timeout 5000 ms, SQLite busy-retry max sleep 50 ms, protocol paging defaults (50/100/200) and maxima (inbox 500; feed, snapshot feed, blobs and stream reads 1000; the CLI range-checks against the same maxima), autospawn poll interval 50 ms, frame overhead 1 MiB over the blob limit, Codex argv budget 96 KiB (below Linux's single-argument ceiling), `codex queue` output buffer (execFile maxBuffer) 1 MiB, pid-chain depth 16, MCP reconnect backoff cap 16 × `retry.base_ms`, git workspace lookup timeout 2000 ms (SIGKILL on timeout; the broker caches repository results by canonical cwd for its lifetime and retries fallback results).
 
 ## 12. Configuration
 

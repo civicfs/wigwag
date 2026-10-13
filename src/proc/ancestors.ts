@@ -1,9 +1,10 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 export interface Proc {
   pid: number;
-  /** Executable name: the basename of `ps -o comm=` ('' when ps could not report it). */
+  /** Executable name from macOS ps comm or Linux argv[0]; empty when unavailable. */
   exe: string;
 }
 
@@ -31,6 +32,20 @@ function processTable(): Map<number, { ppid: number; exe: string }> | null {
   return table;
 }
 
+/** Linux comm is a mutable/truncated thread name (Node can report MainThread), not argv[0]. */
+function executable(pid: number, comm: string): string {
+  if (process.platform !== 'linux') return comm;
+  try {
+    const args = readFileSync(`/proc/${pid}/cmdline`);
+    const end = args.indexOf(0);
+    const argv0 = args.subarray(0, end < 0 ? args.length : end).toString('utf8');
+    return argv0 ? basename(argv0) : '';
+  } catch {
+    // An exited/inaccessible process stays unknown; agentAncestor must not skip past it.
+    return '';
+  }
+}
+
 /**
  * Ancestor processes starting at `pid`, stopping before pid 1. Works on macOS and Linux. The table comes from a single
  * `ps -ax -o pid=,ppid=,comm=`: a `ps` per ancestor serialised a spawn per level, and under CPU load each spawn can take
@@ -46,7 +61,7 @@ export function processChain(pid: number): Proc[] {
       chain.push({ pid: p, exe: '' });
       break;
     }
-    chain.push({ pid: p, exe: row.exe });
+    chain.push({ pid: p, exe: executable(p, row.exe) });
     if (!Number.isInteger(row.ppid) || row.ppid <= 0) break;
     p = row.ppid;
   }
