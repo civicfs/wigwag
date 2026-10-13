@@ -30,6 +30,17 @@ afterEach(async () => {
 });
 
 describe('cli', () => {
+  it('restarts and verifies the replacement broker version', async () => {
+    const home = tmpHome();
+    homes.push(home);
+    expect((await runCli(home, ['broker', 'start'])).code).toBe(0);
+    const before = (await runCli(home, ['broker', 'status'])).stdout;
+    const result = await runCli(home, ['broker', 'restart', '--expect-version', VERSION]);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain(`version ${VERSION}`);
+    expect(result.stdout.match(/pid (\d+)/)?.[1]).not.toBe(before.match(/pid (\d+)/)?.[1]);
+  });
+
   it('--version matches package.json; help lists every command', async () => {
     const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '../../package.json'), 'utf8'));
     expect(VERSION).toBe(pkg.version);

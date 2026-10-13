@@ -172,3 +172,41 @@ CREATE TABLE workspace_link_events (
 );
 ${appendOnly('workspace_link_events')}
 `;
+
+export const SCHEMA_V2 = `
+CREATE TABLE question_integrations (
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+  native_session_id TEXT NOT NULL,
+  ready_at TEXT NOT NULL
+);
+CREATE TABLE assignments (
+  id TEXT PRIMARY KEY,
+  orchestrator_session_id TEXT NOT NULL REFERENCES sessions(id),
+  orchestrator_native_id TEXT NOT NULL,
+  worker_session_id TEXT NOT NULL REFERENCES sessions(id),
+  worker_native_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  task_message_id TEXT NOT NULL REFERENCES messages(id),
+  created_at TEXT NOT NULL,
+  ended_at TEXT,
+  UNIQUE(orchestrator_session_id, idempotency_key)
+);
+CREATE UNIQUE INDEX assignment_worker_active ON assignments(worker_session_id) WHERE ended_at IS NULL;
+CREATE TABLE question_relays (
+  id TEXT PRIMARY KEY,
+  assignment_id TEXT NOT NULL REFERENCES assignments(id),
+  native_session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  tool_use_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('claude','codex','codex_async')),
+  questions_json TEXT NOT NULL,
+  answers_json TEXT,
+  message_id TEXT NOT NULL REFERENCES messages(id),
+  state TEXT NOT NULL CHECK(state IN ('pending','answered','applied','cancelled','failed')),
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(assignment_id, native_session_id, tool_use_id)
+);
+`;

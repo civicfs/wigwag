@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ErrorCode } from '../errors.js';
 import { BLOB_REF_RE, NAME_RE } from '../ids.js';
+import { AnswersZ } from '../questions/schema.js';
 
 export const PROTOCOL_VERSION = 1 as const;
 
@@ -39,11 +40,48 @@ export type Hello = z.infer<typeof HelloZ>;
 export type Access = 'any' | 'session' | 'hook' | 'owner' | 'session+owner';
 
 const m = <P extends z.ZodType>(access: Access, params: P) => ({ access, params });
+const NativeHookZ = z.object({
+  agent: z.enum(['claude', 'codex']),
+  native_session_id: z.string().min(1),
+  cwd: z.string().startsWith('/'),
+  agent_pid: z.number().int().nullable(),
+  pid_chain: z.array(z.number().int()),
+});
 
 export const METHODS = {
   'sys.ping': m('any', z.object({})),
 
   'session.register': m('session', z.object({ name: NameZ })),
+  'assignment.delegate': m(
+    'session',
+    z.object({ to: NameZ, subject: Subject, body: z.string(), idempotency_key: z.string().min(1).max(200) }).strict(),
+  ),
+  'assignment.release': m('session+owner', z.object({ assignment_id: z.string().min(1) })),
+  'question.answer': m('session', z.object({ relay_id: z.string().min(1), answers: AnswersZ })),
+  'question.list': m(
+    'session+owner',
+    z.object({
+      include_history: z.boolean().default(false),
+      limit: z.number().int().min(1).max(10).default(10),
+      before: z.string().min(1).optional(),
+    }),
+  ),
+  'question.details': m(
+    'session+owner',
+    z.object({ relay_id: z.string().min(1), offset: z.number().int().min(0).default(0) }),
+  ),
+  'hook.question_ready': m('hook', NativeHookZ),
+  'hook.question_capture': m(
+    'hook',
+    NativeHookZ.extend({
+      tool_name: z.string(),
+      tool_use_id: z.string().min(1),
+      turn_id: z.string().min(1),
+      tool_input: z.unknown(),
+    }),
+  ),
+  'hook.question_poll': m('hook', NativeHookZ.extend({ relay_id: z.string().min(1) })),
+  'hook.question_applied': m('hook', NativeHookZ.extend({ relay_id: z.string().min(1) })),
   'session.whoami': m('session', z.object({})),
   'session.who': m(
     'session+owner',
@@ -58,7 +96,10 @@ export const METHODS = {
         .describe('Skip this many matching sessions; increment to read the next page.'),
     }),
   ),
-  'session.bind': m('session', z.object({ agent_session_id: z.string().min(1) })),
+  'session.bind': m(
+    'session',
+    z.object({ agent_session_id: z.string().min(1), question_relay_version: z.literal(1).optional() }),
+  ),
   'session.turn': m('session', z.object({ phase: z.enum(['started', 'ended']) })),
   'session.digest': m('session', z.object({})),
   // Iteration-2 provisions (spec §16 P3): reserved, no handler in v1.

@@ -39,6 +39,7 @@ export class ClaudeChannelTransport implements Transport {
       const item = fits([original])
         ? original
         : {
+            nativeQuestion: original.nativeQuestion,
             msg: {
               ...original.msg,
               body: `[Full stored message available with read_message, msg_id ${original.msg.id}; follow its offsets to read in chunks. Existing clients can retrieve the same stored message through inbox with include_read=true.]`,

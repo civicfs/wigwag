@@ -386,6 +386,75 @@ already delivered to another session or inference provider. See [retention and d
   the idle thread), longer if it is still working a turn. Messages sent to its name in that time go to the closed thread.
 - Claude background sessions (`claude --bg`) bind and can use every tool, but they are not started with the development-channels flag, so peer messages are not pushed to them. They are held with reason `unbound` and arrive as context at the session's next prompt or tool call, and `inbox` lists them.
 
+## Updates and plugin reloads
+
+Wigwag checks npm for a newer stable release when you launch an agent, at most
+once daily. It displays a notice and never installs automatically. Checks send
+only a package-metadata request to npm; no session names, messages or transcripts.
+Set `WIGWAG_NO_UPDATE_CHECK=1` to disable launch checks.
+
+Run `wigwag update` (or `wigwag update --check --json`) for a read-only check.
+Run `wigwag update --apply` when you choose to update. A global CLI installation
+is required; project dependencies should use their package manager. Development checkouts linked into the global CLI are not self-updated; migrate to the published npm install and re-register its marketplaces explicitly. The command
+installs the exact advertised npm version, refreshes plugins and restarts the
+broker. It does not modify a Git checkout or close agent sessions. A missing
+published release or failed update is reported without claiming success.
+
+Broker updates reconnect running sessions automatically. Claude can load updated
+plugin files with `/reload-plugins`. For Codex, restart and trust changed hooks;
+Wigwag does not claim automatic in-session hook/tool reload. Old sessions can
+continue using the broker's delivery fixes while retaining their loaded tools.
+
+Before publishing repository changes, run `npm run check:public -- --history` to check the tracked tree and the branch history. Runtime data,
+credentials, diagnostic logs, internal execution plans and built packages stay
+outside the tracked public tree. This pattern-based check supplements review;
+it cannot guarantee detection of every possible secret.
+
+## Native questions and agent roles (0.2.0)
+
+Use the `delegate` tool to assign work (`to`, `subject`, `body`, and a unique
+`idempotency_key`). The calling session becomes that worker's orchestrator.
+Ordinary `send` and `request` messages leave agents as peers. Workers follow their assigned orchestrator's task directions; peers can make actionable collaboration requests within the human-authorized work. Neither kind of message substitutes for a required human approval. Each worker has one
+active assignment; use `release_worker` when it ends. An agent can both lead
+workers and work for another lead; supervision cycles are rejected.
+
+Assigned workers keep using Claude's `AskUserQuestion` or Codex's
+`request_user_input` / `request_user_input_async`. Wigwag sends the question and
+choices to their recorded orchestrator, which uses `question_answer` to reply.
+The orchestrator answers routine clarifications from context and chooses reasonable reversible defaults. A helper question alone should not stop the team. The orchestrator asks the human only for essential missing information or a required approval it cannot supply.
+Native answers identify the orchestrator and never count as owner approval.
+Permission and plan-exit approval tools are outside this relay.
+
+`whoami`, agent `who`, and owner `wigwag who` show the role, orchestrator, and
+workers. `terminal_title` suggests a window name, for example
+`[peer] reviewer`, `[lead] claude-main`, `[worker ← claude-main] codex-tests`, or
+`[lead + worker ← claude-main] codex-build`. Wigwag exposes this label; it does
+not automatically rename terminal windows.
+
+Question relays contain only questions, choices, routing IDs, and answers with
+provenance. They never attach a conversation transcript or replay the delegated
+task. `questions` returns small status pages (10 by default); fetch one question
+explicitly with `question_details` and follow `next_offset` for long details.
+Delegation/answer receipts do not echo task bodies or questions. Ordinary messages
+contain the body the sending agent explicitly chooses to send.
+
+Upgrade the CLI and both plugins, run `wigwag init`, restart the broker, and start
+new agent sessions. Codex must trust the updated hooks (`/hooks`); Claude must
+load its Wigwag channel (`wigwag claude`). Delegation fails visibly if the worker
+integration is not ready. Codex uses its existing shared app-server Unix socket;
+set `questions.app_server_socket` for a different existing daemon. Embedded Codex
+servers do not expose the default shared socket and cannot be assigned through
+this adapter unless the configured socket reaches their thread.
+
+Claude waits up to `questions.wait_ms` (default five minutes). On timeout it gets
+a visible pending relay ID and can inspect `questions`/`question_details`; it does
+not silently open a separate human question. An ambiguous Codex async submission
+is marked failed instead of automatically resending an answer that may already
+have arrived. Inspect the native thread before explicitly retrying. Restart
+recovery rechecks assignment identities, scope, native cancellation and human
+answers. While waiting on workers, the orchestrator should yield its turn so
+pushed questions can be processed.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

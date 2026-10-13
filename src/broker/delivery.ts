@@ -22,7 +22,7 @@ import { decide } from './policy.js';
 import { WakeLimiter } from './ratelimit.js';
 import { type RecipientState, recipientState } from './registry.js';
 import { type RenderItem, renderDigest } from './render.js';
-import { scopeViolation, visibleUnreadCount } from './scope.js';
+import { nativeRecipientMatches, scopeViolation, visibleUnreadCount } from './scope.js';
 
 export interface EngineDeps {
   db: Db;
@@ -100,6 +100,15 @@ export class DeliveryEngine {
     return this.inflight.has(DeliveryEngine.id(k));
   }
 
+  /** Only broker-created native relays bypass the ordinary peer-message wake quota. */
+  private nativeQuestion(messageId: string): boolean {
+    return !!this.d.db
+      .prepare(
+        "SELECT 1 FROM question_relays q JOIN assignments a ON a.id=q.assignment_id WHERE q.message_id=? AND q.state='pending' AND a.ended_at IS NULL",
+      )
+      .get(messageId);
+  }
+
   private move(k: Key, to: DeliveryState, patch: TransitionPatch = {}) {
     return this.moveIf(k, null, to, patch) as DeliveryRow;
   }
@@ -133,7 +142,7 @@ export class DeliveryEngine {
         const b = getBlobMeta(this.d.db, ref);
         return b ? [b] : [];
       });
-      return { msg, attachments };
+      return { msg, attachments, nativeQuestion: this.nativeQuestion(msg.id) };
     });
   }
 
@@ -143,6 +152,10 @@ export class DeliveryEngine {
    */
   private allowed(k: Key): boolean {
     const msg = getMessage(this.d.db, k.message_id);
+    if (msg && !nativeRecipientMatches(this.d.db, k.recipient, msg)) {
+      this.move(k, 'stuck', { last_error: 'Native assignment recipient binding changed', next_attempt_at: null });
+      return false;
+    }
     const reason = msg ? scopeViolation(this.d.db, msg.from_workspace, k.recipient) : null;
     if (!msg || reason === null) return true;
     this.move(k, 'stuck', { last_error: reason, next_attempt_at: null });
@@ -222,11 +235,12 @@ export class DeliveryEngine {
       return;
     }
     const rs = this.recipient(recipient);
+    const nativeQuestion = this.nativeQuestion(messageId);
     const dec = decide({
       priority: msg.priority,
       recipient: rs.state,
       muted: isMuted(this.d.db, recipient, msg.from_name, msg.stream ?? undefined),
-      throttled: isThrottled(this.d.db, msg.from_name, recipient),
+      throttled: !nativeQuestion && isThrottled(this.d.db, msg.from_name, recipient),
     });
     if (dec.action === 'hold') {
       if (dec.reason === 'throttled') this.scheduleThrottle(msg.from_name, recipient);
@@ -241,7 +255,12 @@ export class DeliveryEngine {
     // A retry of a failed push was already counted when it first dispatched; counting it again would
     // throttle the pair mid-backoff and hide the failure instead of ending in `stuck`.
     const isRetry = cur.state === 'failed';
-    if (!isRetry && !SYSTEM_SENDERS.has(msg.from_name) && !this.limiter.tryConsume(msg.from_name, recipient)) {
+    if (
+      !isRetry &&
+      !nativeQuestion &&
+      !SYSTEM_SENDERS.has(msg.from_name) &&
+      !this.limiter.tryConsume(msg.from_name, recipient)
+    ) {
       addThrottle(this.d.db, msg.from_name, recipient);
       this.d.emitFeed('throttle', { from: msg.from_name, to: recipient, active: true });
       this.d.log(`throttled ${msg.from_name} -> ${recipient}`);
@@ -470,7 +489,7 @@ export class DeliveryEngine {
         priority: x.message.priority,
         recipient: rs.state,
         muted: isMuted(this.d.db, x.recipient, x.message.from_name, x.message.stream ?? undefined),
-        throttled: isThrottled(this.d.db, x.message.from_name, x.recipient),
+        throttled: !this.nativeQuestion(x.message_id) && isThrottled(this.d.db, x.message.from_name, x.recipient),
       });
       if (dec.action === 'push') wake.push(k);
       else this.move(k, 'held', { hold_reason: dec.reason });

@@ -40,3 +40,25 @@ integration risks that unit and integration tests cannot reach.
 | I-3 | Offline backlog push is visible at Claude session start | With no `e2e-claude` session running: `wigwag send e2e-claude --priority normal --subject i-3 --body I-3-TOKEN`. Then T2: `wigwag claude --as e2e-claude` and wait without typing. | Claude receives one channel message containing I-3-TOKEN after startup (the push waits for MCP `initialized`); `wigwag deliveries` shows it `pushed`, not lost. |
 | E-5 | Relaunch under the same `--as` name after quitting Codex | After `wigwag init` and a broker restart on this build. T1: `wigwag codex --as e2e-codex -m <smaller model>`, send one prompt, quit with `/quit`. At once start `wigwag codex --as e2e-codex -m <smaller model>` again in T1 (inside 60 s) and send one prompt. Poll `wigwag who` for 90 s. Also: quit and relaunch after 90 s; and relaunch while the first is still open in another terminal. | Inside 60 s the new session is `codex-<dir>-xxxx`, then, when the old session turns offline (about 60 s after the quit), it is renamed `e2e-codex` (`broker.log`: `launch intent: e2e-codex handed to ...`). After 90 s the name applies at bind. With the first still open, nothing changes hands. |
 | E-6 | A message sent to a Codex session's provisional name before its first prompt is delivered at session bind | Use an already-bound Codex session. Send it a message that is still held (for example `--priority low`). Then call `register` with a new name and confirm the held message is forwarded and delivered. | The held message is forwarded to the new name and delivered. |
+
+
+## Native question relay acceptance (0.2.0)
+
+Use disposable sessions and a separate WIGWAG_HOME. Update/trust both plugins.
+Assign work using `delegate`, not `send`. Record exact native call IDs and relay
+states; a generic peer message alone does not prove native completion.
+
+| Check | Expected |
+|---|---|
+| Claude lead → Codex worker, blocking native question in Plan mode | Lead receives question, question_answer resolves native UI, worker continues with answer and peer provenance. |
+| Claude lead → Codex worker, async native question | Exact call/index reply returns; test both active worker and worker that has yielded. |
+| Codex lead → Claude worker, AskUserQuestion | PreToolUse returns answers; Claude continues without a worker human prompt. |
+| Lead cannot decide | Lead uses its own native asker, then forwards only the chosen answer to the worker. Record human-interaction proof separately. |
+| Lead busy / ordinary pair throttled | Native question still arrives; lead yields its turn instead of blocking indefinitely. |
+| Restart / human-first / interrupted turn | Recovered answer respects the same native invocation; human answers and interruption prevent stale peer injection. |
+| Lead name reused / binding changed / scope unlinked | Replacement session receives no native task/question and cannot answer or read it. |
+| Long task and many questions | Status/receipts stay bounded and exclude task/transcript; question_details fetches one selected question in chunks. |
+| Timeout / ambiguous native acknowledgement | Visible pending/failed status; no silent human fallback or blind duplicate submission. |
+
+See [2026-10-13 relay evidence](native-question-relay-2026-10-13.md) for actual
+executed coverage and remaining live-test boundaries.

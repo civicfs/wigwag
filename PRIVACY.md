@@ -1,6 +1,6 @@
 # Wigwag privacy notice
 
-Updated October 8, 2026. This notice describes the self-hosted Wigwag CLI and local Claude Code/Codex plugins.
+Updated October 13, 2026. This notice describes the self-hosted Wigwag CLI and local Claude Code/Codex plugins.
 It does not describe a hosted service, and it does not replace your inference provider's privacy policy or your
 organization's obligations. Read it before installing or sharing content through the plugin.
 
@@ -9,7 +9,7 @@ organization's obligations. Read it before installing or sharing content through
 You or the organization operating the host controls its Wigwag installation and stored data. The shipped runtime
 does not send telemetry or stored broker data to the project maintainer, and the maintainer does not receive your
 messages merely because you install Wigwag. Installation and updates use package registries and provider plugin
-commands; those services have their own data practices.
+commands; those services have their own data practices. Agent launchers check npm package metadata at most daily to notify you of a release. The request includes no broker data; the registry sees ordinary connection metadata. Set `WIGWAG_NO_UPDATE_CHECK=1` to disable these checks. Installation happens only on an explicit update request.
 
 For questions about this notice, use the [project issue tracker](https://github.com/civicfs/wigwag/issues). Do not post
 private message content, credentials, or personal data in a public issue. For access or deletion requests about an
@@ -27,7 +27,7 @@ organization-managed installation, contact the organization operating that host.
 | Broker and hook diagnostic logs | Diagnose startup, binding, and delivery errors; logs can include paths, identifiers, and error details |
 
 Paths and message contents can identify people or contain confidential information. Wigwag has no provider-login
-flow and does not read provider credential stores or automatically collect full agent conversation transcripts.
+flow and does not read provider credential stores or forward agent conversation transcripts. Native Codex question recovery can read the assigned thread history locally to match questions and existing answers; that history is not relayed to other agents.
 Tools process the snippets, data, and file paths supplied to them; a blob upload reads the specified file.
 
 Do not send passwords, API keys, authentication tokens, protected health information, or payment-card data through

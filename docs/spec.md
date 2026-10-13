@@ -479,3 +479,42 @@ Sessions in the same workspace reach each other automatically; anything across w
 | Links | Owner-only: `wigwag link <a> <b>`, `wigwag unlink <a> <b>`, `wigwag links` (and the TUI). `<a>`/`<b>` are workspace paths or a session name (resolved to its workspace). Links and unlinks are recorded append-only. Agents cannot create links. |
 | Error code | New `forbidden` error code. |
 | Names across workspaces | A session may take over an offline name only if its workspace is in scope of the previous holder's workspace; otherwise `name_taken` with link guidance. Every agent read of a message, request, response or attachment is authorized by the message's workspace of origin (data notices carry the data's workspace), never by name alone. When a name is claimed, held messages that are out of scope become `stuck`. |
+
+
+## Native question relay (0.2.0)
+
+Delegation is an explicit relationship, separate from ordinary peer messaging.
+`assignment.delegate` derives the lead from its caller and stores both session
+IDs and native bindings with an idempotency key. The task message and assignment
+commit atomically. One active assignment per worker; cycles, stale bindings and
+unlinked workspaces are refused, including after asynchronous adapter preflight.
+`assignment.release` cancels pending relays before reassignment.
+
+Only Claude AskUserQuestion and Codex request_user_input/request_user_input_async
+are captured. Claude receives validated updatedInput.answers through PreToolUse.
+Codex blocking requests are correlated by native session, turn, call and exact
+question payload before an app-server response is sent. Async answers use the
+original native question reply identifiers through turn/steer or turn/start.
+All injected answers identify their peer source; permission/plan-exit approvals
+are never captured. The orchestrator decides whether to ask the human.
+
+Tasks and question notifications are fenced to their recorded native session
+identities, including push, digest, inbox and direct message reads; a replacement
+holder of the same name cannot inherit them. Broker-created pending native
+questions bypass the ordinary peer wake quota so a busy lead can receive them.
+Readiness is established by trusted native hooks, and Codex attachment must
+succeed before delegation commits. The adapter never replaces or starts a daemon.
+
+`question.list` returns bounded status summaries and cursors, without task payloads
+or question bodies. `question.details` explicitly reads one scoped question/answer
+in bounded JSON chunks. Delegation receipts omit task bodies; answer receipts
+contain relay ID and state only. No transcript is collected or forwarded. Codex
+recovery may read its own assigned thread history internally (transport limit
+16 MiB); that history is never sent to the lead or returned by Wigwag tools.
+
+On reconnect, async history is replayed before buffered live events and answer
+submission; interrupted turns and existing human replies cancel stale answers.
+An acknowledgement timeout after async submission is ambiguous, so Wigwag marks
+it failed and does not blindly retry. Claude has a separate bounded wait deadline
+(default 300 seconds). Timeout/failure returns a visible pending/error result and
+keeps the durable question available for explicit status inspection.

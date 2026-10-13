@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { SCHEMA_V1 } from './schema.js';
+import { SCHEMA_V1, SCHEMA_V2 } from './schema.js';
 
 export type Db = DatabaseSync;
 
@@ -70,6 +70,13 @@ export function openDb(file: string): Db {
       if (schemaVersion(db) >= 1) return;
       db.exec(SCHEMA_V1);
       db.prepare('INSERT INTO schema_version (version) VALUES (1)').run();
+    });
+  }
+  if (schemaVersion(db) < 2) {
+    tx(db, () => {
+      if (schemaVersion(db) >= 2) return;
+      db.exec(SCHEMA_V2);
+      db.prepare('INSERT INTO schema_version (version) VALUES (2)').run();
     });
   }
   return db;

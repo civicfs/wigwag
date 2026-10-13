@@ -1,6 +1,6 @@
 {
   "name": "wigwag",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Push messages and a data channel between Codex and Claude Code sessions on this machine.",
   "author": {
     "name": "Michael Handelman"
@@ -17,7 +17,8 @@
               "server": "wigwag",
               "tool": "session_bind",
               "input": {
-                "session_id": "${session_id}"
+                "session_id": "${session_id}",
+                "question_relay_version": 1
               }
             }
           ]
@@ -67,6 +68,18 @@
               "server": "wigwag",
               "tool": "turn_ended",
               "input": {}
+            }
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "^(request_user_input|request_user_input_async)$",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "wigwag hook codex PreToolUse",
+              "timeout": 10
             }
           ]
         }

@@ -24,10 +24,25 @@ export const cmdWho = () =>
     const s = await c.call<PublicSession[]>('session.who');
     out(
       table([
-        ['NAME', 'AGENT', 'STATE', 'UNREAD', 'BOUND', 'LAST SEEN', 'WORKSPACE', 'CWD'],
+        [
+          'NAME',
+          'AGENT',
+          'ROLE',
+          'ORCHESTRATOR',
+          'WORKERS',
+          'STATE',
+          'UNREAD',
+          'BOUND',
+          'LAST SEEN',
+          'WORKSPACE',
+          'CWD',
+        ],
         ...s.map((x) => [
           x.name ?? '-',
           x.agent,
+          x.role ?? 'peer',
+          x.orchestration?.orchestrator_name ?? '-',
+          x.workers?.map((w) => w.name ?? w.session_id).join(', ') || '-',
           x.state,
           String(x.unread),
           x.bound ? 'yes' : 'no',

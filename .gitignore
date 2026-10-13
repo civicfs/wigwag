@@ -3,3 +3,26 @@ dist/
 spikes/
 .superpowers/
 *.log
+
+# Local credentials, agent state, runtime data and release artifacts
+.env
+.env.*
+!.env.example
+/.codex/
+/.claude/
+/.wigwag/
+/auth.json
+*.pem
+*.key
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.tgz
+.DS_Store
+coverage/
+node_modules.shared
+# Internal execution ledgers stay local; public design docs may be tracked.
+/docs/superpowers/plans/

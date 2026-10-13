@@ -27,6 +27,7 @@ export function tmpHome(): string {
   // against them.
   cfg.broker.start_timeout_ms = 30000;
   cfg.hooks.deadline_ms = 30000;
+  cfg.questions.app_server_socket = join(home, 'codex-app-server.sock');
   writeFileSync(configPath(home), JSON.stringify(cfg, null, 2));
   return home;
 }

@@ -16,6 +16,7 @@ import {
   type Params,
   type WireError,
 } from '../protocol/rpc.js';
+import type { QuestionService } from '../questions/service.js';
 import { type Db, openDb } from '../store/db.js';
 import { WorkspaceResolver } from '../workspace.js';
 import { Connection } from './connection.js';
@@ -59,6 +60,7 @@ export class Broker {
   onStart: Array<() => void> = [];
   onStop: Array<() => void> = [];
   engine: DeliveryEngine | null = null;
+  questions!: QuestionService;
   digestProvider: ((name: string) => string | null) | null = null;
   private readonly handlers = new Map<string, Handler>();
   private readonly logPath: string;

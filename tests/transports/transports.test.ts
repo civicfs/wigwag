@@ -68,6 +68,22 @@ describe('bounded Claude channel batches', () => {
     for (const p of pushed) expect(Buffer.byteLength(JSON.stringify(p))).toBeLessThanOrEqual(12000);
     expect(acked.map((x) => x.msg.id)).toEqual(original.map((x) => x.msg.id));
   });
+  it('preserves the native answer hint when referencing oversized questions', async () => {
+    const pushed: Array<{ content: string }> = [];
+    const conn = {
+      event: (_name: string, data: { content: string }) => {
+        pushed.push(data);
+        return true;
+      },
+    } as Connection;
+    const [item] = items(1, 'x'.repeat(30000));
+    item.nativeQuestion = true;
+    item.msg.kind = 'request';
+    item.msg.request_id = 'req-native';
+    await new ClaudeChannelTransport(() => conn).push(session({ agent: 'claude' }), [item]);
+    expect(pushed[0].content).toContain('question_answer tool, relay_id req-native');
+    expect(pushed[0].content).not.toContain('respond tool');
+  });
   it('references a single oversized body explicitly instead of emitting an oversized channel payload', async () => {
     const pushed: Array<{ content: string }> = [];
     const conn = {

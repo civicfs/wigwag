@@ -295,7 +295,7 @@ export function installIdentity(broker: Broker): void {
     leftProvisional(s, from);
   };
 
-  broker.handle('session.bind', ({ conn }, { agent_session_id }) => {
+  broker.handle('session.bind', ({ conn }, { agent_session_id, question_relay_version }) => {
     const self = me(conn.sessionId);
     const r = bindAgentSessionExclusive(db, self.id, agent_session_id);
     if (!r.ok) {
@@ -311,6 +311,7 @@ export function installIdentity(broker: Broker): void {
     }
     applyLaunchIntent(me(conn.sessionId));
     announce(conn.sessionId as string);
+    if (question_relay_version === 1) broker.questions.markReady(conn.sessionId as string, agent_session_id);
     return {};
   });
 

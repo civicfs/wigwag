@@ -50,4 +50,18 @@ describe('plugin manifests', () => {
       path: './plugins/codex',
     });
   });
+  it('captures only native clarification tools and uses a distinct Claude question deadline', () => {
+    const claude = json('plugins/claude/hooks/hooks.json').hooks;
+    expect(claude.PreToolUse[0]).toMatchObject({
+      matcher: '^AskUserQuestion$',
+      hooks: [{ type: 'command', command: 'wigwag hook claude PreToolUse', timeout: 600 }],
+    });
+    expect(claude.SessionStart[0].hooks.some((h: any) => h.command === 'wigwag hook claude QuestionReady')).toBe(true);
+    const codex = json('plugins/codex/.codex-plugin/plugin.json').hooks.hooks;
+    expect(codex.PreToolUse[0]).toMatchObject({
+      matcher: '^(request_user_input|request_user_input_async)$',
+      hooks: [{ type: 'command', command: 'wigwag hook codex PreToolUse', timeout: 10 }],
+    });
+    expect(codex.SessionStart[0].hooks[0].input.question_relay_version).toBe(1);
+  });
 });

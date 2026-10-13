@@ -1,13 +1,20 @@
 {
   "name": "wigwag",
-  "owner": { "name": "Michael Handelman" },
-  "metadata": { "description": "wigwag agent messaging", "version": "0.1.0" },
+  "owner": {
+    "name": "Michael Handelman"
+  },
+  "metadata": {
+    "description": "wigwag agent messaging",
+    "version": "0.2.0"
+  },
   "plugins": [
     {
       "name": "wigwag",
       "description": "Push messages and a data channel between Claude Code and Codex sessions on this machine.",
-      "version": "0.1.0",
-      "author": { "name": "Michael Handelman" },
+      "version": "0.2.0",
+      "author": {
+        "name": "Michael Handelman"
+      },
       "source": "./plugins/claude"
     }
   ]

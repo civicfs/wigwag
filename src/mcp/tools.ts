@@ -68,6 +68,32 @@ export const TOOLS: ToolDef[] = [
   ),
   t('whoami', 'session.whoami', "Show this session's wigwag name, state and unread count."),
   t(
+    'delegate',
+    'assignment.delegate',
+    'Assign work to a live worker; this calling session becomes its orchestrator. Native questions return to you. Use a unique idempotency_key per task, reused only for retries.',
+  ),
+  t(
+    'release_worker',
+    'assignment.release',
+    'Release an assignment you orchestrate before reassigning its worker; cancels outstanding question relays.',
+  ),
+  t(
+    'question_answer',
+    'question.answer',
+    'Answer a worker native question addressed to you as orchestrator. answers maps each question ID to an array of selected labels or free text.',
+    { coerce: coerceKeys({ answers: decodeJson }) },
+  ),
+  t(
+    'questions',
+    'question.list',
+    'Show your assignments and native question relays, including pending status and answers.',
+  ),
+  t(
+    'question_details',
+    'question.details',
+    'Read only one selected question relay and its answer in bounded JSON chunks. Follow next_offset as offset until null. This contains no task replay or conversation transcript.',
+  ),
+  t(
     'who',
     'session.who',
     'List live wigwag sessions in this workspace scope (25 per page, maximum 50). ' +
@@ -146,8 +172,11 @@ export const TOOLS: ToolDef[] = [
 
   // Codex hooks call these through `mcp_tool` hooks (plugins/codex). Hidden from Claude.
   t('session_bind', 'session.bind', 'Internal: called by the wigwag SessionStart hook. Do not call.', {
-    input: z.object({ session_id: z.string().min(1) }),
-    map: (a) => ({ agent_session_id: a.session_id }),
+    input: z.object({ session_id: z.string().min(1), question_relay_version: z.literal(1).optional() }),
+    map: (a) => ({
+      agent_session_id: a.session_id,
+      ...(a.question_relay_version === 1 ? { question_relay_version: 1 } : {}),
+    }),
     hookOnly: true,
     agents: ['codex'],
   }),

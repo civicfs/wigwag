@@ -9,6 +9,7 @@ import { pidChain } from '../proc/ancestors.js';
 import { loadsWigwagChannel, processArgs } from '../proc/channel-flag.js';
 import type { Hello, PushData } from '../protocol/rpc.js';
 import type { Agent } from '../store/sessions.js';
+import { VERSION } from '../version.js';
 import { instructions } from './instructions.js';
 import { parseToolInput, toolsFor } from './tools.js';
 
@@ -24,7 +25,7 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
   const tools = toolsFor(agent);
   const byName = new Map(tools.map((t) => [t.name, t]));
   const server = new Server(
-    { name: 'wigwag', version: '0.1.0' },
+    { name: 'wigwag', version: VERSION },
     {
       capabilities: { tools: {}, ...(agent === 'claude' ? { experimental: { 'claude/channel': {} } } : {}) },
       instructions: instructions(agent),

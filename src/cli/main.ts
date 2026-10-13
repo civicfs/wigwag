@@ -1,9 +1,11 @@
 import { parseArgs } from 'node:util';
 import { WigwagError } from '../errors.js';
 import { type ClaudeHookEvent, runClaudeHook } from '../hooks/claude.js';
-import { install, uninstall } from '../install/install.js';
+import { install, packageRoot, uninstall } from '../install/install.js';
 import { runMcp } from '../mcp/server.js';
+import { runQuestionHook } from '../questions/hook.js';
 import { runTui } from '../tui/run.js';
+import { applyUpdate, checkUpdate, describeUpdate } from '../update/update.js';
 import { VERSION } from '../version.js';
 import { cmdBroker } from './commands/broker.js';
 import { CLAUDE_LAUNCH, cmdDoctor } from './commands/doctor.js';
@@ -46,6 +48,26 @@ async function main(argv: string[]): Promise<void> {
       return out(sub === undefined ? topHelp() : commandHelp(sub === '--help' || sub === '-h' ? 'help' : sub));
     case '--version':
       return out(VERSION);
+    case 'update': {
+      const { values } = parseArgs({
+        args: tail,
+        options: { apply: { type: 'boolean' }, check: { type: 'boolean' }, json: { type: 'boolean' } },
+      });
+      if (values.apply && values.check) throw new UsageError('--apply and --check are exclusive');
+      const root = packageRoot();
+      const status = await checkUpdate();
+      if (values.apply) {
+        if (status.reason) throw new UsageError(status.reason);
+        await applyUpdate(root, status);
+        if (status.update_available) {
+          out(
+            'Wigwag updated. Existing agents keep running. Claude: /reload-plugins; Codex: restart and trust changed hooks.',
+          );
+          return;
+        }
+      }
+      return out(values.json ? JSON.stringify(status) : describeUpdate(status));
+    }
     case 'install':
     case 'uninstall': {
       const { values } = parseArgs({
@@ -80,7 +102,7 @@ async function main(argv: string[]): Promise<void> {
     case 'doctor':
       return cmdDoctor(tail);
     case 'broker':
-      return cmdBroker(sub);
+      return cmdBroker(sub, rest);
     case 'who':
       return cmdWho();
     case 'send':
@@ -115,6 +137,8 @@ async function main(argv: string[]): Promise<void> {
       return runMcp(agent, cliEntry());
     }
     case 'hook': {
+      if ((sub === 'claude' || sub === 'codex') && (rest[0] === 'QuestionReady' || rest[0] === 'PreToolUse'))
+        return runQuestionHook(sub, rest[0]);
       const event = rest[0] as ClaudeHookEvent;
       if (sub === 'claude' && ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop'].includes(event))
         return runClaudeHook(event);

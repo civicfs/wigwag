@@ -13,6 +13,16 @@ export interface CommandHelp {
 /** The single source for `--help`, `help`, and every usage error. */
 export const COMMANDS: CommandHelp[] = [
   {
+    name: 'update',
+    summary: 'check for updates, or explicitly apply one',
+    usage: ['wigwag update [--check | --apply] [--json]'],
+    flags: [
+      ['--check', 'read-only update check (default)'],
+      ['--apply', 'install a newer npm release, refresh plugins and broker'],
+      ['--json', 'print check results as JSON'],
+    ],
+  },
+  {
     name: 'install',
     summary: 'set up config, the broker, and both plugins',
     usage: ['wigwag install [--claude-only | --codex-only] [--codex-binary <path>]'],
@@ -165,11 +175,12 @@ export const COMMANDS: CommandHelp[] = [
   {
     name: 'broker',
     summary: 'run or control the broker',
-    usage: ['wigwag broker run|start|stop|status'],
+    usage: ['wigwag broker run|start|stop|restart|status'],
     flags: [
       ['run', 'run the broker in the foreground'],
       ['start', 'start the broker in the background'],
       ['stop', 'stop the running broker'],
+      ['restart [--expect-version <version>]', 'wait for and verify a replacement broker'],
       ['status', 'show whether the broker is running'],
     ],
   },

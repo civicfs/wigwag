@@ -28,6 +28,14 @@ export const ConfigSchema = z
     codex: z.object({ binary: z.string().min(1), queue_timeout_ms: pos, name_wait_ms: pos }).strict(),
     broker: z.object({ start_timeout_ms: pos }).strict(),
     hooks: z.object({ deadline_ms: pos, max_stdin_bytes: pos }).strict(),
+    questions: z
+      .object({
+        wait_ms: pos.max(590000),
+        poll_ms: pos,
+        app_server_timeout_ms: pos,
+        app_server_socket: z.string().startsWith('/'),
+      })
+      .strict(),
     spawn: z.object({ enabled: z.literal(false) }).strict(),
   })
   .strict();
@@ -52,6 +60,16 @@ export const INIT_VALUES: Omit<Config, 'codex'> & { codex: Omit<Config['codex'],
   broker: { start_timeout_ms: 10000 },
   // deadline_ms stays under the 10 s hook timeout in plugins/claude/hooks/hooks.json.
   hooks: { deadline_ms: 5000, max_stdin_bytes: 1048576 },
+  questions: {
+    wait_ms: 300000,
+    poll_ms: 250,
+    app_server_timeout_ms: 10000,
+    app_server_socket: join(
+      process.env.CODEX_HOME ?? join(homedir(), '.codex'),
+      'app-server-control',
+      'app-server-control.sock',
+    ),
+  },
   spawn: { enabled: false },
 };
 

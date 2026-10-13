@@ -2,7 +2,7 @@ import { WigwagError } from '../errors.js';
 import type { Db } from '../store/db.js';
 import { type Scope, scopeFor, scopeOf } from '../store/links.js';
 import { deliveriesFor, type MessageRow } from '../store/messages.js';
-import { getSession, holderOf } from '../store/sessions.js';
+import { getSession, holderOf, type SessionRow } from '../store/sessions.js';
 import { workspaceLabel } from '../workspace.js';
 import type { Connection } from './connection.js';
 
@@ -55,11 +55,50 @@ export function canSee(db: Db, sessionWorkspace: string, m: MessageRow): boolean
   return scopeOf(db, sessionWorkspace).has(m.from_workspace);
 }
 
+function nativeRoute(db: Db, messageId: string) {
+  return db
+    .prepare(`SELECT a.worker_session_id, a.worker_native_id, a.orchestrator_session_id,
+    a.orchestrator_native_id, CASE WHEN a.task_message_id=? THEN 1 ELSE 0 END AS is_task
+    FROM assignments a LEFT JOIN question_relays q ON q.assignment_id=a.id
+    WHERE a.task_message_id=? OR q.message_id=? LIMIT 1`)
+    .get(messageId, messageId, messageId) as
+    | {
+        worker_session_id: string;
+        worker_native_id: string;
+        orchestrator_session_id: string;
+        orchestrator_native_id: string;
+        is_task: number;
+      }
+    | undefined;
+}
+
+/** Native tasks/questions belong to stable sessions, never to replacement holders of their names. */
+export function nativeRecipientMatches(db: Db, recipient: string, m: MessageRow): boolean {
+  const route = nativeRoute(db, m.id);
+  if (!route) return true;
+  const s = holderOf(db, recipient);
+  return (
+    !!s &&
+    (route.is_task
+      ? s.id === route.worker_session_id && s.agent_session_id === route.worker_native_id
+      : s.id === route.orchestrator_session_id && s.agent_session_id === route.orchestrator_native_id)
+  );
+}
+
+function nativeSessionCanSee(db: Db, s: SessionRow, m: MessageRow): boolean {
+  const route = nativeRoute(db, m.id);
+  return (
+    !route ||
+    (s.id === route.worker_session_id && s.agent_session_id === route.worker_native_id) ||
+    (s.id === route.orchestrator_session_id && s.agent_session_id === route.orchestrator_native_id)
+  );
+}
+
 /** canSee for a connection: the owner sees everything. */
 export function connCanSee(db: Db, conn: Connection, m: MessageRow): boolean {
   if (conn.role === 'owner') return true;
   const s = conn.sessionId ? getSession(db, conn.sessionId) : undefined;
-  return s !== undefined && canSee(db, s.workspace, m);
+  return s !== undefined && nativeSessionCanSee(db, s, m) && canSee(db, s.workspace, m);
 }
 
 /**
@@ -69,5 +108,7 @@ export function connCanSee(db: Db, conn: Connection, m: MessageRow): boolean {
 export function visibleUnreadCount(db: Db, name: string): number {
   const holder = holderOf(db, name);
   const rows = deliveriesFor(db, name, ['pending', 'held', 'pushed', 'failed', 'stuck']);
-  return holder ? rows.filter((r) => canSee(db, holder.workspace, r.message)).length : rows.length;
+  return holder
+    ? rows.filter((r) => nativeSessionCanSee(db, holder, r.message) && canSee(db, holder.workspace, r.message)).length
+    : rows.length;
 }

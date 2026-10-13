@@ -1,6 +1,6 @@
 {
   "name": "@civicfs/wigwag",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Push messaging and a data channel between Claude Code and Codex sessions on one host",
   "license": "MIT",
   "author": {
@@ -47,7 +47,8 @@
     "test": "vitest run",
     "lint": "biome check --write .",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run build && npm run typecheck && biome check ."
+    "prepublishOnly": "npm run build && npm run typecheck && biome check . && npm run check:public -- --history",
+    "check:public": "node scripts/check-public.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
@@ -57,12 +58,14 @@
     "string-width": "8.3.0",
     "ulid": "3.0.2",
     "wrap-ansi": "10.0.2",
+    "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@types/node": "26.6.4",
     "@types/react": "19",
+    "@types/ws": "8.18.2",
     "ink-testing-library": "4.0.0",
     "tsup": "8.5.1",
     "typescript": "7.0.2",

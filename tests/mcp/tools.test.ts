@@ -6,6 +6,11 @@ import { parseToolInput, toolsFor } from '../../src/mcp/tools.js';
 const SPEC_TOOLS = [
   'register',
   'whoami',
+  'delegate',
+  'release_worker',
+  'question_answer',
+  'questions',
+  'question_details',
   'who',
   'send',
   'reply',

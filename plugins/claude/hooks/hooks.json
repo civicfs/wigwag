@@ -1,11 +1,71 @@
 {
   "description": "wigwag: bind the session, track busy/idle, deliver held low-priority messages at turn boundaries.",
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "wigwag hook claude SessionStart", "timeout": 10 }] }],
-    "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "wigwag hook claude UserPromptSubmit", "timeout": 10 }] }
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wigwag hook claude SessionStart",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "wigwag hook claude QuestionReady",
+            "timeout": 10
+          }
+        ]
+      }
     ],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "wigwag hook claude PostToolUse", "timeout": 10 }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "wigwag hook claude Stop", "timeout": 10 }] }]
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wigwag hook claude UserPromptSubmit",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "wigwag hook claude QuestionReady",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wigwag hook claude PostToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wigwag hook claude Stop",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^AskUserQuestion$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "wigwag hook claude PreToolUse",
+            "timeout": 600
+          }
+        ]
+      }
+    ]
   }
 }

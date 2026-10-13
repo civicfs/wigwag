@@ -7,10 +7,10 @@ import { loadConfig, resolveHome } from '../../config.js';
 import { WigwagError } from '../../errors.js';
 import { frameLimit } from '../../protocol/frame.js';
 import { usageError } from '../help.js';
-import { cliEntry, out, ownerConnect } from '../util.js';
+import { cliEntry, out, ownerConnect, parseCli } from '../util.js';
 
 /** The pid reported by a broker answering on this home's socket, or null when none answers (never autospawns). */
-async function livePid(home: string): Promise<number | null> {
+async function liveStatus(home: string): Promise<{ pid: number; version?: string } | null> {
   const config = loadConfig(home);
   if (!(await canConnect(sockPath(home)))) return null;
   const signal = AbortSignal.timeout(config.broker.start_timeout_ms);
@@ -23,17 +23,19 @@ async function livePid(home: string): Promise<number | null> {
       undefined,
       signal,
     ));
-    const ping = client.call<{ pid: number }>('sys.ping');
+    const ping = client.call<{ pid: number; version?: string }>('sys.ping');
     const timedOut = new Promise<never>((_, rej) =>
       signal.addEventListener('abort', () => rej(new Error('sys.ping timed out')), { once: true }),
     );
-    return (await Promise.race([ping, timedOut])).pid;
+    return await Promise.race([ping, timedOut]);
   } catch {
     return null;
   } finally {
     client?.close();
   }
 }
+
+const livePid = async (home: string) => (await liveStatus(home))?.pid ?? null;
 
 /** SIGTERM a verified broker pid. ESRCH (it exited meanwhile) is fine; any other error (EPERM) is a failure. */
 export function signalBroker(
@@ -54,7 +56,7 @@ export function signalBroker(
   }
 }
 
-export async function cmdBroker(sub: string | undefined): Promise<void> {
+export async function cmdBroker(sub: string | undefined, args: string[] = []): Promise<void> {
   const home = resolveHome();
   if (sub === 'run') {
     try {
@@ -81,6 +83,29 @@ export async function cmdBroker(sub: string | undefined): Promise<void> {
     }
     return;
   }
+  if (sub === 'restart') {
+    const { values } = parseCli({ args, options: { 'expect-version': { type: 'string' } } });
+    const old = await liveStatus(home);
+    if (old) {
+      const signalled = signalBroker(old.pid);
+      if (signalled.code) throw new Error(signalled.err);
+      const until = Date.now() + loadConfig(home).broker.start_timeout_ms;
+      while ((await liveStatus(home))?.pid === old.pid) {
+        if (Date.now() >= until) throw new Error('Broker shutdown timed out; restart was not confirmed');
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    await ensureBroker(home, loadConfig(home), cliEntry());
+    const current = await liveStatus(home);
+    if (
+      !current ||
+      current.pid === old?.pid ||
+      (values['expect-version'] && current.version !== values['expect-version'])
+    )
+      throw new Error('Replacement broker version or identity was not confirmed');
+    out(`broker running pid ${current.pid} version ${current.version ?? 'unknown'}`);
+    return;
+  }
   if (sub === 'start') {
     await ensureBroker(home, loadConfig(home), cliEntry());
     out('broker running');
@@ -94,7 +119,7 @@ export async function cmdBroker(sub: string | undefined): Promise<void> {
     }
     const { client } = await ownerConnect();
     try {
-      const r = await client.call<{ pid: number }>('sys.ping');
+      const r = await client.call<{ pid: number; version?: string }>('sys.ping');
       out(`broker running pid ${r.pid}`);
     } finally {
       client.close();

@@ -7,6 +7,7 @@ import { Broker } from '../../src/broker/server.js';
 import { canConnect, sockPath } from '../../src/client/autospawn.js';
 import { loadConfig } from '../../src/config.js';
 import { WigwagError } from '../../src/errors.js';
+import { VERSION } from '../../src/version.js';
 import { ownerClient, staleSocket, startTestBroker, tmpHome } from '../helpers.js';
 
 const brokers: Broker[] = [];
@@ -217,7 +218,7 @@ describe('broker server', () => {
     expect(got.slice(bad.length + 1)).toEqual([
       badReply,
       badReply,
-      { id: 2, result: { pong: true, pid: process.pid } },
+      { id: 2, result: { pong: true, pid: process.pid, version: VERSION } },
     ]);
     s.destroy();
   });
