@@ -22,6 +22,7 @@ import { WorkspaceResolver } from '../workspace.js';
 import { Connection } from './connection.js';
 import type { DeliveryEngine } from './delivery.js';
 import { BrokerLock } from './lock.js';
+import type { NameService } from './naming.js';
 
 export interface HandlerCtx {
   conn: Connection;
@@ -61,6 +62,7 @@ export class Broker {
   onStop: Array<() => void> = [];
   engine: DeliveryEngine | null = null;
   questions!: QuestionService;
+  naming!: NameService;
   digestProvider: ((name: string) => string | null) | null = null;
   /** Identity's announce (sweep the name's backlog, owner broadcast, session.available); set by installIdentity. */
   announce: (sessionId: string) => void = () => {};

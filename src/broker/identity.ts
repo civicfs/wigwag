@@ -201,7 +201,13 @@ export function installIdentity(broker: Broker): void {
 
   const me = (sessionId: string | null) => getSession(db, sessionId as string) as SessionRow;
 
-  broker.handle('session.register', ({ conn }, { name }) => {
+  broker.handle('session.register', ({ conn }, p) => {
+    if (p.native) {
+      const r = broker.naming.revertToNative(conn.sessionId as string);
+      announce(conn.sessionId as string);
+      return r;
+    }
+    const name = p.name as string;
     if (RESERVED_NAMES.has(name)) throw new WigwagError('bad_request', `"${name}" is reserved`);
     const before = me(conn.sessionId);
     const r = claimName(db, before.id, name, 'custom');

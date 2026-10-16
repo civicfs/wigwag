@@ -12,6 +12,7 @@ import { installMessages } from './handlers/messages.js';
 import { installOwner } from './handlers/owner.js';
 import { installRequests } from './handlers/requests.js';
 import { installIdentity } from './identity.js';
+import { installNaming } from './naming.js';
 import { Broker } from './server.js';
 
 function installSys(broker: Broker): void {
@@ -47,6 +48,7 @@ export async function startBroker(home: string, opts: { transports?: TransportRe
   };
   installSys(broker);
   installIdentity(broker);
+  installNaming(broker);
   installDelivery(broker, transports);
   installMessages(broker);
   installData(broker);

@@ -1,6 +1,6 @@
 import type { Db } from '../store/db.js';
 import { scopeOf } from '../store/links.js';
-import { type Agent, getSession, liveHolder, type SessionRow } from '../store/sessions.js';
+import { type Agent, getSession, liveHolder, type NameSource, type SessionRow } from '../store/sessions.js';
 import { workspaceLabel } from '../workspace.js';
 import { visibleUnreadCount } from './scope.js';
 
@@ -30,6 +30,8 @@ export interface PublicSession {
   bound: boolean;
   unread: number;
   last_seen_at: string;
+  name_source?: NameSource;
+  native_name?: string | null;
   orchestration?: { assignment_id: string; orchestrator_session_id: string; orchestrator_name: string | null };
   role?: 'peer' | 'worker' | 'orchestrator' | 'orchestrator-worker';
   workers?: Array<{ assignment_id: string; session_id: string; name: string | null; state: SessionRow['state'] }>;
@@ -47,6 +49,8 @@ export const publicSession = (db: Db, s: SessionRow): PublicSession => ({
   bound: s.agent_session_id !== null,
   unread: s.name ? visibleUnreadCount(db, s.name) : 0,
   last_seen_at: s.last_seen_at,
+  name_source: s.name_source,
+  native_name: s.native_name,
   ...orchestration(db, s),
 });
 

@@ -64,7 +64,7 @@ export const TOOLS: ToolDef[] = [
   t(
     'register',
     'session.register',
-    "Set this session's wigwag name (a role, e.g. codex-merger). Rejected if a live session holds it.",
+    "Set this session's wigwag name (a role, e.g. codex-merger). Rejected if a live session holds it. A name set here stays until you call register with native=true, which follows the native session title again (Claude /rename, Codex thread name).",
   ),
   t('whoami', 'session.whoami', "Show this session's wigwag name, state and unread count."),
   t(

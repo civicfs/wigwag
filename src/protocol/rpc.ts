@@ -52,7 +52,15 @@ const NativeHookZ = z.object({
 export const METHODS = {
   'sys.ping': m('any', z.object({})),
 
-  'session.register': m('session', z.object({ name: NameZ })),
+  'session.register': m(
+    'session',
+    z
+      .object({
+        name: NameZ.optional(),
+        native: z.literal(true).optional().describe('Follow the native session title again instead of a custom name.'),
+      })
+      .refine((p) => (p.name === undefined) !== (p.native === undefined), 'pass exactly one of name or native'),
+  ),
   'assignment.delegate': m(
     'session',
     z.object({ to: NameZ, subject: Subject, body: z.string(), idempotency_key: z.string().min(1).max(200) }).strict(),
