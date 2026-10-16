@@ -147,7 +147,10 @@ vitest, linted with biome.
   the current name. Messages stay append-only (`to_target` keeps the old name); each moved delivery gets a delivery
   event `forwarded from <old>`. A delivery is not moved when the new name could not receive it under §17, or when the
   message already has a delivery to the new name (an `all` broadcast that reached both). A delivery whose push is in
-  flight moves when that push settles. Active subscriptions and mutes move with the name, the rename is recorded in
+  flight moves when that push settles, unless another session has since claimed the old name; deferred forwarding
+  then stops and the old name's backlog remains there. Only the renamed session's own active subscriptions and mutes
+  move with its name. Other sessions' subscriptions or mutes targeting the old name stay at that name, as do existing
+  throttle pairs involving it; these rules do not follow the renamed session in 0.3.0. The rename is recorded in
   `session_renames`, live sessions in scope get a low-priority `session renamed: <old> → <new>` notice (not sent when
   the old name was an unused provisional name), and owners get the session. Pending and failed deliveries are
   dispatched again, and the session is announced so held backlog is swept and delivered.
