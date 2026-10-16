@@ -11,7 +11,7 @@ import type { Hello } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { GIT_TIMEOUT_MS } from '../../src/workspace.js';
-import { fakeGitDir, ownerClient, startBroker, startTestBroker } from '../helpers.js';
+import { fakeGitDir, mcpClient, ownerClient, startBroker, startTestBroker } from '../helpers.js';
 
 type Welcome = { session_id: string; name: string; agent: string; warning: string | null };
 const cleanup: Array<() => unknown> = [];
@@ -34,7 +34,7 @@ async function mcp(home: string, extra: Partial<Hello> = {}) {
     mcp_ppid: 400,
     ...extra,
   };
-  const { client, welcome } = await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
+  const { client, welcome } = await mcpClient(home, hello);
   cleanup.push(() => client.close());
   return { client, welcome: welcome as Welcome };
 }

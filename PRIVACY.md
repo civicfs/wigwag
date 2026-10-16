@@ -34,6 +34,10 @@ transcripts for naming. Resume lineage records keep native IDs, slot IDs, proven
 name choices and claim refusal reasons. Owner recovery reports include names, name sources, timestamps, connection
 state, assignment IDs/roles and undelivered-mail counts. Codex automatic slot recovery is disabled because the hook's
 shared tree-root ID does not establish a concrete conversation identity.
+Codex bind diagnostics also retain the MCP host client name/version and whether
+the bind supplied verified hook-origin metadata. These are local metadata, not
+provider credentials or cryptographic attestations. Legacy/pre-guard bindings
+keep messaging while queue pushes wait for a verified reload.
 Tools process the snippets, data, and file paths supplied to them; a blob upload reads the specified file.
 
 Do not send passwords, API keys, authentication tokens, protected health information, or payment-card data through

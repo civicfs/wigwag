@@ -1,15 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
-import { sockPath } from '../../src/client/autospawn.js';
-import { Client } from '../../src/client/client.js';
-import { loadConfig } from '../../src/config.js';
 import { CodexNames } from '../../src/native/codex-names.js';
-import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { insertMessage } from '../../src/store/messages.js';
 import { listLineage } from '../../src/store/recovery.js';
 import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
-import { startBroker, tmpHome, until } from '../helpers.js';
+import { mcpClient, startBroker, tmpHome, until } from '../helpers.js';
 
 class FakeApp extends EventEmitter {
   /** W8: thread/loaded/list; empty by default, so a closed MCP's thread counts as unloaded and the slot goes offline. */
@@ -60,7 +56,7 @@ async function codex(home: string, ppid: number, extra: Partial<Hello> = {}) {
     mcp_ppid: ppid,
     ...extra,
   };
-  const { client, welcome } = await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
+  const { client, welcome } = await mcpClient(home, hello);
   cleanup.push(() => client.close());
   return { client, welcome: welcome as { session_id: string; name: string } };
 }
@@ -139,11 +135,13 @@ describe('codex resume recovery (W7, verified roots only)', () => {
       );
       if (!detached) await until(() => getSession(broker.db, canonical.id)?.state === 'offline');
       const fresh = await codex(home, 20);
-      if (detached)
-        await expect(fresh.client.call('session.bind', { agent_session_id: 'T' })).rejects.toMatchObject({
-          code: 'conflict',
-        });
-      else await fresh.client.call('session.bind', { agent_session_id: 'T' });
+      // The real hook presents shared root T, but the host metadata identifies the concrete descendant/fork.
+      await expect(
+        fresh.client.call('session.bind', {
+          agent_session_id: 'T',
+          hook_origin: { name: 'codex-mcp-client', version: '0.162.1', thread_id: `${_kind}-of-T` },
+        }),
+      ).rejects.toMatchObject({ code: 'bad_request' });
       expect(getSession(broker.db, canonical.id)).toMatchObject({ name: 'codex-helper', agent_session_id: 'T' });
       expect(getSession(broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
       expect(
@@ -157,7 +155,8 @@ describe('codex resume recovery (W7, verified roots only)', () => {
         id: fresh.welcome.session_id,
         capabilities: { resume_recovery: 'unavailable', resume_recovery_reason: 'codex-thread-id-untrusted' },
       });
-      expect(listLineage(broker.db, { outcome: 'flagged', limit: 5 })[0]?.reason).toBe('codex-thread-id-untrusted');
+      expect(getSession(broker.db, fresh.welcome.session_id)?.agent_session_id).toBeNull();
+      expect(listLineage(broker.db, { outcome: 'adopted', limit: 5 })).toEqual([]);
     },
   );
 

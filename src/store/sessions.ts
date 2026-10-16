@@ -6,7 +6,14 @@ import { scopeOf } from './links.js';
 
 export type Agent = 'claude' | 'codex';
 export type SessionState = 'online-busy' | 'online-idle' | 'offline';
-export type CodexPushReason = 'shared-root' | 'root-not-loaded' | 'descendant-loaded' | 'app-server-unavailable';
+export type CodexPushReason =
+  | 'shared-root'
+  | 'root-not-loaded'
+  | 'descendant-loaded'
+  | 'app-server-unavailable'
+  | 'unverified-bind'
+  | 'too-many-loaded'
+  | 'unreadable-loaded';
 export type NameSource = 'provisional' | 'native' | 'custom';
 /** W8: the MCP link; meaningful only while state <> 'offline'. */
 export type Link = 'connected' | 'disconnected';
@@ -47,6 +54,9 @@ export interface SessionRow {
   agent_start: string | null;
   parent_checked_at: string | null;
   codex_push_reason: CodexPushReason | null;
+  bind_origin: 'unverified' | 'hook-verified';
+  host_client_name: string | null;
+  host_client_version: string | null;
 }
 
 type Raw = Omit<SessionRow, 'pid_chain'> & { pid_chain: string };

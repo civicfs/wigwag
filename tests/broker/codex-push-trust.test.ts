@@ -117,6 +117,12 @@ describe('Codex push trust at bind, probe and dispatch', () => {
       mcp_ppid: null,
     });
     bindAgentSession(broker.db, duplicate.id, 'T');
+    // Both rows carry fixture hook evidence; this regression isolates the duplicate-holder gate.
+    broker.db
+      .prepare(
+        "UPDATE sessions SET bind_origin='hook-verified',host_client_name='codex-mcp-client',host_client_version='0.162.1' WHERE id=?",
+      )
+      .run(duplicate.id);
     expect(await broker.checkCodexPush(current, true)).toBe('shared-root');
     expect(await broker.checkCodexPush(getSession(broker.db, duplicate.id) ?? duplicate, true)).toBe('shared-root');
     const m = await send();

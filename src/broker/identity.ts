@@ -4,6 +4,7 @@ import { WigwagError } from '../errors.js';
 import { RESERVED_NAMES } from '../ids.js';
 import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.js';
 import { captureIdentity, sameProcess } from '../proc/identity.js';
+import { trustedCodexHost, validateHookOrigin } from '../protocol/codex-hook.js';
 import type { Hello } from '../protocol/rpc.js';
 import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
 import { isLegacySession, recordClientCompatibility } from '../store/compatibility.js';
@@ -305,6 +306,18 @@ export function installIdentity(broker: Broker): void {
     conn.sessionId = s.id;
     conn.generation = attachConnection(db, s.id);
     recordClientCompatibility(db, getSession(db, s.id) as SessionRow, hello, conn.legacy);
+    if (s.agent === 'codex') {
+      const host = conn.legacy ? null : hello.host_client;
+      db.prepare(`UPDATE sessions SET host_client_name=?,host_client_version=?,
+        bind_origin=CASE WHEN ? THEN bind_origin ELSE 'unverified' END,
+        codex_push_reason=CASE WHEN ? THEN codex_push_reason ELSE 'unverified-bind' END WHERE id=?`).run(
+        host?.name ?? null,
+        host?.version ?? null,
+        trustedCodexHost(host, broker.config.codex.trusted_host_versions) ? 1 : 0,
+        trustedCodexHost(host, broker.config.codex.trusted_host_versions) ? 1 : 0,
+        s.id,
+      );
+    }
     if (previousConnection && previousConnection !== conn)
       previousConnection.fail(null, { code: 'transport', message: 'MCP connection superseded by its replacement' });
     conn.channel = hello.channel;
@@ -496,8 +509,12 @@ export function installIdentity(broker: Broker): void {
     renamed(s, 'launch');
   };
 
-  broker.handle('session.bind', async ({ conn }, { agent_session_id, question_relay_version }) => {
+  broker.handle('session.bind', async ({ conn }, { agent_session_id, question_relay_version, hook_origin }) => {
     const first = me(conn.sessionId);
+    const origin =
+      first.agent === 'codex' && !conn.legacy ? validateHookOrigin(hook_origin, conn.hello?.host_client) : null;
+    if (origin && origin.thread_id !== agent_session_id)
+      throw new WigwagError('bad_request', 'Codex hook identity does not match the concrete host threadId; not bound');
     // W7 (S-E): a Codex hook's session_id is the tree-root id, shared by descendants. Automatic recovery is limited to
     // an app-server-verified root thread. That check is I/O, so it runs first; everything after it is revalidated.
     const trustedThreadId =
@@ -578,7 +595,16 @@ export function installIdentity(broker: Broker): void {
         if (!r.ok) refuse(r.holder);
       }
     }
-    if (self.agent === 'codex') await broker.checkCodexPush(me(conn.sessionId), true, false);
+    if (self.agent === 'codex') {
+      const verified = origin && trustedCodexHost(origin, broker.config.codex.trusted_host_versions);
+      db.prepare('UPDATE sessions SET bind_origin=?,host_client_name=?,host_client_version=? WHERE id=?').run(
+        verified ? 'hook-verified' : 'unverified',
+        origin?.name ?? null,
+        origin?.version ?? null,
+        conn.sessionId,
+      );
+      await broker.checkCodexPush(me(conn.sessionId), true, false);
+    }
     applyLaunchIntent(me(conn.sessionId));
     announce(conn.sessionId as string);
     broker.bus.emit('session.bound', me(conn.sessionId));
@@ -586,7 +612,18 @@ export function installIdentity(broker: Broker): void {
     return {};
   });
 
-  broker.handle('session.turn', async ({ conn }, { phase }) => {
+  const checkInternalOrigin = (conn: Connection, origin: unknown) => {
+    const s = me(conn.sessionId);
+    if (s.agent !== 'codex' || conn.legacy) return;
+    // A pre-guard stamped MCP may retain its remembered binding. Delivery hooks grant no new identity:
+    // keep them working while pushes stay unverified; any new/replacement bind still requires origin.
+    if (!origin && !conn.hello?.host_client && s.bind_origin === 'unverified') return;
+    const checked = validateHookOrigin(origin, conn.hello?.host_client);
+    if (s.agent_session_id !== checked.thread_id)
+      throw new WigwagError('bad_request', 'Codex hook identity does not match the bound conversation');
+  };
+  broker.handle('session.turn', async ({ conn }, { phase, hook_origin }) => {
+    checkInternalOrigin(conn, hook_origin);
     setState(db, conn.sessionId as string, phase === 'started' ? 'online-busy' : 'online-idle');
     const s = me(conn.sessionId);
     if (s.agent === 'codex')
@@ -597,7 +634,8 @@ export function installIdentity(broker: Broker): void {
     return {};
   });
 
-  broker.handle('session.digest', ({ conn }) => {
+  broker.handle('session.digest', ({ conn }, { hook_origin }) => {
+    checkInternalOrigin(conn, hook_origin);
     const s = me(conn.sessionId);
     return { text: s.name && broker.digestProvider ? broker.digestProvider(s.name) : null };
   });

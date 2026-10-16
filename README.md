@@ -137,6 +137,24 @@ unavailable or ambiguous evidence
 holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
 (<reason>)`. This push check does not enable automatic slot recovery.
 
+Codex pushes also require a verified hook-origin bind. Internal hook tools are
+hidden from the model; host-generated `threadId` must match the hook's session ID,
+and calls with model `callId` metadata or argument-supplied origin are refused.
+The source-audited host is `codex-mcp-client` 0.162.1. An unknown host version with
+valid hook metadata keeps inbox and hook delivery, but pushes are held:
+`Codex host <name> <version> not in the verified list: pushes held, inbox delivery works; see README`.
+After checking a newer Codex host, the owner may add its version to
+`codex.trusted_host_versions` in config (empty by default), restart the broker and
+reload the plugin to bind again. `whoami`, `who` and doctor expose `bind_origin`,
+`host_client_name` and `host_client_version`.
+
+Legacy and pre-guard Codex bindings deliberately lose push until reloaded:
+`reload the Wigwag plugin / restart this Codex session to enable push`.
+Messaging remains available. This guard relies on the host's metadata contract,
+not cryptographic attestation. Hook-origin `threadId` behavior is **unverified in
+a live throwaway Codex session** until acceptance testing confirms it. Using it
+to enable automatic Codex recovery is a possible follow-up, not implemented.
+
 `wigwag recovery` shows duplicate slots with names, name sources, last-seen times,
 state/link, assignment IDs and roles, and held/pending and total undelivered mail
 counts. Retiring an offline slot with an active assignment or undelivered mail

@@ -6,20 +6,53 @@ import { describe, expect, it, vi } from 'vitest';
 import { openDb } from '../../src/store/db.js';
 import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3 } from '../../src/store/schema.js';
 
-const fixture = () => {
+const fixture = (version = 3) => {
   const file = join(mkdtempSync(join(tmpdir(), 'ww-v4-')), 'state.db');
   const db = new DatabaseSync(file);
   db.exec('CREATE TABLE schema_version(version INTEGER NOT NULL)');
   db.exec(SCHEMA_V1);
   db.exec(SCHEMA_V2);
-  db.exec(SCHEMA_V3);
+  if (version >= 3) db.exec(SCHEMA_V3);
   db.exec(
-    "INSERT INTO schema_version VALUES(1),(2),(3); INSERT INTO messages(id,from_name,to_target,kind,priority,subject,body,attachments,created_at) VALUES('m','owner','worker','message','urgent','s','b','[]','t'); INSERT INTO deliveries(message_id,recipient,state,hold_reason,attempts,updated_at) VALUES('m','worker','held','disconnected',2,'t')",
+    `INSERT INTO schema_version VALUES(1),(2)${version >= 3 ? ',(3)' : ''}; INSERT INTO messages(id,from_name,to_target,kind,priority,subject,body,attachments,created_at) VALUES('m','owner','worker','message','urgent','s','b','[]','t'); INSERT INTO deliveries(message_id,recipient,state,hold_reason,attempts,updated_at) VALUES('m','worker','held','${version >= 3 ? 'disconnected' : 'offline'}',2,'t');
+    INSERT INTO sessions(id,name,agent,agent_session_id,cwd,workspace,pid_chain,state,transport,created_at,last_seen_at)
+    VALUES('codex-old','old-worker','codex','T','/fixture','/fixture','[]','offline','codex-queue','t','t')`,
   );
   db.close();
   return file;
 };
 describe('schema v4 Codex push holds', () => {
+  it.each([2, 3])(
+    'migrates v%s bindings unverified and widens diagnostic reasons without losing backup data',
+    (version) => {
+      const file = fixture(version),
+        db = openDb(file);
+      try {
+        expect(
+          db.prepare('SELECT bind_origin,host_client_name,host_client_version,codex_push_reason FROM sessions').get(),
+        ).toEqual({
+          bind_origin: 'unverified',
+          host_client_name: null,
+          host_client_version: null,
+          codex_push_reason: 'unverified-bind',
+        });
+        for (const reason of ['unverified-bind', 'too-many-loaded', 'unreadable-loaded'])
+          db.prepare('UPDATE sessions SET codex_push_reason=?').run(reason);
+        expect(() => db.exec("UPDATE sessions SET codex_push_reason='invented'")).toThrow(/CHECK/);
+        expect(db.prepare('SELECT forward_to FROM deliveries').get()).toEqual({ forward_to: null });
+        expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+        for (const v of version === 2 ? [3, 4] : [4]) {
+          const bak = `${file}.pre-v${v}.bak`;
+          expect(statSync(bak).mode & 0o777).toBe(0o600);
+          const copy = new DatabaseSync(bak, { readOnly: true });
+          expect(copy.prepare('SELECT body FROM messages').get()).toEqual({ body: 'b' });
+          copy.close();
+        }
+      } finally {
+        db.close();
+      }
+    },
+  );
   it('backs up v3 mode0600, preserves rows/indexes/FKs, and accepts the new hold reason', () => {
     const file = fixture(),
       db = openDb(file);

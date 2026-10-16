@@ -101,7 +101,11 @@ describe('read-only doctor state diagnostics', () => {
       'duplicate slots',
       'wigwag recovery',
       'Codex push untrusted',
-      'app-server-unavailable',
+      'unverified-bind',
+      'bind_origin=unverified',
+      'host_client_name=unknown',
+      'host_client_version=unknown',
+      'reload the Wigwag plugin / restart this Codex session to enable push',
     ])
       expect(r.stdout).toContain(text);
     expect(r.stdout).not.toContain('\u001b[2J');

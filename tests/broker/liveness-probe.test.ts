@@ -9,7 +9,7 @@ import type { ProcessProbe } from '../../src/proc/identity.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { getSession } from '../../src/store/sessions.js';
-import { startBroker, tmpHome, until } from '../helpers.js';
+import { mcpClient, startBroker, tmpHome, until } from '../helpers.js';
 
 class FakeApp extends EventEmitter {
   loaded = new Set<string>();
@@ -51,7 +51,10 @@ async function boot(app = new FakeApp()) {
   return { home, broker, app };
 }
 async function connect(home: string, hello: Hello) {
-  const { client, welcome } = await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
+  const { client, welcome } =
+    hello.role === 'mcp'
+      ? await mcpClient(home, hello)
+      : await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
   cleanup.push(() => client.close());
   return { client, welcome: welcome as { session_id: string } };
 }

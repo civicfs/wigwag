@@ -6,7 +6,7 @@ import type { ProcessProbe } from '../../src/proc/identity.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { getSession } from '../../src/store/sessions.js';
-import { startBroker, tmpHome } from '../helpers.js';
+import { mcpClient, startBroker, tmpHome } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {
@@ -30,7 +30,10 @@ async function boot() {
   return { home, broker };
 }
 async function connect(home: string, hello: Hello) {
-  const { client, welcome } = await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
+  const { client, welcome } =
+    hello.role === 'mcp'
+      ? await mcpClient(home, hello)
+      : await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
   cleanup.push(() => client.close());
   return { client, welcome: welcome as { session_id: string } };
 }

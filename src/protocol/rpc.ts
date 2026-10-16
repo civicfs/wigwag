@@ -3,6 +3,7 @@ import { type ErrorCode, WigwagError } from '../errors.js';
 import { BLOB_REF_RE, NAME_RE } from '../ids.js';
 import { AnswersZ } from '../questions/schema.js';
 import { SCHEMA_VERSION, VERSION } from '../version.js';
+import { HookOriginZ, HostClientZ } from './codex-hook.js';
 
 export const PROTOCOL_VERSION = 1 as const;
 export const HANDSHAKE_VERSIONS = {
@@ -87,6 +88,7 @@ export const HelloZ = z
     // older or non-Claude peer, which the broker treats as capable.
     channel: z.boolean().optional(),
     resume_session_id: z.string().optional(),
+    host_client: HostClientZ.optional(),
   })
   .strict();
 export type Hello = z.infer<typeof HelloZ>;
@@ -160,10 +162,16 @@ export const METHODS = {
   ),
   'session.bind': m(
     'session',
-    z.object({ agent_session_id: z.string().min(1), question_relay_version: z.literal(1).optional() }),
+    z
+      .object({
+        agent_session_id: z.string().min(1),
+        question_relay_version: z.literal(1).optional(),
+        hook_origin: HookOriginZ.optional(),
+      })
+      .strict(),
   ),
-  'session.turn': m('session', z.object({ phase: z.enum(['started', 'ended']) })),
-  'session.digest': m('session', z.object({})),
+  'session.turn': m('session', z.object({ phase: z.enum(['started', 'ended']), hook_origin: HookOriginZ.optional() })),
+  'session.digest': m('session', z.object({ hook_origin: HookOriginZ.optional() })),
   // Iteration-2 provisions (spec §16 P3): reserved, no handler in v1.
   // E-1: `wigwag codex --as <name>` tells the broker which name the Codex session it is about to start should take.
   'launch.intend': m(

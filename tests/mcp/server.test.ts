@@ -31,7 +31,12 @@ afterEach(async () => {
   if (home) await killSpawnedBrokers(home, loadConfig(home).broker.start_timeout_ms);
 });
 
-async function start(agent: 'claude' | 'codex', name: string, extraEnv: Record<string, string> = {}) {
+async function start(
+  agent: 'claude' | 'codex',
+  name: string,
+  extraEnv: Record<string, string> = {},
+  hostVersion = '0.162.1',
+) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [DIST_MAIN, 'mcp', '--agent', agent],
@@ -39,7 +44,7 @@ async function start(agent: 'claude' | 'codex', name: string, extraEnv: Record<s
   });
   // Claude Code advertises the channel only when it was started with the development-channels flag; this stands in for that.
   const client = new McpClient(
-    { name: 'test', version: '0' },
+    agent === 'codex' ? { name: 'codex-mcp-client', version: hostVersion } : { name: 'test', version: '0' },
     { capabilities: { experimental: { 'claude/channel': {} } } },
   );
   const channel: Array<{ content: string; meta: Record<string, string> }> = [];
@@ -53,6 +58,70 @@ async function start(agent: 'claude' | 'codex', name: string, extraEnv: Record<s
 const text = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
 
 describe('MCP server', () => {
+  it('keeps unsupported-host messaging and hook digest while refusing pushes and forged binds', async () => {
+    home = tmpHome();
+    const broker = await startBroker(home, { codexNames: fixtureCodexNames(home, () => ['T']) });
+    try {
+      const c = await start('codex', 'unsupported-host', {}, '0.163.0');
+      const bound = await c.client.callTool({
+        name: 'session_bind',
+        arguments: { session_id: 'T' },
+        _meta: { threadId: 'T' },
+      });
+      expect(bound.isError).toBeFalsy();
+      expect(JSON.parse(text(await c.client.callTool({ name: 'whoami', arguments: {} })))).toMatchObject({
+        bound: true,
+        bind_origin: 'unverified',
+        host_client_version: '0.163.0',
+        capabilities: { codex_push: 'held' },
+      });
+      expect((await c.client.callTool({ name: 'inbox', arguments: {} })).isError).toBeFalsy();
+      expect(
+        (await c.client.callTool({ name: 'hook_digest', arguments: {}, _meta: { threadId: 'T' } })).isError,
+      ).toBeFalsy();
+      expect(
+        (
+          await c.client.callTool({
+            name: 'session_bind',
+            arguments: { session_id: 'T' },
+            _meta: { threadId: 'T', callId: 'model' },
+          })
+        ).isError,
+      ).toBe(true);
+      expect(
+        (
+          await c.client.callTool({
+            name: 'session_bind',
+            arguments: { session_id: 'wrong-root' },
+            _meta: { threadId: 'T' },
+          })
+        ).isError,
+      ).toBe(true);
+    } finally {
+      await broker.stop();
+    }
+  });
+  it('hides every internal hook tool and refuses a model-origin bind without affecting public tools', async () => {
+    home = tmpHome();
+    const c = await start('codex', 'guarded-worker');
+    const listed = await c.client.listTools();
+    for (const t of listed.tools) {
+      if (['session_bind', 'turn_started', 'turn_ended', 'hook_digest'].includes(t.name))
+        expect(t._meta).toMatchObject({ ui: { visibility: ['app'] } });
+      else expect(t._meta?.ui).toBeUndefined();
+    }
+    const result = await c.client.callTool({
+      name: 'session_bind',
+      arguments: { session_id: 'independent-root-B' },
+      _meta: { threadId: 'independent-root-A', callId: 'model-call' },
+    });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/hook-origin|model-origin/);
+    expect(JSON.parse(text(await c.client.callTool({ name: 'whoami', arguments: {} })))).toMatchObject({
+      bound: false,
+    });
+    expect((await c.client.callTool({ name: 'register', arguments: { name: 'still-messaging' } })).isError).toBeFalsy();
+  });
   it('who exposes live sessions by default and accepts bounded history pages over MCP', async () => {
     home = tmpHome();
     const a = await start('claude', 'alpha-one');
@@ -107,7 +176,11 @@ describe('MCP server', () => {
     try {
       const a = await start('claude', 'alpha-one', { FAKE_CODEX_LOG: log });
       const c = await start('codex', 'codex-merger', { FAKE_CODEX_LOG: log });
-      await c.client.callTool({ name: 'session_bind', arguments: { session_id: 'thread-77' } });
+      await c.client.callTool({
+        name: 'session_bind',
+        arguments: { session_id: 'thread-77' },
+        _meta: { threadId: 'thread-77' },
+      });
       await a.client.callTool({
         name: 'send',
         arguments: { to: 'codex-merger', subject: 's', body: 'to codex', priority: 'normal' },

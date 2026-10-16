@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Hide internal Codex hook tools from the model and require host-origin metadata
+  matching the bound thread. Only verified host versions enable queue pushes;
+  unsupported versions keep messaging with a visible hold and owner-configurable
+  verified-version extension. Expose bind origin and observed host name/version.
+  Legacy/pre-guard Codex bindings retain messaging but lose push until the Wigwag
+  plugin is reloaded or the Codex session restarted. The host metadata contract
+  remains subject to live throwaway-session acceptance; recovery stays disabled.
+  Amend unshipped V4 with origin/host fields, additional diagnostic reasons and a
+  nullable durable forwarding destination for the rename-ownership fix.
+
 - Accept package-version skew with a soft reload warning; only protocol/schema
   incompatibility rejects a handshake. Preserve unstamped 0.2 clients in degraded
   mode, including explicit remembered-slot reconnects across broker restarts.

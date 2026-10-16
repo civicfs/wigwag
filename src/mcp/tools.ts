@@ -184,7 +184,7 @@ export const TOOLS: ToolDef[] = [
 
   // Codex hooks call these through `mcp_tool` hooks (plugins/codex). Hidden from Claude.
   t('session_bind', 'session.bind', 'Internal: called by the wigwag SessionStart hook. Do not call.', {
-    input: z.object({ session_id: z.string().min(1), question_relay_version: z.literal(1).optional() }),
+    input: z.object({ session_id: z.string().min(1), question_relay_version: z.literal(1).optional() }).strict(),
     map: (a) => ({
       agent_session_id: a.session_id,
       ...(a.question_relay_version === 1 ? { question_relay_version: 1 } : {}),

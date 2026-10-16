@@ -1,3 +1,4 @@
+import { codexHostWarning } from '../protocol/codex-hook.js';
 import { LEGACY_CLIENT_WARNING } from '../protocol/rpc.js';
 import { isLegacySession } from '../store/compatibility.js';
 import type { Db } from '../store/db.js';
@@ -61,6 +62,10 @@ export interface PublicSession {
   liveness?: string | null;
   codex_push?: string | null;
   codex_push_reason?: CodexPushBlockReason | null;
+  bind_origin?: SessionRow['bind_origin'];
+  host_client_name?: string | null;
+  host_client_version?: string | null;
+  codex_host_warning?: string | null;
   orchestration?: { assignment_id: string; orchestrator_session_id: string; orchestrator_name: string | null };
   role?: 'peer' | 'worker' | 'orchestrator' | 'orchestrator-worker';
   workers?: Array<{ assignment_id: string; session_id: string; name: string | null; state: SessionRow['state'] }>;
@@ -87,6 +92,10 @@ export const publicSession = (db: Db, s: SessionRow): PublicSession => ({
   liveness: livenessLabel(s),
   ...(s.agent === 'codex'
     ? {
+        bind_origin: s.bind_origin,
+        host_client_name: s.host_client_name,
+        host_client_version: s.host_client_version,
+        codex_host_warning: codexHostWarning(s),
         codex_push: codexPushBlock(s) ? codexPushLabel(codexPushBlock(s) as CodexPushBlockReason) : null,
         codex_push_reason: codexPushBlock(s),
       }

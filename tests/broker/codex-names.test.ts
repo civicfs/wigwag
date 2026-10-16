@@ -3,14 +3,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { sockPath } from '../../src/client/autospawn.js';
-import { Client } from '../../src/client/client.js';
-import { loadConfig } from '../../src/config.js';
 import { CodexNames } from '../../src/native/codex-names.js';
-import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { getSession } from '../../src/store/sessions.js';
-import { startBroker, tmpHome, until } from '../helpers.js';
+import { mcpClient, startBroker, tmpHome, until } from '../helpers.js';
 
 class FakeApp extends EventEmitter {
   constructor(
@@ -58,7 +54,7 @@ async function codex(home: string, extra: Partial<Hello> = {}) {
     mcp_ppid: 10,
     ...extra,
   };
-  const { client, welcome } = await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
+  const { client, welcome } = await mcpClient(home, hello);
   cleanup.push(() => client.close());
   return { client, welcome: welcome as { session_id: string; name: string } };
 }

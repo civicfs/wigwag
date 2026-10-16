@@ -35,6 +35,9 @@ const session = (o: Partial<SessionRow> = {}): SessionRow => ({
   agent_start: null,
   parent_checked_at: null,
   codex_push_reason: null,
+  bind_origin: 'hook-verified',
+  host_client_name: 'codex-mcp-client',
+  host_client_version: '0.162.1',
   ...o,
 });
 const items = (n: number, body = 'hello'): RenderItem[] =>

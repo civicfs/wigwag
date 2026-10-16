@@ -129,6 +129,7 @@ describe('cli', () => {
       binary: '/opt/codex',
       queue_timeout_ms: 7,
       name_wait_ms: 120000,
+      trusted_host_versions: [],
     });
   });
 

@@ -25,7 +25,17 @@ export const ConfigSchema = z
       .strict(),
     retry: z.object({ base_ms: pos, max_attempts: pos }).strict(),
     rate: z.object({ wake_pushes: pos, window_s: pos }).strict(),
-    codex: z.object({ binary: z.string().min(1), queue_timeout_ms: pos, name_wait_ms: pos }).strict(),
+    codex: z
+      .object({
+        binary: z.string().min(1),
+        queue_timeout_ms: pos,
+        name_wait_ms: pos,
+        trusted_host_versions: z
+          .array(z.string().regex(/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/))
+          .max(20)
+          .default([]),
+      })
+      .strict(),
     broker: z.object({ start_timeout_ms: pos }).strict(),
     hooks: z.object({ deadline_ms: pos, max_stdin_bytes: pos }).strict(),
     questions: z
@@ -57,7 +67,7 @@ export const INIT_VALUES: Omit<Config, 'codex'> & { codex: Omit<Config['codex'],
   rate: { wake_pushes: 6, window_s: 300 },
   // name_wait_ms: how long a `wigwag codex --as <name>` relaunch waits for the previous holder of <name> to end (spec
   // §4). Codex's shared daemon unloads a thread, and with it the thread's MCP server, 60 s after its last TUI left.
-  codex: { queue_timeout_ms: 30000, name_wait_ms: 120000 },
+  codex: { queue_timeout_ms: 30000, name_wait_ms: 120000, trusted_host_versions: [] },
   broker: { start_timeout_ms: 10000 },
   // deadline_ms stays under the 10 s hook timeout in plugins/claude/hooks/hooks.json.
   hooks: { deadline_ms: 5000, max_stdin_bytes: 1048576 },

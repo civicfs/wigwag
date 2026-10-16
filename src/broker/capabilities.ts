@@ -1,3 +1,4 @@
+import { codexHostWarning } from '../protocol/codex-hook.js';
 import { isLegacySession } from '../store/compatibility.js';
 import type { SessionRow } from '../store/sessions.js';
 import { type CodexPushBlockReason, codexPushBlock } from './codex-push.js';
@@ -11,6 +12,7 @@ export interface SessionCapabilities {
   delivery: 'push' | 'hook-boundary' | 'codex-queue';
   codex_push?: 'trusted' | 'held';
   codex_push_reason?: CodexPushBlockReason | null;
+  codex_host_warning?: string | null;
   /** W8: how an MCP disconnect is told apart from the parent closing. */
   parent_liveness: 'process-identity' | 'thread-loaded' | 'unavailable';
 }
@@ -26,7 +28,11 @@ export function capabilitiesFor(broker: Broker, s: SessionRow): SessionCapabilit
           ? 'hook-boundary'
           : 'push',
       ...(s.agent === 'codex'
-        ? { codex_push: 'held' as const, codex_push_reason: 'app-server-unavailable' as const }
+        ? {
+            codex_push: 'held' as const,
+            codex_push_reason: 'unverified-bind' as const,
+            codex_host_warning: codexHostWarning(s),
+          }
         : {}),
       parent_liveness: 'unavailable',
     };
@@ -48,6 +54,7 @@ export function capabilitiesFor(broker: Broker, s: SessionRow): SessionCapabilit
     delivery: codexPushBlock(s) ? 'hook-boundary' : 'codex-queue',
     codex_push: codexPushBlock(s) ? 'held' : 'trusted',
     codex_push_reason: codexPushBlock(s),
+    codex_host_warning: codexHostWarning(s),
     parent_liveness: app && s.agent_session_id ? 'thread-loaded' : 'unavailable',
   };
 }

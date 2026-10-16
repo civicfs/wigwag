@@ -300,8 +300,13 @@ ${appendOnly('session_renames')}
 
 /** Metadata-derived Codex push evidence is refreshed at bind/probe and immediately before queueing. */
 export const SCHEMA_V4 = `
-ALTER TABLE sessions ADD COLUMN codex_push_reason TEXT DEFAULT 'app-server-unavailable'
-  CHECK (codex_push_reason IN ('shared-root', 'root-not-loaded', 'descendant-loaded', 'app-server-unavailable'));
+ALTER TABLE sessions ADD COLUMN codex_push_reason TEXT DEFAULT 'unverified-bind'
+  CHECK (codex_push_reason IN ('shared-root', 'root-not-loaded', 'descendant-loaded', 'app-server-unavailable',
+    'unverified-bind', 'too-many-loaded', 'unreadable-loaded'));
+ALTER TABLE sessions ADD COLUMN bind_origin TEXT NOT NULL DEFAULT 'unverified'
+  CHECK (bind_origin IN ('unverified', 'hook-verified'));
+ALTER TABLE sessions ADD COLUMN host_client_name TEXT;
+ALTER TABLE sessions ADD COLUMN host_client_version TEXT;
 CREATE TABLE deliveries_v4 (
   message_id TEXT NOT NULL REFERENCES messages (id),
   recipient TEXT NOT NULL,
@@ -312,6 +317,7 @@ CREATE TABLE deliveries_v4 (
   transport TEXT,
   next_attempt_at TEXT,
   updated_at TEXT NOT NULL,
+  forward_to TEXT REFERENCES sessions (id),
   PRIMARY KEY (message_id, recipient)
 );
 INSERT INTO deliveries_v4 (message_id, recipient, state, hold_reason, attempts, last_error, transport, next_attempt_at,
@@ -322,4 +328,5 @@ DROP TABLE deliveries;
 ALTER TABLE deliveries_v4 RENAME TO deliveries;
 CREATE INDEX deliveries_recipient_state ON deliveries (recipient, state);
 CREATE INDEX deliveries_state ON deliveries (state);
+CREATE INDEX deliveries_forward_to ON deliveries (forward_to) WHERE forward_to IS NOT NULL;
 `;

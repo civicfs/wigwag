@@ -20,6 +20,9 @@ vi.mock('@modelcontextprotocol/sdk/server/index.js', () => ({
     getClientCapabilities() {
       return { experimental: { 'claude/channel': {} } };
     }
+    getClientVersion() {
+      return { name: 'fixture-claude', version: '1' };
+    }
     async connect() {}
     async close() {}
     async notification(value: unknown) {

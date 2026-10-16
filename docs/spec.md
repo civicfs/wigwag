@@ -223,6 +223,18 @@ vitest, linted with biome.
   evidence fails closed. Reasons are shared-root, root-not-loaded, descendant-loaded or app-server-unavailable;
   deliveries hold as codex-untrusted and remain accessible through hooks/inbox. Public session/capability/TUI/recovery
   diagnostics show the reason. This gate does not enable automatic Codex slot recovery.
+  Pushes additionally require `bind_origin='hook-verified'`. All internal MCP hook tools advertise
+  `_meta.ui.visibility=['app']`; the server derives origin only from initialized host identity and request
+  metadata, never tool arguments. Model `callId`, missing metadata or sessionId/threadId disagreement refuses
+  binding. The broker independently validates the origin envelope against the connection's observed host.
+  Verified host versions are an explicit code allow-list (codex-mcp-client 0.162.1), extended only by owner
+  config `codex.trusted_host_versions` (default []). Structurally valid hooks from unsupported versions bind
+  unverified and retain digest/turn/inbox delivery, but never push; diagnostics name the unsupported host and
+  point to README. Legacy/pre-guard bindings migrate unverified and require plugin reload/session restart
+  for push. who/whoami/doctor expose bind_origin and host_client_name/version. This is a pinned host contract,
+  not cryptographic origin proof; real hook metadata remains unverified until throwaway-session acceptance.
+  A future use of concrete hook metadata for recovery is explicitly deferred. V4 also reserves nullable
+  deliveries.forward_to (destination session ID) for durable in-flight rename ownership.
   `whoami.capabilities` reports recovery unavailable with that reason. `wigwag recovery` reports duplicate slot
   names, name sources, times, state/link, active assignment IDs/roles, held/pending counts and total undelivered counts.
   `owner.retire_slot` refuses an active assignment or any of the four undelivered mail states unless `force:true`

@@ -13,7 +13,7 @@ import { configPath, initHome, loadConfig } from '../src/config.js';
 import { CodexNames, codexIndexPath } from '../src/native/codex-names.js';
 import { noProcesses } from '../src/proc/identity.js';
 import { frameLimit } from '../src/protocol/frame.js';
-import type { Hello, PushData } from '../src/protocol/rpc.js';
+import type { Hello, MethodName, PushData } from '../src/protocol/rpc.js';
 import { listSessions } from '../src/store/sessions.js';
 import { tsChildArgs } from './fixtures/ts-child-loader.mjs';
 
@@ -154,7 +154,9 @@ export async function killSpawnedBrokers(home: string, timeoutMs: number): Promi
     { timeout: timeoutMs },
   );
 }
-export async function mcpClient(home: string, extra: Partial<Hello> = {}) {
+/** Codex RPC fixtures model native hook envelopes by default; pass hookCalls=false to test missing/forged origin. */
+export async function mcpClient(home: string, extra: Partial<Hello> = {}, hookCalls = true) {
+  const legacy = Object.hasOwn(extra, 'version') && extra.version === undefined;
   const hello: Hello = {
     protocol: 1,
     role: 'mcp',
@@ -164,6 +166,7 @@ export async function mcpClient(home: string, extra: Partial<Hello> = {}) {
     mcp_ppid: 2,
     ...extra,
   };
+  if (hello.agent === 'codex' && !legacy) hello.host_client ??= { name: 'codex-mcp-client', version: '0.162.1' };
   const pushes: PushData[] = [];
   const { client, welcome } = await Client.connect(
     sockPath(home),
@@ -173,6 +176,21 @@ export async function mcpClient(home: string, extra: Partial<Hello> = {}) {
       if (name === 'push') pushes.push(data as PushData);
     },
   );
+  if (hello.agent === 'codex' && !legacy && hookCalls) {
+    const call = client.call.bind(client);
+    let native: string | null = null;
+    client.call = async <T = unknown>(method: MethodName, params: unknown = {}): Promise<T> => {
+      let input = params;
+      if (['session.bind', 'session.turn', 'session.digest'].includes(method) && params && typeof params === 'object') {
+        const p = params as Record<string, unknown>;
+        const id = method === 'session.bind' ? p.agent_session_id : native;
+        if (!Object.hasOwn(p, 'hook_origin')) input = { ...p, hook_origin: { ...hello.host_client, thread_id: id } };
+      }
+      const result = await call<T>(method, input);
+      if (method === 'session.bind') native = (params as { agent_session_id: string }).agent_session_id;
+      return result;
+    };
+  }
   return { client, welcome: welcome as { session_id: string; name: string }, pushes };
 }
 

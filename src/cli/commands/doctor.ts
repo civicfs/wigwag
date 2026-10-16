@@ -7,6 +7,7 @@ import { codexPushBlock, codexPushLabel } from '../../broker/codex-push.js';
 import { sockPath } from '../../client/autospawn.js';
 import { Client } from '../../client/client.js';
 import { type Config, configPath, loadConfig, resolveHome } from '../../config.js';
+import { codexHostWarning } from '../../protocol/codex-hook.js';
 import { frameLimit } from '../../protocol/frame.js';
 import { HANDSHAKE_VERSIONS, LEGACY_CLIENT_WARNING } from '../../protocol/rpc.js';
 import { isLegacySession } from '../../store/compatibility.js';
@@ -138,9 +139,25 @@ function inspectState(
       warn('duplicate slots', `${groups.length} native ID group(s), ${slots} slots; inspect wigwag recovery`);
     else add(true, 'duplicate slots', '0 duplicate native IDs');
     if (version >= 4) {
+      const origins = db
+        .prepare(
+          "SELECT id,name,bind_origin,host_client_name,host_client_version FROM sessions WHERE agent='codex' AND retired_at IS NULL",
+        )
+        .all() as unknown as Array<
+        Pick<
+          import('../../store/sessions.js').SessionRow,
+          'id' | 'name' | 'bind_origin' | 'host_client_name' | 'host_client_version'
+        >
+      >;
+      for (const s of origins) {
+        const warning = codexHostWarning(s);
+        const detail = `${s.name ?? s.id}: bind_origin=${s.bind_origin}; host_client_name=${s.host_client_name ?? 'unknown'}; host_client_version=${s.host_client_version ?? 'unknown'}${warning ? `; ${warning}` : ''}`;
+        if (warning) warn('Codex bind origin', detail);
+        else add(true, 'Codex bind origin', detail);
+      }
       const untrusted = db
         .prepare(
-          "SELECT id,name,state,link,codex_push_reason FROM sessions WHERE agent='codex' AND retired_at IS NULL AND agent_session_id IS NOT NULL AND (codex_push_reason IS NOT NULL OR link='disconnected')",
+          "SELECT id,name,state,link,codex_push_reason,bind_origin FROM sessions WHERE agent='codex' AND retired_at IS NULL AND agent_session_id IS NOT NULL AND (codex_push_reason IS NOT NULL OR link='disconnected' OR bind_origin='unverified')",
         )
         .all() as Array<{
         id: string;
@@ -148,6 +165,7 @@ function inspectState(
         state: import('../../store/sessions.js').SessionState;
         link: import('../../store/sessions.js').Link;
         codex_push_reason: import('../../store/sessions.js').CodexPushReason | null;
+        bind_origin: import('../../store/sessions.js').SessionRow['bind_origin'];
       }>;
       if (untrusted.length)
         warn(
