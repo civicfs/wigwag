@@ -15,11 +15,16 @@ afterEach(async () => {
   for (const c of clients.splice(0)) c.close();
   await broker.stop();
 });
-async function join(name: string, cwd = '/w/myproject', agent: 'claude' | 'codex' = 'claude') {
+async function join(
+  name: string,
+  cwd = '/w/myproject',
+  agent: 'claude' | 'codex' = 'claude',
+  native = `native-${name}`,
+) {
   const c = await mcpClient(home, { requested_name: name, cwd, agent });
   clients.push(c.client);
-  await c.client.call('session.bind', { agent_session_id: `native-${name}` });
-  broker.questions.markReady(c.welcome.session_id, `native-${name}`);
+  await c.client.call('session.bind', { agent_session_id: native });
+  broker.questions.markReady(c.welcome.session_id, native);
   return c;
 }
 const task = (to = 'worker-one', key = 'task-1') => ({
@@ -83,7 +88,7 @@ describe('native question orchestration', () => {
       kind: 'claude',
       questions: qs,
     });
-    const replacement = await join('lead-one');
+    const replacement = await join('lead-one', '/w/myproject', 'claude', 'native-replacement-lead');
     await broker.engine?.dispatchMessage(q.message_id);
     expect(replacement.pushes.some((p) => p.content.includes(q.id))).toBe(false);
     const inbox = JSON.stringify(await replacement.client.call('msg.inbox', { include_read: true }));

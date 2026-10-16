@@ -6,7 +6,7 @@ import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.
 import { captureIdentity, sameProcess } from '../proc/identity.js';
 import type { Hello } from '../protocol/rpc.js';
 import { scopeOf } from '../store/links.js';
-import { adoptCanonical, recordLineage, recoveryCandidates } from '../store/recovery.js';
+import { adoptCanonical, liveNativeHolders, recordLineage, recoveryCandidates } from '../store/recovery.js';
 import {
   attachConnection,
   bindAgentSession,
@@ -432,23 +432,67 @@ export function installIdentity(broker: Broker): void {
     renamed(s, 'launch');
   };
 
-  broker.handle('session.bind', ({ conn }, { agent_session_id, question_relay_version }) => {
-    const self = me(conn.sessionId);
-    const r = bindAgentSessionExclusive(db, self.id, agent_session_id);
-    if (!r.ok) {
+  broker.handle('session.bind', async ({ conn }, { agent_session_id, question_relay_version }) => {
+    const first = me(conn.sessionId);
+    // W7 (S-E): a Codex hook's session_id is the tree-root id, shared by descendants. Automatic recovery is limited to
+    // an app-server-verified root thread. That check is I/O, so it runs first; everything after it is revalidated.
+    const single =
+      first.agent === 'codex' &&
+      first.agent_session_id !== agent_session_id &&
+      recoveryCandidates(db, {
+        agent: 'codex',
+        native: agent_session_id,
+        workspace: first.workspace,
+        exceptId: first.id,
+      }).length === 1;
+    const rootVerified = single ? ((await broker.codexNames?.verifyRoot(agent_session_id)) ?? false) : false;
+    if (conn.closed || conn.failed || !conn.sessionId)
+      throw new WigwagError('transport', 'connection closed during bind');
+    let self = me(conn.sessionId);
+    const refuse = (holder: SessionRow): never => {
       // Fail closed: the session stays unbound with its provisional name. The holder is named only when the binder may see it.
-      const visible = r.holder.name !== null && scopeOf(db, self.workspace).has(r.holder.workspace);
+      const visible = holder.name !== null && scopeOf(db, self.workspace).has(holder.workspace);
       broker.log(
-        `session.bind: ${agent_session_id} is held by live session ${r.holder.id} (${r.holder.name ?? 'unnamed'}); ${self.id} not bound`,
+        `session.bind: ${agent_session_id} is held by live session ${holder.id} (${holder.name ?? 'unnamed'}); ${self.id} not bound`,
       );
       throw new WigwagError(
         'conflict',
-        `this ${self.agent} session id is already bound to another live session${visible ? ` (${r.holder.name})` : ''}; not bound`,
+        `this ${self.agent} session id is already bound to another live session${visible ? ` (${holder.name})` : ''}; not bound`,
       );
+    };
+    const live = liveNativeHolders(db, self.agent, agent_session_id, self.id);
+    if (live.length) {
+      recordLineage(db, {
+        agent: self.agent,
+        native_id: agent_session_id,
+        workspace: self.workspace,
+        session_id: self.id,
+        canonical_session_id: live[0].id,
+        cause: 'resume',
+        outcome: 'flagged',
+        reason: 'live-holder',
+        evidence: { hook: 'session.bind' },
+      });
+      refuse(live[0]);
+    }
+    const recovered =
+      self.agent_session_id === agent_session_id
+        ? null
+        : recoverOnBind(
+            self,
+            agent_session_id,
+            { hook: 'session.bind', root_verified: rootVerified },
+            { verified: self.agent !== 'codex' || rootVerified, reason: 'unverified-root' },
+          );
+    if (recovered) self = recovered;
+    else {
+      // Today's behavior, now after any lineage flag: bind this slot and clear an offline holder's stale binding.
+      const r = bindAgentSessionExclusive(db, self.id, agent_session_id);
+      if (!r.ok) refuse(r.holder);
     }
     applyLaunchIntent(me(conn.sessionId));
-    broker.bus.emit('session.bound', me(conn.sessionId));
     announce(conn.sessionId as string);
+    broker.bus.emit('session.bound', me(conn.sessionId));
     if (question_relay_version === 1) broker.questions.markReady(conn.sessionId as string, agent_session_id);
     return {};
   });
