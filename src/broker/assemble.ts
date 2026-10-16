@@ -1,4 +1,5 @@
 import { loadConfig } from '../config.js';
+import { ClaudeTitleWatcher } from '../native/claude-watch.js';
 import { CodexQuestions } from '../questions/codex.js';
 import { installQuestionHooks } from '../questions/hook-handlers.js';
 import { installQuestions } from '../questions/service.js';
@@ -59,6 +60,8 @@ export async function startBroker(home: string, opts: { transports?: TransportRe
   const codexQuestions = new CodexQuestions(questions);
   questions.prepareCodex = (session) => codexQuestions.attach(session);
   broker.onStop.push(() => codexQuestions.stop());
+  const claudeTitles = new ClaudeTitleWatcher(broker);
+  broker.onStop.push(() => claudeTitles.stop());
   await broker.start();
   return broker;
 }
