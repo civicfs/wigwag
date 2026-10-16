@@ -13,7 +13,7 @@ import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { openDb } from '../../src/store/db.js';
 import { claimName, createSession, getSession, liveHolder, setAgentIdentity } from '../../src/store/sessions.js';
-import { tmpHome } from '../helpers.js';
+import { tmpHome, until } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {
@@ -163,6 +163,50 @@ describe('parent-verified disconnect (W8)', () => {
     procs.set(4242, 'start-OTHER');
     const stranger = await mcp(home, 4242);
     expect(stranger.welcome.session_id).not.toBe(a.welcome.session_id);
+  });
+
+  it.each([false, true])(
+    'reattaches a verified Claude parent across fast MCP restart (old close first: %s)',
+    async (closeFirst) => {
+      reset();
+      procs.set(4242, 'start-A');
+      const { home, broker } = await boot();
+      const a = await bound(home, 4242, 'worker-one', 'sid-race');
+      const old = broker.connectionFor(a.welcome.session_id);
+      const generation = getSession(broker.db, a.welcome.session_id)?.conn_generation ?? 0;
+      if (closeFirst) {
+        a.client.close();
+        await until(() => getSession(broker.db, a.welcome.session_id)?.link === 'disconnected');
+      }
+      const again = await mcp(home, 4242);
+      expect(again.welcome).toMatchObject({ session_id: a.welcome.session_id, name: 'worker-one' });
+      a.client.close();
+      await until(() => old?.closed === true);
+      expect(getSession(broker.db, a.welcome.session_id)).toMatchObject({
+        link: 'connected',
+        state: 'online-idle',
+        agent_session_id: 'sid-race',
+        conn_generation: generation + 1,
+      });
+      expect(broker.connectionFor(a.welcome.session_id)?.generation).toBe(generation + 1);
+      expect(await again.client.call('session.whoami')).toMatchObject({ name: 'worker-one', bound: true });
+    },
+  );
+
+  it('keeps different Claude parents, unverified parents and Codex daemon clients separate', async () => {
+    reset();
+    procs.set(4242, 'start-A');
+    procs.set(4343, 'start-B');
+    const { home } = await boot();
+    const a = await bound(home, 4242, 'worker-one', 'sid-parent');
+    const b = await mcp(home, 4343);
+    expect(b.welcome.session_id).not.toBe(a.welcome.session_id);
+    const unverifiedA = await mcp(home, 4444);
+    const unverifiedB = await mcp(home, 4444);
+    expect(unverifiedB.welcome.session_id).not.toBe(unverifiedA.welcome.session_id);
+    const codexA = await mcp(home, 4242, { agent: 'codex' });
+    const codexB = await mcp(home, 4242, { agent: 'codex' });
+    expect(codexB.welcome.session_id).not.toBe(codexA.welcome.session_id);
   });
 
   it('broker restart: verified parents keep their slot and accept the reconnect hint; gone ones go offline', async () => {

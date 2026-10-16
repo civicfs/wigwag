@@ -100,13 +100,16 @@ export function installIdentity(broker: Broker): void {
 
   const sameScope = (caller: SessionRow, holder: SessionRow) => scopeOf(db, caller.workspace).has(holder.workspace);
 
-  /** W8: the single MCP-disconnected Claude slot whose recorded parent is `ppid` and is still the same process. */
-  const reattachable = (ppid: number, workspace: string): SessionRow | undefined => {
+  /** W8: the single disconnected or older-connected Claude slot whose recorded parent is `ppid` and is still the same process. */
+  const reattachable = (ppid: number, workspace: string, conn: Connection): SessionRow | undefined => {
     const matches = listSessions(db).filter(
       (x) =>
         x.agent === 'claude' &&
         x.state !== 'offline' &&
-        x.link === 'disconnected' &&
+        (x.link === 'disconnected' ||
+          [...broker.connections].some(
+            (c) => c.sessionId === x.id && c.generation === x.conn_generation && c.id < conn.id,
+          )) &&
         !x.retired_at &&
         x.agent_pid === ppid &&
         x.workspace === workspace,
@@ -155,7 +158,8 @@ export function installIdentity(broker: Broker): void {
     if (s && (s.agent !== hello.agent || s.retired_at || (s.state !== 'offline' && s.link !== 'disconnected')))
       s = undefined;
     // W8: a new MCP process under the same live Claude parent (plugin reload, MCP crash) re-attaches to its slot.
-    if (!s && hello.agent === 'claude' && hello.mcp_ppid !== undefined) s = reattachable(hello.mcp_ppid, workspace);
+    if (!s && hello.agent === 'claude' && hello.mcp_ppid !== undefined)
+      s = reattachable(hello.mcp_ppid, workspace, conn);
     if (s) {
       if (s.state === 'offline') setState(db, s.id, 'online-idle');
       refreshProcess(db, s.id, {
@@ -172,8 +176,11 @@ export function installIdentity(broker: Broker): void {
         pid_chain: hello.pid_chain,
         mcp_ppid: hello.mcp_ppid ?? null,
       });
+    const previousConnection = broker.connectionFor(s.id);
     conn.sessionId = s.id;
     conn.generation = attachConnection(db, s.id);
+    if (previousConnection && previousConnection !== conn)
+      previousConnection.fail(null, { code: 'transport', message: 'MCP connection superseded by its replacement' });
     conn.channel = hello.channel;
     let warning: string | null = null;
     if (!getSession(db, s.id)?.name) {

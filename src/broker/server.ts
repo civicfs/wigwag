@@ -109,7 +109,7 @@ export class Broker {
   }
 
   connectionFor(sessionId: string): Connection | undefined {
-    for (const c of this.connections) if (c.sessionId === sessionId) return c;
+    for (const c of this.connections) if (c.sessionId === sessionId && !c.failed && !c.closed) return c;
     return undefined;
   }
 
