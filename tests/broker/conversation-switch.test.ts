@@ -406,6 +406,14 @@ describe('Claude in-process conversation switches', () => {
         name: 'launch-worker',
       });
       expect(deliveriesOfMessage(f.broker.db, mail.id)[0]?.state).toBe('held');
+      // An ignored stale hello hint must not prevent a later trusted resume of A itself.
+      await h.call('hook.event', f.event(A));
+      expect(await back.client.call('session.whoami')).toMatchObject({
+        id: f.worker.welcome.session_id,
+        name: 'launch-worker',
+        bound: true,
+      });
+      expect(JSON.stringify(await back.client.call('msg.inbox'))).not.toContain('B-retained-body');
     },
   );
 

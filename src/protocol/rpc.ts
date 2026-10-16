@@ -23,6 +23,20 @@ export function assertPeerVersions(
   peer: 'broker' | 'client',
 ): { legacy: boolean; warning: string | null } {
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  for (const field of ['protocol', 'schema_version'] as const) {
+    const value = p[field];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0))
+      throw new WigwagError(
+        'schema',
+        `invalid ${field} from ${peer}: expected a nonnegative integer; ${peer === 'broker' ? 'update/restart the broker' : 'update/reload the plugin and CLI'}, then retry`,
+        {
+          kind: 'invalid-version',
+          peer,
+          expected: HANDSHAKE_VERSIONS,
+          received: { protocol: p.protocol, schema_version: p.schema_version, version: p.version },
+        },
+      );
+  }
   const oldRole = p.role === 'mcp' || p.role === 'hook' || p.role === 'owner';
   if (
     peer === 'client' &&

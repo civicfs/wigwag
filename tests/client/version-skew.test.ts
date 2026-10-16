@@ -225,3 +225,9 @@ describe('protocol/schema version skew', () => {
     }
   });
 });
+
+it.each(['broker', 'client'] as const)('identifies a fractional schema from the %s as malformed, not older', (peer) => {
+  expect(() => assertPeerVersions({ ...HANDSHAKE_VERSIONS, schema_version: 4.5, role: 'mcp' }, peer)).toThrow(
+    `invalid schema_version from ${peer}`,
+  );
+});

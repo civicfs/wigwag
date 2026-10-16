@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Diagnose malformed protocol/schema stamps separately from valid older/newer
+  versions, avoiding misleading restart advice for fractional schema values.
+
 - Add owner-only rehearsal for copied homes, disabling native readers, question
   adapters, watchers, process probes, pushes and updates by construction. Refuse
   live/default homes and escaped paths; external native paths need an explicit
