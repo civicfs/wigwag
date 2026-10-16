@@ -1,5 +1,16 @@
 {
-  "files": { "includes": ["src/**", "tests/**", "*.ts", "*.json", "plugins/**", ".claude-plugin/**", ".agents/**"] },
+  "files": {
+    "includes": [
+      "src/**",
+      "tests/**",
+      "*.ts",
+      "*.json",
+      "plugins/**",
+      ".claude-plugin/**",
+      ".agents/**",
+      "!!**/.superpowers"
+    ]
+  },
   "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 120 },
   "javascript": { "formatter": { "quoteStyle": "single" } },
   "linter": { "enabled": true, "rules": { "preset": "recommended" } }
