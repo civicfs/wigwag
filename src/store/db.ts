@@ -1,4 +1,4 @@
-import { chmodSync, linkSync, rmSync } from 'node:fs';
+import { chmodSync, linkSync, lstatSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3 } from './schema.js';
 
@@ -114,6 +114,7 @@ export function openDb(file: string): Db {
   }
   if (schemaVersion(db) < 3) {
     const snapshot = initialVersion >= 1 ? snapshotBeforeV3(db, file) : null;
+    let createdBackup = false;
     try {
       tx(db, () => {
         // Re-read under the write lock: another process may have migrated (and backed up) meanwhile.
@@ -122,6 +123,7 @@ export function openDb(file: string): Db {
           const bak = preV3BackupPath(file);
           try {
             linkSync(snapshot, bak); // never overwrites: an existing backup refuses the migration
+            createdBackup = true;
           } catch (e) {
             throw new Error(
               (e as NodeJS.ErrnoException).code === 'EEXIST'
@@ -133,6 +135,21 @@ export function openDb(file: string): Db {
         db.exec(SCHEMA_V3);
         db.prepare('INSERT INTO schema_version (version) VALUES (3)').run();
       });
+    } catch (e) {
+      // Remove only our redundant snapshot after a confirmed rollback. Unknown/committed outcomes keep it.
+      if (createdBackup && snapshot) {
+        try {
+          if (schemaVersion(db) < 3) {
+            const bak = preV3BackupPath(file);
+            const own = lstatSync(snapshot);
+            const published = lstatSync(bak);
+            if (own.dev === published.dev && own.ino === published.ino) removeQuietly(bak);
+          }
+        } catch {
+          // If the version or file ownership cannot be confirmed, preserve the backup for inspection.
+        }
+      }
+      throw e;
     } finally {
       if (snapshot) removeQuietly(snapshot);
     }

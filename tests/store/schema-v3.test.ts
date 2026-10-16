@@ -11,9 +11,9 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { openDb, preV3BackupPath } from '../../src/store/db.js';
-import { SCHEMA_V1, SCHEMA_V2 } from '../../src/store/schema.js';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3 } from '../../src/store/schema.js';
 import { getSession } from '../../src/store/sessions.js';
 
 const v2File = () => {
@@ -149,6 +149,53 @@ describe('pre-v3 backup', () => {
     expect(counts(copy)).toEqual(want);
     copy.close();
     expect(readdirSync(dirname(file)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('removes its own backup after a confirmed rollback and allows retry', () => {
+    const file = v2File();
+    const exec = DatabaseSync.prototype.exec;
+    const spy = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, sql) {
+      exec.call(this, sql);
+      if (sql === SCHEMA_V3) throw new Error('fixture migration failure');
+    });
+    try {
+      expect(() => openDb(file)).toThrow('fixture migration failure');
+      expect(existsSync(preV3BackupPath(file))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    const db = openDb(file);
+    expect(version(db)).toBe(3);
+    db.close();
+  });
+
+  it.each(['committed', 'unreadable'])('keeps its backup when migration outcome is %s', (outcome) => {
+    const file = v2File();
+    const exec = DatabaseSync.prototype.exec;
+    const prepare = DatabaseSync.prototype.prepare;
+    let failed = false;
+    const execSpy = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, sql) {
+      exec.call(this, sql);
+      if ((outcome === 'unreadable' && sql === SCHEMA_V3) || (outcome === 'committed' && sql === 'COMMIT')) {
+        failed = true;
+        throw new Error('fixture uncertain outcome');
+      }
+    });
+    const readSpy = vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function (this: DatabaseSync, sql) {
+      if (outcome === 'unreadable' && failed && sql.includes('max(version)'))
+        throw new Error('fixture version unreadable');
+      return prepare.call(this, sql);
+    });
+    try {
+      expect(() => openDb(file)).toThrow();
+      expect(existsSync(preV3BackupPath(file))).toBe(true);
+    } finally {
+      execSpy.mockRestore();
+      readSpy.mockRestore();
+    }
+    const db = new DatabaseSync(file);
+    expect(version(db)).toBe(outcome === 'committed' ? 3 : 2);
+    db.close();
   });
 
   it('refuses to migrate when an earlier backup already exists, and leaves it untouched', () => {

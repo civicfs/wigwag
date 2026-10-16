@@ -45,6 +45,14 @@ other sidecar files can contain that content too. Blob files and logs are also
 unencrypted. The home directory and socket use OS permissions; those permissions
 restrict access but do not encrypt stored data. Processes running as the same OS
 user, host administrators, and backups with sufficient access can read it.
+Before the schema v3 upgrade, an existing database is copied to
+`state.db.pre-v3.bak` with mode 0600. This backup contains the same clear-text data
+and remains after a successful upgrade or when the migration outcome cannot be
+confirmed. A confirmed rollback removes only the backup created by that attempt.
+A pre-existing backup is never overwritten or removed by migration and blocks
+an upgrade until the operator inspects and moves or removes it. Include retained
+migration backups in your storage and deletion procedures.
+
 Host-level disk or backup encryption is a separate operator control and does not
 protect against a process already running with your OS-user access.
 

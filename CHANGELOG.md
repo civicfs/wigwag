@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Before upgrading an existing database to schema v3, save a mode-0600 clear-text
+  copy at `state.db.pre-v3.bak`. Keep it after success or an uncertain outcome.
+  A confirmed rollback removes only the backup created by that attempt so retry
+  can proceed. A pre-existing backup is retained and blocks migration pending
+  operator inspection.
+
 ## 0.2.0 — 2026-10-13
 
 - Relay assigned workers' native questions between Claude Code and Codex, with
