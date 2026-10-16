@@ -49,8 +49,8 @@ describe('openDb under concurrent first open', () => {
       const results = await Promise.all(procs.map((p) => p.out.next()));
       expect(results).toEqual(procs.map(() => 'ok'));
       const db = openDb(file);
-      expect(db.prepare('SELECT count(*) AS n FROM schema_version').get()).toEqual({ n: 3 });
-      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 3 });
+      expect(db.prepare('SELECT count(*) AS n FROM schema_version').get()).toEqual({ n: 4 });
+      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 4 });
       db.close();
     }
   });

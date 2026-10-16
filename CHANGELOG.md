@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Hold Codex queue pushes unless metadata proves a single loaded root with no
+  loaded descendant sharing its ID. Recheck before queueing; show the hold reason
+  in session, capability, TUI and recovery diagnostics. Hooks/inbox remain usable.
+- Upgrade to schema v4 with a mode-0600 `state.db.pre-v4.bak` snapshot, preserving
+  deliveries and adding `codex-untrusted` holds. The v3 backup safeguards also apply
+  to v4: refuse pre-existing backups and remove only this attempt's redundant copy
+  after a confirmed rollback.
+
 - Adopt native session names (Claude `/rename`, Codex thread names), sanitized and
   suffixed on collision; an explicit `register` wins and `register native=true`
   reverts. Codex's index can supply the first native name; later updates require

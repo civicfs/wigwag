@@ -46,7 +46,7 @@ const version = (db: DatabaseSync) =>
 describe('schema v3', () => {
   it('migrates a v2 database: session columns, name_source from the name shape, new tables', () => {
     const db = openDb(v2File());
-    expect(version(db)).toBe(3);
+    expect(version(db)).toBe(4);
     expect(['ses-a', 'ses-b', 'ses-c', 'ses-d'].map((id) => getSession(db, id)?.name_source)).toEqual([
       'provisional',
       'custom',
@@ -92,13 +92,13 @@ describe('schema v3', () => {
     db.close();
   });
 
-  it('reopening a v3 database is a no-op and a fresh database starts at v3', () => {
+  it('reopening a current database is a no-op and a fresh database starts at v4', () => {
     const file = v2File();
     openDb(file).close();
     const again = openDb(file);
-    expect(version(again)).toBe(3);
+    expect(version(again)).toBe(4);
     const fresh = openDb(join(mkdtempSync(join(tmpdir(), 'ww-v3-')), 'state.db'));
-    expect(version(fresh)).toBe(3);
+    expect(version(fresh)).toBe(4);
   });
 
   it('keeps session_renames append-only and name_source inside its enum', () => {
@@ -141,7 +141,7 @@ describe('pre-v3 backup', () => {
     const want = counts(before);
     before.close();
     const db = openDb(file);
-    expect(version(db)).toBe(3);
+    expect(version(db)).toBe(4);
     const bak = preV3BackupPath(file);
     expect(statSync(bak).mode & 0o777).toBe(0o600);
     const copy = new DatabaseSync(bak, { readOnly: true });
@@ -165,7 +165,7 @@ describe('pre-v3 backup', () => {
       spy.mockRestore();
     }
     const db = openDb(file);
-    expect(version(db)).toBe(3);
+    expect(version(db)).toBe(4);
     db.close();
   });
 

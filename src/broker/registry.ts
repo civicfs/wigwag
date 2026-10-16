@@ -10,6 +10,7 @@ import {
   type SessionRow,
 } from '../store/sessions.js';
 import { workspaceLabel } from '../workspace.js';
+import { codexPushLabel } from './codex-push.js';
 import { visibleUnreadCount } from './scope.js';
 
 /** `no-channel`: a live Claude session whose MCP client cannot take channel pushes (E-3). */
@@ -54,6 +55,8 @@ export interface PublicSession {
   link?: Link;
   parent_state?: ParentState;
   liveness?: string | null;
+  codex_push?: string | null;
+  codex_push_reason?: SessionRow['codex_push_reason'];
   orchestration?: { assignment_id: string; orchestrator_session_id: string; orchestrator_name: string | null };
   role?: 'peer' | 'worker' | 'orchestrator' | 'orchestrator-worker';
   workers?: Array<{ assignment_id: string; session_id: string; name: string | null; state: SessionRow['state'] }>;
@@ -76,6 +79,12 @@ export const publicSession = (db: Db, s: SessionRow): PublicSession => ({
   link: s.link,
   parent_state: s.parent_state,
   liveness: livenessLabel(s),
+  ...(s.agent === 'codex'
+    ? {
+        codex_push: s.codex_push_reason ? codexPushLabel(s.codex_push_reason) : null,
+        codex_push_reason: s.codex_push_reason,
+      }
+    : {}),
   ...orchestration(db, s),
 });
 

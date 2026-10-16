@@ -2,18 +2,20 @@ import { dirname, join } from 'node:path';
 import type { Broker } from '../broker/server.js';
 import type { AppFrame } from '../questions/app-server.js';
 import type { AppConnection } from '../questions/codex.js';
-import { listSessions, type SessionRow } from '../store/sessions.js';
+import { type CodexPushReason, listSessions, type SessionRow } from '../store/sessions.js';
 import { tailLines } from './tail.js';
 
 export const CODEX_INDEX_TAIL_BYTES = 65536;
 export type CodexNameOrigin = 'codex-api' | 'codex-index';
 export interface CodexThreadMeta {
   id: string;
+  sessionId: string | null;
   name: string | null;
   /** The thread is its own tree root: sessionId === id, no parent, and a non-sub-agent source (fails closed). */
   root: boolean;
   forkedFromId: string | null;
 }
+export type CodexPushTrust = { trusted: true; reason: null } | { trusted: false; reason: CodexPushReason };
 export type CodexReadResult = { available: true; meta: CodexThreadMeta | null } | { available: false };
 
 const ROOT_SOURCES = new Set(['cli', 'vscode', 'exec', 'appServer']);
@@ -30,6 +32,7 @@ export function threadMeta(raw: unknown, threadId: string): CodexThreadMeta | nu
     ROOT_SOURCES.has(t.source);
   return {
     id: threadId,
+    sessionId: nonEmpty(t.sessionId),
     name: nonEmpty(t.name),
     root,
     forkedFromId: typeof t.forkedFromId === 'string' ? t.forkedFromId : null,
@@ -67,6 +70,7 @@ export class CodexNames {
   private app: AppConnection | null = null;
   private connecting: Promise<AppConnection> | null = null;
   private stopped = false;
+  private readonly trustCache = new Map<string, { at: number; value: CodexPushTrust }>();
 
   constructor(
     private readonly opts: { factory: () => AppConnection; indexPath: string; log?: (line: string) => void },
@@ -78,6 +82,7 @@ export class CodexNames {
       const app = this.opts.factory();
       app.on('message', (f: AppFrame) => this.receive(f));
       app.on('disconnected', () => {
+        this.trustCache.clear();
         if (this.app === app) this.app = null;
       });
       try {
@@ -121,6 +126,42 @@ export class CodexNames {
       }
       return answered ? { available: true, meta: null } : { available: false };
     }
+  }
+
+  /** Bounded metadata-only evidence; a fresh push check never uses bind-time cached trust. */
+  async pushTrust(threadId: string, fresh = false): Promise<CodexPushTrust> {
+    const cached = this.trustCache.get(threadId);
+    if (!fresh && cached && Date.now() - cached.at < 2000) return cached.value;
+    let reason: CodexPushReason | null = 'app-server-unavailable';
+    const loaded = this.stopped ? null : await this.loadedThreads();
+    if (loaded && loaded.size <= 256) {
+      if (!loaded.has(threadId)) reason = 'root-not-loaded';
+      else {
+        const own = await this.read(threadId);
+        if (own.available && own.meta) {
+          if (!own.meta.root) reason = 'shared-root';
+          else {
+            reason = null;
+            const others = [...loaded].filter((id) => id !== threadId);
+            // Eight metadata reads at a time; unreadable entries cannot prove the absence of a shared root.
+            for (let i = 0; i < others.length; i += 8) {
+              const reads = await Promise.all(others.slice(i, i + 8).map((id) => this.read(id)));
+              if (reads.some((r) => r.available && r.meta?.sessionId === threadId)) {
+                reason = 'descendant-loaded';
+                break;
+              }
+              if (reads.some((r) => !r.available || !r.meta?.sessionId)) {
+                reason = 'app-server-unavailable';
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+    const value: CodexPushTrust = reason === null ? { trusted: true, reason: null } : { trusted: false, reason };
+    if (!this.stopped) this.trustCache.set(threadId, { at: Date.now(), value });
+    return value;
   }
 
   async verifyRoot(threadId: string): Promise<boolean> {
@@ -180,6 +221,7 @@ export class CodexNames {
 
   stop(): void {
     this.stopped = true;
+    this.trustCache.clear();
     this.app?.close();
     this.app = null;
   }

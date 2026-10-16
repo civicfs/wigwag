@@ -7,6 +7,8 @@ export interface SessionCapabilities {
   resume_recovery: 'native-id' | 'verified-root-only' | 'unavailable';
   resume_recovery_reason?: string;
   delivery: 'push' | 'hook-boundary' | 'codex-queue';
+  codex_push?: 'trusted' | 'held';
+  codex_push_reason?: SessionRow['codex_push_reason'];
   /** W8: how an MCP disconnect is told apart from the parent closing. */
   parent_liveness: 'process-identity' | 'thread-loaded' | 'unavailable';
 }
@@ -27,7 +29,9 @@ export function capabilitiesFor(broker: Broker, s: SessionRow): SessionCapabilit
         ? 'verified-root-only'
         : 'unavailable',
     ...(broker.trustedThreadId(s) === null ? { resume_recovery_reason: 'codex-thread-id-untrusted' } : {}),
-    delivery: 'codex-queue',
+    delivery: s.codex_push_reason ? 'hook-boundary' : 'codex-queue',
+    codex_push: s.codex_push_reason ? 'held' : 'trusted',
+    codex_push_reason: s.codex_push_reason,
     parent_liveness: app && s.agent_session_id ? 'thread-loaded' : 'unavailable',
   };
 }

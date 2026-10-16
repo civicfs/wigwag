@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Broker } from '../../src/broker/server.js';
@@ -426,6 +426,7 @@ describe('workspace scoping fix round 1 (R42): provenance authorization, takeove
 describe('workspace scoping security round 2 (R46)', () => {
   afterEach(() => {
     delete process.env.FAKE_CODEX_SLEEP_MS;
+    delete process.env.FAKE_CODEX_STARTED_LOG;
   });
   const offline = (sessionId: string) => until(() => getSession(broker.db, sessionId)?.state === 'offline');
   const inboxIds = async (c: { client: Client }) =>
@@ -461,11 +462,13 @@ describe('workspace scoping security round 2 (R46)', () => {
 
   it('N1: a push that completes after its name changed hands stays stuck and grants nothing', async () => {
     process.env.FAKE_CODEX_SLEEP_MS = '1200';
+    const started = join(home, 'codex-started.log');
+    process.env.FAKE_CODEX_STARTED_LOG = started;
     const w = await codex('worker-one', repoA, 'thread-a');
     const a = await join2('alpha-one', repoA);
     const { ref } = await a.client.call<{ ref: string }>('blob.put', { text: 'n1-secret', media_type: 'text/plain' });
     const sending = send(a, 'worker-one', { attachments: [ref] });
-    await until(() => deliveryTo('worker-one') !== undefined);
+    await until(() => existsSync(started));
     const id = (deliveryTo('worker-one') as { message_id: string }).message_id;
     await w.client.call('session.register', { name: 'worker-two' });
     const b = await join2('worker-one', repoB);

@@ -55,6 +55,7 @@ describe('threadMeta', () => {
   it('a root thread is its own session id, has no parent and a non-sub-agent source', () => {
     expect(threadMeta({ thread: root('t1', 'Named') }, 't1')).toEqual({
       id: 't1',
+      sessionId: 't1',
       name: 'Named',
       root: true,
       forkedFromId: null,

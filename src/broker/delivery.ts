@@ -31,6 +31,7 @@ export interface EngineDeps {
   emitFeed: (type: FeedData['type'], payload: unknown) => void;
   log: (line: string) => void;
   now?: () => number;
+  codexPushTrust?: (session: SessionRow) => Promise<string | null>;
 }
 
 type Key = { message_id: string; recipient: string };
@@ -317,6 +318,18 @@ export class DeliveryEngine {
 
   private async push(session: SessionRow, wake: Key[]): Promise<void> {
     if (this.stopped) return;
+    if (session.agent === 'codex' && this.d.codexPushTrust) {
+      const reason = await this.d.codexPushTrust(session);
+      if (this.stopped) return;
+      if (reason) {
+        for (const k of wake)
+          this.moveIf(k, ['pending', 'held', 'failed'], 'held', {
+            hold_reason: 'codex-untrusted',
+            last_error: `Codex push held: thread identity unverified (${reason})`,
+          });
+        return;
+      }
+    }
     const transport = session.agent === 'claude' ? this.d.transports.claude : this.d.transports.codex;
     // Codex cannot be shown hook context reliably (spike S4), so a wake push to Codex also carries its held
     // low/muted items. This never wakes Codex on its own: it only rides along with a push that already wakes.
@@ -328,7 +341,9 @@ export class DeliveryEngine {
             .filter((k) => !wake.some((w) => w.message_id === k.message_id) && !this.busy(k))
         : [];
     // Spec §17: out-of-scope keys (including Codex ride-along items) become stuck here and are not pushed.
-    const allowedKeys = [...wake, ...ride].filter((k) => this.allowed(k));
+    const allowedKeys = [...wake, ...ride].filter(
+      (k) => ['pending', 'held', 'failed'].includes(this.stateOf(k) ?? '') && this.allowed(k),
+    );
     // Final review I-11: an item this transport can never carry (over the codex argv budget) is stuck at once, with a
     // notice, instead of being retried max_attempts times; it also never blocks the wake push it would ride along.
     const pairs = allowedKeys.flatMap((k) => {
@@ -380,7 +395,9 @@ export class DeliveryEngine {
           if (!due.has(DeliveryEngine.id(k))) continue;
           try {
             if (this.stateOf(k) !== from) continue; // changed during the push (swept, read): not ours to fail
-            if (session.agent === 'claude') {
+            if ((err as { data?: { hold_reason?: string } }).data?.hold_reason === 'codex-untrusted') {
+              this.moveIf(k, [from], 'held', { hold_reason: 'codex-untrusted', last_error: err.message });
+            } else if (session.agent === 'claude') {
               // No live channel is an offline hold, not a retryable failure.
               this.moveIf(k, [from], 'held', { hold_reason: 'offline', last_error: (err as Error).message });
             } else {
@@ -532,7 +549,10 @@ export class DeliveryEngine {
     const wake: Key[] = [];
     const backlog = deliveriesFor(this.d.db, session.name, ['held']).filter(
       (x) =>
-        (x.hold_reason === 'offline' || x.hold_reason === 'unbound' || x.hold_reason === 'disconnected') &&
+        (x.hold_reason === 'offline' ||
+          x.hold_reason === 'unbound' ||
+          x.hold_reason === 'disconnected' ||
+          x.hold_reason === 'codex-untrusted') &&
         !this.busy(x) &&
         this.allowed({ message_id: x.message_id, recipient: x.recipient }),
     );

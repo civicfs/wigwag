@@ -127,7 +127,10 @@ names do not replace the canonical name.
 Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
 a shared tree-root ID. `whoami` reports `unavailable` with reason
 `codex-thread-id-untrusted`. A future trusted concrete thread ID must also pass
-root verification. Existing Codex queue delivery still uses the presented ID.
+root verification. Codex queue pushes require a loaded root with no other loaded thread sharing its
+root ID. Metadata is rechecked before each push; unavailable or ambiguous evidence
+holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
+(<reason>)`. This push check does not enable automatic slot recovery.
 
 `wigwag recovery` shows duplicate slots with names, name sources, last-seen times,
 state/link, assignment IDs and roles, and held/pending and total undelivered mail

@@ -108,7 +108,7 @@ it('does not record a late transport completion after drain expires and the db c
 });
 
 it('a bounded drain cancels active and later chunks, keeping already queued chunks pushed (final Codex I-10)', async () => {
-  const { broker, engine, logs } = setup(new CodexQueueTransport(FAKE_CODEX, 5000));
+  const { broker, engine, logs } = setup(new CodexQueueTransport(FAKE_CODEX, 5000, async () => null));
   broker.config.codex.queue_timeout_ms = 100;
   const log = join(broker.home, 'calls.jsonl');
   process.env.FAKE_CODEX_LOG = log;

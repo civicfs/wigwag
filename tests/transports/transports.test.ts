@@ -34,6 +34,7 @@ const session = (o: Partial<SessionRow> = {}): SessionRow => ({
   agent_pid: null,
   agent_start: null,
   parent_checked_at: null,
+  codex_push_reason: null,
   ...o,
 });
 const items = (n: number, body = 'hello'): RenderItem[] =>
@@ -110,10 +111,29 @@ describe('bounded Claude channel batches', () => {
 });
 
 describe('CodexQueueTransport', () => {
+  it('fails closed without evidence and rechecks every chunk before executing queue', async () => {
+    const log = join(tmpHome(), 'queue-trust.jsonl');
+    process.env.FAKE_CODEX_LOG = log;
+    await expect(new CodexQueueTransport(FAKE_CODEX, 5000).push(session(), items(1))).rejects.toMatchObject({
+      data: { hold_reason: 'codex-untrusted' },
+    });
+    expect(existsSync(log)).toBe(false);
+    let checks = 0;
+    const acked: RenderItem[] = [];
+    const transport = new CodexQueueTransport(FAKE_CODEX, 5000, async () =>
+      ++checks === 1 ? null : 'descendant-loaded',
+    );
+    await expect(
+      transport.push(session(), items(3, 'x'.repeat(60000)), { onPushed: (part) => acked.push(...part) }),
+    ).rejects.toMatchObject({ data: { hold_reason: 'codex-untrusted' } });
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(acked).toHaveLength(1);
+    expect(checks).toBe(2);
+  });
   it('runs codex queue --thread <id> --message <text>', async () => {
     const log = join(tmpHome(), 'calls.jsonl');
     process.env.FAKE_CODEX_LOG = log;
-    await new CodexQueueTransport(FAKE_CODEX, 5000).push(session(), items(1));
+    await new CodexQueueTransport(FAKE_CODEX, 5000, async () => null).push(session(), items(1));
     const [call] = readFileSync(log, 'utf8')
       .trim()
       .split('\n')
@@ -125,7 +145,7 @@ describe('CodexQueueTransport', () => {
     const log = join(tmpHome(), 'calls.jsonl');
     process.env.FAKE_CODEX_LOG = log;
     const big = 'x'.repeat(Math.floor(CODEX_ARG_BUDGET_BYTES / 3));
-    await new CodexQueueTransport(FAKE_CODEX, 5000).push(session(), items(5, big));
+    await new CodexQueueTransport(FAKE_CODEX, 5000, async () => null).push(session(), items(5, big));
     const calls = readFileSync(log, 'utf8').trim().split('\n');
     expect(calls.length).toBeGreaterThan(1);
     for (const c of calls) {
@@ -137,7 +157,7 @@ describe('CodexQueueTransport', () => {
   it('rejects an item over the argv budget without sending anything', async () => {
     const log = join(tmpHome(), 'calls.jsonl');
     process.env.FAKE_CODEX_LOG = log;
-    const t = new CodexQueueTransport(FAKE_CODEX, 5000);
+    const t = new CodexQueueTransport(FAKE_CODEX, 5000, async () => null);
     await expect(
       t.push(session(), [...items(1), ...items(1, 'x'.repeat(CODEX_ARG_BUDGET_BYTES))]),
     ).rejects.toMatchObject({
@@ -147,7 +167,7 @@ describe('CodexQueueTransport', () => {
     expect(existsSync(log)).toBe(false);
   });
   it('normalizes synchronous execFile throws (NUL byte) without quoting the argument', async () => {
-    const err = await new CodexQueueTransport(FAKE_CODEX, 5000)
+    const err = await new CodexQueueTransport(FAKE_CODEX, 5000, async () => null)
       .push(session(), items(1, 'SECRET\u0000b'))
       .catch((e: unknown) => e);
     expect(err).toMatchObject({ code: 'transport' });
@@ -158,7 +178,7 @@ describe('CodexQueueTransport', () => {
     process.env.FAKE_CODEX_LOG = log;
     const body = 'é✓'.repeat(Math.floor(CODEX_ARG_BUDGET_BYTES / 6 / 2));
     const its = items(4, body);
-    await new CodexQueueTransport(FAKE_CODEX, 5000).push(session(), its);
+    await new CodexQueueTransport(FAKE_CODEX, 5000, async () => null).push(session(), its);
     const argvs: string[] = readFileSync(log, 'utf8')
       .trim()
       .split('\n')
@@ -174,7 +194,7 @@ describe('CodexQueueTransport', () => {
   });
   it('rejects with stderr metadata on failure, and when unbound or the binary is missing', async () => {
     process.env.FAKE_CODEX_MODE = 'fail';
-    const failed = await new CodexQueueTransport(FAKE_CODEX, 5000)
+    const failed = await new CodexQueueTransport(FAKE_CODEX, 5000, async () => null)
       .push(session(), items(1, 'SECRET body'))
       .catch((e: unknown) => e);
     expect(failed).toMatchObject({
@@ -183,9 +203,11 @@ describe('CodexQueueTransport', () => {
     });
     expect((failed as Error).message).not.toMatch(/SECRET|--message|thread-1/);
     await expect(
-      new CodexQueueTransport(FAKE_CODEX, 5000).push(session({ agent_session_id: null }), items(1)),
+      new CodexQueueTransport(FAKE_CODEX, 5000, async () => null).push(session({ agent_session_id: null }), items(1)),
     ).rejects.toMatchObject({ code: 'unbound' });
-    await expect(new CodexQueueTransport('/nonexistent/codex', 5000).push(session(), items(1))).rejects.toMatchObject({
+    await expect(
+      new CodexQueueTransport('/nonexistent/codex', 5000, async () => null).push(session(), items(1)),
+    ).rejects.toMatchObject({
       code: 'transport',
       message: expect.stringMatching(/ENOENT/),
     });

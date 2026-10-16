@@ -23,6 +23,33 @@ const msg: MessageRow = {
 };
 
 describe('tui components', () => {
+  it('shows why a Codex queue push is held', () => {
+    const text = 'Codex push held: thread identity unverified (descendant-loaded)';
+    const f =
+      render(
+        <SessionsPane
+          sessions={[
+            {
+              id: 's',
+              name: 'worker',
+              agent: 'codex',
+              state: 'online-idle',
+              cwd: '/',
+              workspace: '/',
+              workspace_label: '/',
+              bound: true,
+              unread: 0,
+              last_seen_at: '',
+              codex_push: text,
+            },
+          ]}
+          selected={0}
+          focused
+          width={120}
+        />,
+      ).lastFrame() ?? '';
+    expect(f).toContain(text);
+  });
   it('sessions pane says when the parent is open but the MCP is disconnected (W8)', () => {
     const base = {
       agent: 'claude' as const,

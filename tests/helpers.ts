@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -9,10 +10,11 @@ import type { Broker } from '../src/broker/server.js';
 import { sockPath } from '../src/client/autospawn.js';
 import { Client } from '../src/client/client.js';
 import { configPath, initHome, loadConfig } from '../src/config.js';
-import { codexIndexPath } from '../src/native/codex-names.js';
+import { CodexNames, codexIndexPath } from '../src/native/codex-names.js';
 import { noProcesses } from '../src/proc/identity.js';
 import { frameLimit } from '../src/protocol/frame.js';
 import type { Hello, PushData } from '../src/protocol/rpc.js';
+import { listSessions } from '../src/store/sessions.js';
 
 export const FAKE_CODEX = resolve(import.meta.dirname, 'fixtures/fake-codex.mjs');
 export const STARTED_PRELOAD = resolve(import.meta.dirname, 'fixtures/started.mjs');
@@ -51,7 +53,37 @@ export async function startBroker(
 export async function startTestBroker(home = tmpHome()): Promise<{ home: string; broker: Broker }> {
   // W8: a probe that knows no process, so no session records a parent and a closed MCP client goes offline at once,
   // as before. Liveness tests pass their own probe to startBroker.
-  return { home, broker: await startBroker(home, { processProbe: noProcesses }) };
+  let broker: Broker | undefined;
+  const names = fixtureCodexNames(home, () =>
+    broker
+      ? listSessions(broker.db).flatMap((s) =>
+          s.agent === 'codex' && s.state !== 'offline' && s.link === 'connected' && s.agent_session_id
+            ? [s.agent_session_id]
+            : [],
+        )
+      : [],
+  );
+  broker = await startBroker(home, { processProbe: noProcesses, codexNames: names });
+  return { home, broker };
+}
+
+/** Transport tests explicitly model independent loaded roots. Push-identity tests inject their own sharing/outage evidence. */
+export function fixtureCodexNames(home: string, ids: () => string[]): CodexNames {
+  class Metadata extends EventEmitter {
+    async connect() {}
+    async call(method: string, p: { threadId?: string }) {
+      return method === 'thread/loaded/list'
+        ? { data: [...new Set(ids())] }
+        : {
+            thread: { id: p.threadId, sessionId: p.threadId, source: 'cli', parentThreadId: null, name: null },
+          };
+    }
+    send() {}
+    close() {
+      this.emit('disconnected');
+    }
+  }
+  return new CodexNames({ factory: () => new Metadata(), indexPath: join(home, 'missing-index') });
 }
 
 export async function ownerClient(home: string): Promise<Client> {

@@ -122,6 +122,12 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
 
   const probeOnce = async () => {
     const sessions = listSessions(db);
+    for (const s of sessions.filter(
+      (s) => s.agent === 'codex' && s.agent_session_id && !s.retired_at && s.state !== 'offline',
+    )) {
+      await broker.checkCodexPush(s, true);
+      if (stopped) return;
+    }
     const current = new Map(sessions.map((s) => [s.id, s]));
     for (const [id, grace] of unknownSince) {
       const s = current.get(id);

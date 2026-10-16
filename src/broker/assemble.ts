@@ -10,6 +10,7 @@ import { ClaudeChannelTransport } from '../transports/claude-channel.js';
 import { CodexQueueTransport } from '../transports/codex-queue.js';
 import type { TransportRegistry } from '../transports/types.js';
 import { VERSION } from '../version.js';
+import { installCodexPushTrust } from './codex-push.js';
 import { DeliveryEngine } from './delivery.js';
 import { installData } from './handlers/data.js';
 import { installMessages } from './handlers/messages.js';
@@ -28,6 +29,7 @@ function installSys(broker: Broker): void {
 function installDelivery(broker: Broker, transports: TransportRegistry): DeliveryEngine {
   const engine = new DeliveryEngine({
     db: broker.db,
+    codexPushTrust: (s) => broker.checkCodexPush(s, true),
     config: broker.config,
     transports,
     emitFeed: (type, payload) => broker.broadcastOwner(type, payload),
@@ -62,7 +64,9 @@ export async function startBroker(
   if (opts.processProbe) broker.processProbe = opts.processProbe;
   const transports = opts.transports ?? {
     claude: new ClaudeChannelTransport((id) => broker.connectionFor(id)),
-    codex: new CodexQueueTransport(config.codex.binary, config.codex.queue_timeout_ms),
+    codex: new CodexQueueTransport(config.codex.binary, config.codex.queue_timeout_ms, (s) =>
+      broker.checkCodexPush(s, true),
+    ),
   };
   installSys(broker);
   installIdentity(broker);
@@ -85,6 +89,7 @@ export async function startBroker(
       }),
     opts.codexNameRefreshMs,
   );
+  installCodexPushTrust(broker);
   installLiveness(broker, opts.liveness);
   const codexQuestions = new CodexQuestions(questions);
   questions.prepareCodex = (session) => codexQuestions.attach(session);

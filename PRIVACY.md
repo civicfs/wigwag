@@ -51,8 +51,8 @@ other sidecar files can contain that content too. Blob files and logs are also
 unencrypted. The home directory and socket use OS permissions; those permissions
 restrict access but do not encrypt stored data. Processes running as the same OS
 user, host administrators, and backups with sufficient access can read it.
-Before the schema v3 upgrade, an existing database is copied to
-`state.db.pre-v3.bak` with mode 0600. This backup contains the same clear-text data
+Before each schema v3/v4 upgrade, an existing database is copied to
+`state.db.pre-v3.bak` or `state.db.pre-v4.bak` with mode 0600. This backup contains the same clear-text data
 and remains after a successful upgrade or when the migration outcome cannot be
 confirmed. A confirmed rollback removes only the backup created by that attempt.
 A pre-existing backup is never overwritten or removed by migration and blocks
@@ -93,7 +93,7 @@ lineage history. Forced retirement can exclude slots that still hold work.
 1. Close all connected Claude Code and Codex sessions so they cannot restart the broker.
 2. Run `wigwag broker stop`.
 3. Identify the home directory using the precedence above, then manually delete that directory. This permanently
-   removes its configuration, database, SQLite sidecar files and any `state.db.pre-v3.bak` backup, history, logs,
+   removes its configuration, database, SQLite sidecar files and any `state.db.pre-v3.bak` / `state.db.pre-v4.bak` backups, history, logs,
    and blobs. Reinitialize before reuse.
 4. Separately address exports, destination files written by `blob_get`, backups, and provider-held copies. Deleting
    the Wigwag home directory does not delete those copies or agent conversation history.

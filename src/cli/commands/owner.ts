@@ -44,7 +44,7 @@ export const cmdWho = () =>
           x.role ?? 'peer',
           x.orchestration?.orchestrator_name ?? '-',
           x.workers?.map((w) => w.name ?? w.session_id).join(', ') || '-',
-          x.liveness ? `${x.state} (${x.liveness})` : x.state,
+          [x.state, x.liveness, x.codex_push].filter(Boolean).join(' · '),
           String(x.unread),
           x.bound ? 'yes' : 'no',
           x.last_seen_at,
@@ -300,6 +300,7 @@ type RecoveryReport = {
     created_at: string;
   }>;
   duplicates: DuplicateGroup[];
+  codex_push_untrusted?: Array<{ session_id: string; name: string | null; codex_push: string }>;
 };
 
 export async function cmdRecovery(args: string[]): Promise<void> {
@@ -321,6 +322,13 @@ export async function cmdRecovery(args: string[]): Promise<void> {
     const r = await c.call<RecoveryReport>('owner.recovery', {});
     if (args.includes('--json')) return out(JSON.stringify(r, null, 2));
     const parts: string[] = [];
+    if (r.codex_push_untrusted?.length)
+      parts.push(
+        table([
+          ['SLOT', 'NAME', 'CODEX PUSH'],
+          ...r.codex_push_untrusted.map((s) => [s.session_id, s.name ?? '-', s.codex_push]),
+        ]),
+      );
     if (r.flags.length)
       parts.push(
         table([

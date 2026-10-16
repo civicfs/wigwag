@@ -188,7 +188,12 @@ vitest, linted with biome.
   Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
   thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the
   binding and pass metadata root verification. Untrusted binds preserve offline canonical bindings and record
-  `codex-thread-id-untrusted`; non-offline holders refuse. Legacy queue pushes still address the presented ID.
+  `codex-thread-id-untrusted`; non-offline holders refuse. Codex queue pushes require metadata evidence that the presented ID is a loaded root and no other loaded thread
+  shares its sessionId. The metadata-only reader checks bind, probes and each queue push (fresh before dispatch),
+  reads at most 256 loaded threads in batches of eight, and caches non-push checks for 2 s. Unavailable/malformed
+  evidence fails closed. Reasons are shared-root, root-not-loaded, descendant-loaded or app-server-unavailable;
+  deliveries hold as codex-untrusted and remain accessible through hooks/inbox. Public session/capability/TUI/recovery
+  diagnostics show the reason. This gate does not enable automatic Codex slot recovery.
   `whoami.capabilities` reports recovery unavailable with that reason. `wigwag recovery` reports duplicate slot
   names, name sources, times, state/link, active assignment IDs/roles, held/pending counts and total undelivered counts.
   `owner.retire_slot` refuses an active assignment or any of the four undelivered mail states unless `force:true`

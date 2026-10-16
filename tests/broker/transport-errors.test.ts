@@ -22,7 +22,7 @@ it('keeps stderr echoes out of stored errors, audit events, notices and owner de
     config,
     transports: {
       claude: { kind: 'claude-channel', push: async () => {} },
-      codex: new CodexQueueTransport(FAKE_CODEX, 5000),
+      codex: new CodexQueueTransport(FAKE_CODEX, 5000, async () => null),
     },
     emitFeed: (_type, payload) => ownerFeed.push(payload),
     log: () => {},

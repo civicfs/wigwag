@@ -12,6 +12,7 @@ import { describeError } from '../../src/mcp/server.js';
 import {
   BOUND_SLACK_MS,
   DIST_MAIN,
+  fixtureCodexNames,
   killSpawnedBrokers,
   ownerClient,
   readCodexCalls,
@@ -100,16 +101,23 @@ describe('MCP server', () => {
   it('claude → codex: session_bind via hook-only tool, then delivery runs codex queue', async () => {
     home = tmpHome();
     const log = join(home, 'codex.jsonl');
-    // The first MCP server autospawns the broker, which inherits its env: pass the log path to both.
-    const a = await start('claude', 'alpha-one', { FAKE_CODEX_LOG: log });
-    const c = await start('codex', 'codex-merger', { FAKE_CODEX_LOG: log });
-    await c.client.callTool({ name: 'session_bind', arguments: { session_id: 'thread-77' } });
-    await a.client.callTool({
-      name: 'send',
-      arguments: { to: 'codex-merger', subject: 's', body: 'to codex', priority: 'normal' },
-    });
-    await until(() => readCodexCalls(log).length === 1);
-    expect(readCodexCalls(log)[0].argv.slice(0, 3)).toEqual(['queue', '--thread', 'thread-77']);
+    // Metadata evidence is injected; native sockets and thread interaction stay in fixtures.
+    process.env.FAKE_CODEX_LOG = log;
+    const broker = await startBroker(home, { codexNames: fixtureCodexNames(home, () => ['thread-77']) });
+    try {
+      const a = await start('claude', 'alpha-one', { FAKE_CODEX_LOG: log });
+      const c = await start('codex', 'codex-merger', { FAKE_CODEX_LOG: log });
+      await c.client.callTool({ name: 'session_bind', arguments: { session_id: 'thread-77' } });
+      await a.client.callTool({
+        name: 'send',
+        arguments: { to: 'codex-merger', subject: 's', body: 'to codex', priority: 'normal' },
+      });
+      await until(() => readCodexCalls(log).length === 1);
+      expect(readCodexCalls(log)[0].argv.slice(0, 3)).toEqual(['queue', '--thread', 'thread-77']);
+    } finally {
+      await broker.stop();
+      delete process.env.FAKE_CODEX_LOG;
+    }
   });
 
   it('kv_cas works with the argument shapes Claude Code sends (E4): "null" version and JSON-text value', async () => {

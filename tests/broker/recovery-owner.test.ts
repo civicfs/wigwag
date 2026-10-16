@@ -228,7 +228,8 @@ describe('owner recovery diagnostics (W7)', () => {
   });
 
   it('whoami states what this session supports', async () => {
-    const { home, broker } = await startTestBroker();
+    const home = tmpHome();
+    const broker = await startBroker(home);
     cleanup.push(() => broker.stop());
     const claude = await mcp(home, { channel: false });
     expect(await claude.client.call('session.whoami')).toMatchObject({
@@ -246,7 +247,9 @@ describe('owner recovery diagnostics (W7)', () => {
       capabilities: {
         native_names: 'codex-session-index',
         resume_recovery: 'unavailable',
-        delivery: 'codex-queue',
+        delivery: 'hook-boundary',
+        codex_push: 'held',
+        codex_push_reason: 'app-server-unavailable',
         parent_liveness: 'unavailable',
       },
     });

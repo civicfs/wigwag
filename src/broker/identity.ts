@@ -542,6 +542,7 @@ export function installIdentity(broker: Broker): void {
         if (!r.ok) refuse(r.holder);
       }
     }
+    if (self.agent === 'codex') await broker.checkCodexPush(me(conn.sessionId), true, false);
     applyLaunchIntent(me(conn.sessionId));
     announce(conn.sessionId as string);
     broker.bus.emit('session.bound', me(conn.sessionId));

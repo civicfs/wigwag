@@ -68,6 +68,11 @@ export class Broker {
   questions!: QuestionService;
   naming!: NameService;
   codexNames: CodexNames | null = null;
+  checkCodexPush: (
+    s: SessionRow,
+    fresh?: boolean,
+    announce?: boolean,
+  ) => Promise<import('../store/sessions.js').CodexPushReason | null> = async () => 'app-server-unavailable';
   processProbe: ProcessProbe = systemProbe;
   /** No trusted concrete Codex thread ID is available from the shipped hooks yet. */
   trustedThreadId: (session: SessionRow) => string | null = () => null;

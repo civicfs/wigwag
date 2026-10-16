@@ -27,6 +27,7 @@ export class CodexQueueTransport implements Transport {
   constructor(
     private readonly binary: string,
     private readonly timeoutMs: number,
+    private readonly verify: (s: SessionRow) => Promise<string | null> = async () => 'app-server-unavailable',
   ) {}
 
   tooLarge(it: RenderItem): string | null {
@@ -48,6 +49,11 @@ export class CodexQueueTransport implements Transport {
     }
     for (const part of chunk(items)) {
       if (options.signal?.aborted) throw new WigwagError('transport', 'codex queue cancelled during shutdown');
+      const reason = await this.verify(session);
+      if (reason)
+        throw new WigwagError('unbound', `Codex push held: thread identity unverified (${reason})`, {
+          hold_reason: 'codex-untrusted',
+        });
       await this.queue(thread, renderCodex(part), options.signal);
       options.onPushed?.(part);
     }

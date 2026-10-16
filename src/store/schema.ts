@@ -297,3 +297,29 @@ CREATE TABLE session_renames (
 );
 ${appendOnly('session_renames')}
 `;
+
+/** Metadata-derived Codex push evidence is refreshed at bind/probe and immediately before queueing. */
+export const SCHEMA_V4 = `
+ALTER TABLE sessions ADD COLUMN codex_push_reason TEXT DEFAULT 'app-server-unavailable'
+  CHECK (codex_push_reason IN ('shared-root', 'root-not-loaded', 'descendant-loaded', 'app-server-unavailable'));
+CREATE TABLE deliveries_v4 (
+  message_id TEXT NOT NULL REFERENCES messages (id),
+  recipient TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'held', 'pushed', 'failed', 'stuck', 'read')),
+  hold_reason TEXT CHECK (hold_reason IN ('offline', 'unbound', 'low', 'muted', 'throttled', 'disconnected', 'codex-untrusted')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  transport TEXT,
+  next_attempt_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (message_id, recipient)
+);
+INSERT INTO deliveries_v4 (message_id, recipient, state, hold_reason, attempts, last_error, transport, next_attempt_at,
+  updated_at)
+  SELECT message_id, recipient, state, hold_reason, attempts, last_error, transport, next_attempt_at, updated_at
+  FROM deliveries;
+DROP TABLE deliveries;
+ALTER TABLE deliveries_v4 RENAME TO deliveries;
+CREATE INDEX deliveries_recipient_state ON deliveries (recipient, state);
+CREATE INDEX deliveries_state ON deliveries (state);
+`;
