@@ -128,6 +128,14 @@ launch or register name on the new slot is kept when it can be claimed; otherwis
 the canonical name stays and lineage records the reason. Native and provisional
 names do not replace the canonical name.
 
+An in-process Claude `/resume` leaves the previous conversation's slot offline
+with its name, mail, assignments and question relays intact. The MCP connection
+moves to a fresh provisional slot and may reclaim the resumed conversation's
+unique canonical slot. Ambiguous or live-held destinations leave it unbound.
+The MCP remembers the new slot ID. After a crash, a stale hint from the same
+verified MCP process is ignored until a trusted hook binds the conversation;
+switch records never redirect a connection to another slot.
+
 Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
 a shared tree-root ID. `whoami` reports `unavailable` with reason
 `codex-thread-id-untrusted`. A future trusted concrete thread ID must also pass

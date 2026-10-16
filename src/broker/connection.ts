@@ -54,7 +54,7 @@ export class Connection {
     this.write({ id, error });
   }
 
-  event(name: 'push' | 'feed', data: unknown): boolean {
+  event(name: 'push' | 'feed' | 'session.identity', data: unknown): boolean {
     return this.write({ event: name, data });
   }
 

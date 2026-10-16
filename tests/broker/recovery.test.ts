@@ -417,9 +417,10 @@ describe('claude resume recovery (W7)', () => {
     expect(live.map((s) => s.id)).toEqual([old.welcome.session_id]);
   });
 
-  it('an in-process conversation switch never adopts another slot; it is recorded as a switch', async () => {
+  it('an in-process conversation switch splits the old slot and adopts the other conversation’s canonical slot', async () => {
     const { home, broker } = await boot();
-    const { old: other, h } = await oldSession(home, 'other-conv');
+    const other = await mcp(home, 400, { requested_name: 'other-conv' });
+    const h = await hook(home);
     await h.call('hook.event', ev('SessionStart', 400, 'sid-2'));
     other.client.close();
     await settle();
@@ -429,9 +430,15 @@ describe('claude resume recovery (W7)', () => {
     await h.call('hook.event', ev('UserPromptSubmit', 800, 'sid-2'));
     expect(getSession(broker.db, live.welcome.session_id)).toMatchObject({
       name: 'live-one',
-      agent_session_id: 'sid-2',
+      agent_session_id: 'sid-1',
+      state: 'offline',
+      link: 'disconnected',
     });
-    expect(getSession(broker.db, other.welcome.session_id)).toMatchObject({ state: 'offline', name: 'other-conv' });
+    expect(await live.client.call('session.whoami')).toMatchObject({
+      id: other.welcome.session_id,
+      name: 'other-conv',
+    });
+    expect(getSession(broker.db, other.welcome.session_id)).toMatchObject({ state: 'online-busy', name: 'other-conv' });
     expect(listLineage(broker.db, { limit: 5 }).map((l) => [l.cause, l.outcome, l.previous_native_id])).toContainEqual([
       'switch',
       'observed',

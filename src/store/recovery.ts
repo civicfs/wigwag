@@ -1,3 +1,4 @@
+import type { ProcessIdentity } from '../proc/identity.js';
 import { HANDSHAKE_VERSIONS, type Hello } from '../protocol/rpc.js';
 import { isLegacySession, recordClientCompatibility } from './compatibility.js';
 import { type Db, nowIso, tx } from './db.js';
@@ -79,6 +80,21 @@ export function listLineage(
     )
     .all(...args, q.limit) as Array<Omit<LineageRow, 'evidence'> & { evidence_json: string }>;
   return rows.map(({ evidence_json, ...r }) => ({ ...r, evidence: JSON.parse(evidence_json) }));
+}
+
+/** No redirects: only ignore a hint this exact verified MCP most recently switched away from. */
+export function switchedAwayHint(db: Db, id: string, workspace: string, mcp: ProcessIdentity | null): boolean {
+  if (!mcp) return false;
+  const latest = db
+    .prepare(`SELECT session_id, canonical_session_id FROM session_lineage
+    WHERE agent='claude' AND cause='switch' AND outcome='observed' AND reason='conversation-split'
+      AND workspace=? AND (session_id=? OR canonical_session_id=?)
+      AND json_extract(evidence_json,'$.mcp_pid')=? AND json_extract(evidence_json,'$.mcp_start')=?
+    ORDER BY id DESC LIMIT 1`)
+    .get(workspace, id, id, mcp.pid, mcp.start) as
+    | { session_id: string; canonical_session_id: string | null }
+    | undefined;
+  return latest?.session_id === id && latest.canonical_session_id !== id;
 }
 
 const sessionsByIds = (db: Db, rows: unknown[]): SessionRow[] =>

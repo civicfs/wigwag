@@ -7,7 +7,7 @@ import { loadConfig, resolveHome } from '../config.js';
 import { WigwagError } from '../errors.js';
 import { pidChain } from '../proc/ancestors.js';
 import { loadsWigwagChannel, processArgs } from '../proc/channel-flag.js';
-import type { Hello, PushData } from '../protocol/rpc.js';
+import { type Hello, type PushData, SessionIdentityZ } from '../protocol/rpc.js';
 import type { Agent } from '../store/sessions.js';
 import { VERSION } from '../version.js';
 import { hookOrigin } from './hook-origin.js';
@@ -146,6 +146,11 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
       client = new ReconnectingClient({ home, config, entry, hello });
       pending = client;
       client.on('event', (name: string, data: unknown) => {
+        if (name === 'session.identity') {
+          const parsed = SessionIdentityZ.safeParse(data);
+          if (parsed.success) sessionId = parsed.data.session_id;
+          return;
+        }
         if (agent !== 'claude' || name !== 'push') return;
         sendPush(data as PushData);
       });

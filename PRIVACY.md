@@ -31,7 +31,9 @@ flow and does not read provider credential stores or forward agent conversation 
 Native naming reads local Claude title sidecars and bounded transcript tails, or Codex thread metadata and bounded
 session-index tails. It stores the display title and transcript reference path; it does not relay conversation
 transcripts for naming. Resume lineage records keep native IDs, slot IDs, provenance, recovery outcomes, explicit
-name choices and claim refusal reasons. Owner recovery reports include names, name sources, timestamps, connection
+name choices and claim refusal reasons. Claude conversation-switch records also retain source/target slot IDs,
+workspace and the MCP process's verified pid/start identity when available, to ignore stale reconnect hints without
+redirecting them. Owner recovery reports include names, name sources, timestamps, connection
 state, assignment IDs/roles and undelivered-mail counts. Codex automatic slot recovery is disabled because the hook's
 shared tree-root ID does not establish a concrete conversation identity.
 Codex bind diagnostics also retain the MCP host client name/version and whether

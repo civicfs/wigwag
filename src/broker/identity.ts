@@ -8,9 +8,15 @@ import { trustedCodexHost, validateHookOrigin } from '../protocol/codex-hook.js'
 import type { Hello } from '../protocol/rpc.js';
 import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
 import { isLegacySession, recordClientCompatibility } from '../store/compatibility.js';
-import { tx } from '../store/db.js';
+import { nowIso, tx } from '../store/db.js';
 import { scopeOf } from '../store/links.js';
-import { adoptCanonical, liveNativeHolders, recordLineage, recoveryCandidates } from '../store/recovery.js';
+import {
+  adoptCanonical,
+  liveNativeHolders,
+  recordLineage,
+  recoveryCandidates,
+  switchedAwayHint,
+} from '../store/recovery.js';
 import {
   attachConnection,
   bindAgentSession,
@@ -158,16 +164,16 @@ export function installIdentity(broker: Broker): void {
   /**
    * W7: `self` (live) is about to bind `native`. With exactly one proven offline slot for this agent, native id and
    * workspace (and the gate passing: Codex requires a verified root thread), the live connection takes that canonical
-   * slot in one transaction and `self` is retired into it. Anything else returns null after recording lineage, and the
-   * caller binds `self` as before. A slot already bound to another conversation (Claude in-process /resume) never
-   * adopts: PID equality must not carry a slot to another conversation.
+   * slot in one transaction and `self` is retired into it. Refusals record lineage and return their reason; the
+   * caller decides whether a refused recovery may bind a new slot. Claude conversation switches first split off a
+   * fresh slot, so PID equality never carries the previous conversation's slot or baggage to another conversation.
    */
   const recoverOnBind = (
     self: SessionRow,
     native: string,
     evidence: Record<string, unknown>,
     gate: { verified: boolean; reason: string; legacyUpgrade?: boolean },
-  ): SessionRow | null => {
+  ): { adopted: SessionRow } | { refused: string } | null => {
     if (isLegacySession(db, self.id)) return null;
     const base = { agent: self.agent, native_id: native, workspace: self.workspace, session_id: self.id };
     if (self.agent_session_id !== null && self.agent_session_id !== native) {
@@ -188,7 +194,7 @@ export function installIdentity(broker: Broker): void {
       includeLegacy: self.agent === 'claude' && gate.verified && gate.legacyUpgrade === true,
     });
     if (!candidates.length) return null;
-    const flag = (reason: string): null => {
+    const flag = (reason: string): { refused: string } => {
       recordLineage(db, {
         ...base,
         cause: 'resume',
@@ -199,7 +205,7 @@ export function installIdentity(broker: Broker): void {
       broker.log(
         `resume recovery for ${self.agent} native ${native}: ${reason} (${candidates.map((c) => c.id).join(', ')}); ${self.id} stays a new slot`,
       );
-      return null;
+      return { refused: reason };
     };
     if (!gate.verified && gate.reason === 'codex-thread-id-untrusted') return flag(gate.reason);
     if (candidates.length > 1) return flag('ambiguous');
@@ -224,6 +230,7 @@ export function installIdentity(broker: Broker): void {
     provisional.delete(self.id);
     conn.sessionId = r.canonical.id;
     conn.generation = r.generation;
+    conn.event('session.identity', { session_id: conn.sessionId });
     let canonical = r.canonical;
     if (r.fromSource === 'custom' && r.fromName) {
       const choice = claimSessionName(broker, canonical.id, r.fromName, 'custom');
@@ -244,7 +251,7 @@ export function installIdentity(broker: Broker): void {
       `resume recovery: ${self.id} handed its connection to ${r.canonical.id} (${self.agent} native ${native}, generation ${r.generation})`,
     );
     broker.broadcastOwner('session', publicSession(db, getSession(db, self.id) as SessionRow));
-    return getSession(db, r.canonical.id) as SessionRow;
+    return { adopted: getSession(db, r.canonical.id) as SessionRow };
   };
 
   broker.onHello = async (conn, hello: Hello) => {
@@ -261,7 +268,12 @@ export function installIdentity(broker: Broker): void {
       !conn.legacy && hello.agent === 'claude' && mcpPid !== undefined
         ? captureIdentity(mcpPid, broker.processProbe)
         : null;
-    let s = hello.resume_session_id ? getSession(db, hello.resume_session_id) : undefined;
+    const ignoredHint =
+      !!hello.resume_session_id &&
+      !!conn.mcpIdentity &&
+      sameProcess(conn.mcpIdentity, broker.processProbe) === true &&
+      switchedAwayHint(db, hello.resume_session_id, workspace, conn.mcpIdentity);
+    let s = hello.resume_session_id && !ignoredHint ? getSession(db, hello.resume_session_id) : undefined;
     // W7: a slot handed over by a resume recovery points at its canonical slot; a reconnect hint follows it and never
     // revives a retired row.
     for (let hops = 0; !conn.legacy && s?.retired_into && hops < 8; hops++) s = getSession(db, s.retired_into);
@@ -275,7 +287,7 @@ export function installIdentity(broker: Broker): void {
     )
       s = undefined;
     // W8: a new MCP process under the same live Claude parent (plugin reload, MCP crash) re-attaches to its slot.
-    if (!s && !conn.legacy && hello.agent === 'claude' && hello.mcp_ppid !== undefined)
+    if (!s && !ignoredHint && !conn.legacy && hello.agent === 'claude' && hello.mcp_ppid !== undefined)
       s = reattachable(hello.mcp_ppid, workspace, conn);
     const rejoining = s;
     if (
@@ -328,7 +340,9 @@ export function installIdentity(broker: Broker): void {
     conn.channel = hello.channel;
     let warning: string | null = null;
     if (!getSession(db, s.id)?.name) {
-      const want = hello.requested_name;
+      // The same MCP still carries its launch environment after /resume. A stale A hint cannot donate A's
+      // custom name/mail to a new unbound slot while we wait for the next trusted B hook.
+      const want = ignoredHint ? undefined : hello.requested_name;
       let ok = false;
       if (want && RESERVED_NAMES.has(want)) warning = `requested name "${want}" is reserved; using a provisional name`;
       else if (want) {
@@ -580,7 +594,7 @@ export function installIdentity(broker: Broker): void {
               reason: self.agent === 'codex' && !codexThreadTrusted ? 'codex-thread-id-untrusted' : 'unverified-root',
             },
           );
-    if (recovered) self = recovered;
+    if (recovered && 'adopted' in recovered) self = recovered.adopted;
     else {
       // Today's behavior, now after any lineage flag: bind this slot and clear an offline holder's stale binding.
       if (self.agent === 'codex' && !codexThreadTrusted) {
@@ -668,6 +682,54 @@ export function installIdentity(broker: Broker): void {
     );
   };
 
+  /** A process may change conversations, but its old slot never changes conversations with it. */
+  const splitConversation = (
+    source: SessionRow,
+    native: string,
+    hook: string,
+  ): { slot: SessionRow; lineageId: number } | null => {
+    const mcp = broker.connectionFor(source.id);
+    if (!mcp || mcp.generation !== source.conn_generation) return null;
+    const identity =
+      mcp.mcpIdentity && sameProcess(mcp.mcpIdentity, broker.processProbe) === true ? mcp.mcpIdentity : null;
+    const result = tx(db, () => {
+      db.prepare(
+        `UPDATE sessions SET state='offline',link='disconnected',conn_generation=conn_generation+1,last_seen_at=? WHERE id=?`,
+      ).run(nowIso(), source.id);
+      const slot = createSession(db, {
+        agent: 'claude',
+        cwd: source.cwd,
+        workspace: source.workspace,
+        pid_chain: source.pid_chain,
+        mcp_ppid: source.mcp_ppid,
+      });
+      // No launch/custom name, title, transcript, readiness or work belongs to the new conversation yet.
+      claimProvisional(slot);
+      const generation = attachConnection(db, slot.id);
+      if (mcp.hello) recordClientCompatibility(db, getSession(db, slot.id) as SessionRow, mcp.hello, mcp.legacy);
+      const lineageId = recordLineage(db, {
+        agent: 'claude',
+        native_id: native,
+        previous_native_id: source.agent_session_id,
+        workspace: source.workspace,
+        session_id: source.id,
+        canonical_session_id: slot.id,
+        cause: 'switch',
+        outcome: 'observed',
+        reason: 'conversation-split',
+        evidence: { hook, mcp_pid: identity?.pid ?? null, mcp_start: identity?.start ?? null },
+        generation,
+      });
+      return { slot: getSession(db, slot.id) as SessionRow, lineageId, generation };
+    });
+    mcp.sessionId = result.slot.id;
+    mcp.generation = result.generation;
+    mcp.event('session.identity', { session_id: mcp.sessionId });
+    announce(source.id);
+    announce(result.slot.id);
+    return result;
+  };
+
   broker.handle('hook.event', async ({ conn }, p) => {
     // The only await: resolved first, so the selection and binding below run in one tick.
     const hookWorkspace = await broker.workspaces.resolve(p.cwd);
@@ -679,10 +741,6 @@ export function installIdentity(broker: Broker): void {
         x.link === 'connected' &&
         x.agent_session_id === p.agent_session_id,
     );
-    if (bound.length > 1) {
-      broker.log(`hook.event ${p.event}: ${bound.length} live sessions bound to ${p.agent_session_id}; not bound`);
-      return { bound: false, additional_context: null };
-    }
     // R46-N4: the hook's own cwd must resolve to the selected session's workspace, or it fails closed.
     const wrongWorkspace = (x: SessionRow) => {
       if (x.workspace === hookWorkspace) return false;
@@ -701,7 +759,46 @@ export function installIdentity(broker: Broker): void {
       broker.log(`hook.event ${p.event}: no agent process in the hook's pid chain; not bound`);
       return { bound: false, additional_context: null };
     }
-    let s: SessionRow | undefined = bound[0];
+    const matchingParents = listSessions(db).filter(
+      (x) => x.agent === 'claude' && x.state !== 'offline' && !x.retired_at && x.mcp_ppid === agentPid,
+    );
+    const connectedParents = matchingParents.filter((x) => x.link === 'connected');
+    const candidates = connectedParents.length ? connectedParents : matchingParents;
+    const source = candidates.length === 1 ? candidates[0] : undefined;
+    const changing =
+      source?.link === 'connected' &&
+      source.agent_session_id !== null &&
+      source.agent_session_id !== p.agent_session_id;
+    // Split before checking B's holder: even a refused B must never leave this connection reading A.
+    const split = changing && !wrongWorkspace(source) ? splitConversation(source, p.agent_session_id, p.event) : null;
+    if (changing && !split) return { bound: false, additional_context: null };
+    let s: SessionRow | undefined = split?.slot ?? bound[0];
+    const switchTarget =
+      split?.slot ??
+      (source &&
+      db
+        .prepare(`SELECT id FROM session_lineage
+      WHERE cause='switch' AND outcome='observed' AND reason='conversation-split' AND canonical_session_id=? AND native_id=? LIMIT 1`)
+        .get(source.id, p.agent_session_id)
+        ? source
+        : undefined);
+    if (switchTarget && bound.some((x) => x.id !== switchTarget.id)) {
+      recordLineage(db, {
+        agent: 'claude',
+        native_id: p.agent_session_id,
+        workspace: switchTarget.workspace,
+        session_id: switchTarget.id,
+        cause: 'resume',
+        outcome: 'flagged',
+        reason: 'live-holder',
+        evidence: { hook: p.event, candidates: bound.map((x) => x.id) },
+      });
+      return { bound: false, additional_context: null };
+    }
+    if (bound.length > 1) {
+      broker.log(`hook.event ${p.event}: ${bound.length} live sessions bound to ${p.agent_session_id}; not bound`);
+      return { bound: false, additional_context: null };
+    }
     let capturedParent = false;
     if (s && s.mcp_ppid !== agentPid) {
       broker.log(
@@ -710,13 +807,8 @@ export function installIdentity(broker: Broker): void {
       return { bound: false, additional_context: null };
     }
     if (s && wrongWorkspace(s)) return { bound: false, additional_context: null };
-    if (!s) {
-      const matchingParents = listSessions(db).filter(
-        (x) => x.agent === 'claude' && x.state !== 'offline' && !x.retired_at && x.mcp_ppid === agentPid,
-      );
-      const connectedParents = matchingParents.filter((x) => x.link === 'connected');
-      const candidates = connectedParents.length ? connectedParents : matchingParents;
-      if (candidates.length !== 1) {
+    if (!s || s.agent_session_id !== p.agent_session_id) {
+      if (!split && candidates.length !== 1) {
         // Only the cold start (the MCP server not registered yet) owes the context later; ambiguity stays unbound.
         if (candidates.length === 0 && p.event === 'SessionStart') startContextOwed.add(p.agent_session_id);
         broker.log(
@@ -724,7 +816,7 @@ export function installIdentity(broker: Broker): void {
         );
         return { bound: false, additional_context: null };
       }
-      s = candidates[0];
+      s = split?.slot ?? candidates[0];
       if (wrongWorkspace(s)) return { bound: false, additional_context: null };
       // Verify the incoming parent before adoption decides whether a synchronous hook is still polling.
       if (!conn.legacy && !isLegacySession(db, s.id) && (s.agent_pid !== agentPid || !s.agent_start)) {
@@ -743,8 +835,10 @@ export function installIdentity(broker: Broker): void {
             { hook: `claude ${p.event}`, source: p.source ?? null },
             { verified: true, reason: 'unverified', legacyUpgrade: true },
           );
-      if (recovered) s = recovered;
+      if (switchTarget && recovered && 'refused' in recovered) return { bound: false, additional_context: null };
+      if (recovered && 'adopted' in recovered) s = recovered.adopted;
       else bindAgentSession(db, s.id, p.agent_session_id);
+      if (split) db.prepare('UPDATE session_lineage SET canonical_session_id=? WHERE id=?').run(s.id, split.lineageId);
       broker.bus.emit('session.bound', getSession(db, s.id));
     }
     // W8: the Claude parent's process identity, captured when its pid is new or retried while its start identity is missing.

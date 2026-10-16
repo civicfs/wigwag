@@ -3,7 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { Config } from '../config.js';
 import { WigwagError } from '../errors.js';
 import { frameLimit } from '../protocol/frame.js';
-import type { Hello, MethodName } from '../protocol/rpc.js';
+import { type Hello, type MethodName, SessionIdentityZ } from '../protocol/rpc.js';
 import { ensureBroker, sockPath } from './autospawn.js';
 import { Client } from './client.js';
 
@@ -52,15 +52,25 @@ export class ReconnectingClient extends EventEmitter {
       const budget = this.o.config.broker.start_timeout_ms;
       const helloTimeout = AbortSignal.timeout(budget);
       try {
-        return this.install(
-          await Client.connect(
-            sockPath(this.o.home),
-            hello,
-            frameLimit(this.o.config),
-            (name, data) => this.emit('event', name, data),
-            AbortSignal.any([signal, helloTimeout]),
-          ),
+        // A welcome and a later slot handoff can arrive in one read, before connect() resolves. Keep the
+        // newest identity for this attempt so the caller cannot overwrite it with the older welcome.
+        let latestIdentity: string | null = null;
+        const connected = await Client.connect(
+          sockPath(this.o.home),
+          hello,
+          frameLimit(this.o.config),
+          (name, data) => {
+            if (name === 'session.identity') {
+              const parsed = SessionIdentityZ.safeParse(data);
+              if (parsed.success) latestIdentity = parsed.data.session_id;
+            }
+            this.emit('event', name, data);
+          },
+          AbortSignal.any([signal, helloTimeout]),
         );
+        if (latestIdentity && connected.welcome && typeof connected.welcome === 'object')
+          connected.welcome = { ...connected.welcome, session_id: latestIdentity };
+        return this.install(connected);
       } catch (e) {
         if (helloTimeout.aborted && !this.stopped) {
           throw new WigwagError('transport', `broker did not answer hello within ${budget} ms`);

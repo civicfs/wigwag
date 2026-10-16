@@ -93,6 +93,16 @@ export const HelloZ = z
   .strict();
 export type Hello = z.infer<typeof HelloZ>;
 
+/** Broker-only event: the MCP process remembers its current slot without exposing it to the model. */
+export const SessionIdentityZ = z
+  .object({
+    session_id: z
+      .string()
+      .regex(/^ses-[a-z0-9-]+$/)
+      .max(100),
+  })
+  .strict();
+
 export type Access = 'any' | 'session' | 'hook' | 'owner' | 'session+owner';
 
 const m = <P extends z.ZodType>(access: Access, params: P) => ({ access, params });

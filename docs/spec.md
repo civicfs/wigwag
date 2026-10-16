@@ -217,6 +217,16 @@ vitest, linted with biome.
   new slot is applied to the canonical slot through the normal claim/rename pipeline, with forwarding and notices.
   If refused, the canonical name stays and lineage evidence records the requested name and refusal reason.
   Native/provisional names never override it.
+  A trusted Claude hook changing conversations within one MCP process splits the slot: the old slot keeps its
+  native binding, name, held mail, assignments, relays, subscriptions, mutes and parent identity, but becomes
+  offline/link-disconnected. The connection takes a fresh provisional slot without the old launch/custom name
+  or native metadata, then uses the normal unique-candidate recovery gates. A live holder or ambiguity leaves
+  that fresh slot unbound and flagged, including on later retries; it cannot read the previous conversation's mail.
+  Switching back uses the same gates. An internal session.identity event updates the MCP's remembered resume hint.
+  Durable switch lineage records source/target slots, workspace and verified MCP pid/start when available. A hint
+  most recently switched away from by that exact verified process is ignored (including its old launch name),
+  forcing a fresh slot and trusted hook binding; there are no switch redirects or chains. Other or unverifiable
+  MCP processes keep the existing reattach rules, and a later differing trusted hook still splits before delivery.
   Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
   thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the
   binding and pass metadata root verification. Untrusted binds preserve offline canonical bindings and record

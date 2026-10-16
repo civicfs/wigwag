@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Split Claude slots on an in-process conversation change, preserving the old
+  conversation's name, mail, assignments and relays. Recover only the destination's
+  unique eligible slot; ambiguous or live-held destinations remain unbound.
+  Update the MCP's remembered slot internally and ignore stale switched-away
+  hints from the same verified process after a crash, without redirecting them.
+
 - Preserve in-flight rename ownership durably, including already-pushed chunks.
   Reclaiming the old name cannot expose those deliveries; settlement or broker
   restart forwards them to the owning slot's current inbox. Adoption transfers
