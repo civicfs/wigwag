@@ -1,5 +1,7 @@
 import { loadConfig } from '../config.js';
 import { ClaudeTitleWatcher } from '../native/claude-watch.js';
+import { CodexNames, codexIndexPath, installCodexNames } from '../native/codex-names.js';
+import { AppServer } from '../questions/app-server.js';
 import { CodexQuestions } from '../questions/codex.js';
 import { installQuestionHooks } from '../questions/hook-handlers.js';
 import { installQuestions } from '../questions/service.js';
@@ -40,7 +42,10 @@ function installDelivery(broker: Broker, transports: TransportRegistry): Deliver
   return engine;
 }
 
-export async function startBroker(home: string, opts: { transports?: TransportRegistry } = {}): Promise<Broker> {
+export async function startBroker(
+  home: string,
+  opts: { transports?: TransportRegistry; codexNames?: CodexNames; codexNameRefreshMs?: number } = {},
+): Promise<Broker> {
   const config = loadConfig(home);
   const broker = new Broker(home, config);
   const transports = opts.transports ?? {
@@ -57,6 +62,16 @@ export async function startBroker(home: string, opts: { transports?: TransportRe
   installOwner(broker);
   const questions = installQuestions(broker);
   installQuestionHooks(broker, questions);
+  installCodexNames(
+    broker,
+    opts.codexNames ??
+      new CodexNames({
+        factory: () => new AppServer(config.questions.app_server_socket, config.questions.app_server_timeout_ms),
+        indexPath: codexIndexPath(config.questions.app_server_socket),
+        log: (l) => broker.log(l),
+      }),
+    opts.codexNameRefreshMs,
+  );
   const codexQuestions = new CodexQuestions(questions);
   questions.prepareCodex = (session) => codexQuestions.attach(session);
   broker.onStop.push(() => codexQuestions.stop());

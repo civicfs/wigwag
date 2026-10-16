@@ -1,6 +1,8 @@
 import { dirname, join } from 'node:path';
+import type { Broker } from '../broker/server.js';
 import type { AppFrame } from '../questions/app-server.js';
 import type { AppConnection } from '../questions/codex.js';
+import { listSessions, type SessionRow } from '../store/sessions.js';
 import { tailLines } from './tail.js';
 
 export const CODEX_INDEX_TAIL_BYTES = 65536;
@@ -181,4 +183,31 @@ export class CodexNames {
     this.app?.close();
     this.app = null;
   }
+}
+
+export const CODEX_NAME_REFRESH_MS = 30000;
+
+/** W2: Codex names refresh on bind, on name notifications, and every `intervalMs` for live bound Codex sessions. */
+export function installCodexNames(broker: Broker, names: CodexNames, intervalMs = CODEX_NAME_REFRESH_MS): void {
+  broker.codexNames = names;
+  names.onName = (threadId, name, origin) => {
+    const live = listSessions(broker.db).filter(
+      (s) => s.agent === 'codex' && s.state !== 'offline' && s.agent_session_id === threadId,
+    );
+    if (live.length === 1) broker.naming.adoptNative(live[0].id, name, origin);
+  };
+  const refreshOne = (s: SessionRow | undefined) => {
+    if (s?.agent !== 'codex' || !s.agent_session_id || s.state === 'offline') return;
+    names.refresh(s.agent_session_id).catch((e) => broker.log(`codex names: ${(e as Error).message}`));
+  };
+  broker.bus.on('session.bound', refreshOne);
+  const timer = setInterval(() => {
+    for (const s of listSessions(broker.db)) refreshOne(s);
+  }, intervalMs);
+  timer.unref();
+  broker.onStop.push(() => {
+    clearInterval(timer);
+    broker.bus.off('session.bound', refreshOne);
+    names.stop();
+  });
 }

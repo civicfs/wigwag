@@ -316,6 +316,7 @@ export function installIdentity(broker: Broker): void {
       );
     }
     applyLaunchIntent(me(conn.sessionId));
+    broker.bus.emit('session.bound', me(conn.sessionId));
     announce(conn.sessionId as string);
     if (question_relay_version === 1) broker.questions.markReady(conn.sessionId as string, agent_session_id);
     return {};
@@ -406,6 +407,7 @@ export function installIdentity(broker: Broker): void {
       s = candidates[0];
       if (wrongWorkspace(s)) return { bound: false, additional_context: null };
       bindAgentSession(db, s.id, p.agent_session_id);
+      broker.bus.emit('session.bound', getSession(db, s.id));
     }
     if (validTranscriptPath(p.transcript_path, p.agent_session_id) && s.native_ref !== p.transcript_path)
       setNativeRef(db, s.id, p.transcript_path);

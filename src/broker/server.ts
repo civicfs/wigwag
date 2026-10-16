@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import { WigwagError } from '../errors.js';
+import type { CodexNames } from '../native/codex-names.js';
 import { frameLimit, LineDecoder } from '../protocol/frame.js';
 import {
   type Access,
@@ -63,6 +64,7 @@ export class Broker {
   engine: DeliveryEngine | null = null;
   questions!: QuestionService;
   naming!: NameService;
+  codexNames: CodexNames | null = null;
   digestProvider: ((name: string) => string | null) | null = null;
   /** Identity's announce (sweep the name's backlog, owner broadcast, session.available); set by installIdentity. */
   announce: (sessionId: string) => void = () => {};
