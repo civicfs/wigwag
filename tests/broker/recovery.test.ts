@@ -134,6 +134,19 @@ describe('claude resume recovery (W7)', () => {
       expect(broker.db.prepare('SELECT message_id FROM deliveries WHERE recipient = ?').all(name)).toEqual([]);
   });
 
+  it('a model-invoked Claude session.bind cannot adopt an offline canonical slot', async () => {
+    const { home, broker } = await boot();
+    const { old } = await oldSession(home);
+    old.client.close();
+    await settle();
+    const fresh = await mcp(home, 600);
+    await fresh.client.call('session.bind', { agent_session_id: 'sid-1' });
+    expect(await fresh.client.call('session.whoami')).toMatchObject({ id: fresh.welcome.session_id });
+    expect(getSession(broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
+    expect(getSession(broker.db, old.welcome.session_id)?.name).toBe('worker-one');
+    expect(listLineage(broker.db, { outcome: 'adopted', limit: 10 })).toEqual([]);
+  });
+
   it('a fresh MCP process after a resume takes the canonical slot, name and mail', async () => {
     const { home, broker } = await boot();
     const { old, h } = await oldSession(home);

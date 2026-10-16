@@ -498,7 +498,7 @@ export function installIdentity(broker: Broker): void {
       refuse(live[0]);
     }
     const recovered =
-      self.agent_session_id === agent_session_id
+      self.agent !== 'codex' || self.agent_session_id === agent_session_id
         ? null
         : recoverOnBind(
             self,
