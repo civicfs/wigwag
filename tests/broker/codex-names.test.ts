@@ -15,7 +15,7 @@ import { startBroker, tmpHome, until } from '../helpers.js';
 class FakeApp extends EventEmitter {
   constructor(
     readonly threads: Record<string, Record<string, unknown>>,
-    readonly fail = false,
+    public fail = false,
   ) {
     super();
   }
@@ -82,6 +82,42 @@ describe('codex native names (W2)', () => {
     await until(() => getSession(broker.db, c.welcome.session_id)?.name === 'second');
     app.threads['t-1'].name = 'Third';
     await until(() => getSession(broker.db, c.welcome.session_id)?.name === 'third');
+  });
+
+  it('keeps an API title through an outage with a lagging index, then accepts the recovered API title', async () => {
+    const indexPath = join(mkdtempSync(join(tmpdir(), 'ww-ci-outage-')), 'session_index.jsonl');
+    writeFileSync(indexPath, '{"id":"t-1","thread_name":"Old index title"}\n');
+    const app = new FakeApp({ 't-1': root('t-1', 'Current API title') });
+    const { home, broker } = await boot(app, { indexPath });
+    const c = await codex(home);
+    await c.client.call('session.bind', { agent_session_id: 't-1' });
+    await until(() => getSession(broker.db, c.welcome.session_id)?.native_name === 'Current API title');
+    app.fail = true;
+    app.close();
+    await broker.codexNames?.refresh('t-1');
+    expect(getSession(broker.db, c.welcome.session_id)).toMatchObject({
+      name: 'current-api-title',
+      native_name: 'Current API title',
+    });
+    app.fail = false;
+    app.threads['t-1'].name = 'Newest API title';
+    await broker.codexNames?.refresh('t-1');
+    expect(getSession(broker.db, c.welcome.session_id)?.name).toBe('newest-api-title');
+  });
+
+  it('adopts an index title once, then ignores later index changes until the API is available', async () => {
+    const indexPath = join(mkdtempSync(join(tmpdir(), 'ww-ci-first-')), 'session_index.jsonl');
+    writeFileSync(indexPath, '{"id":"t-1","thread_name":"First index title"}\n');
+    const { home, broker } = await boot(new FakeApp({}, true), { indexPath });
+    const c = await codex(home);
+    await c.client.call('session.bind', { agent_session_id: 't-1' });
+    await until(() => getSession(broker.db, c.welcome.session_id)?.native_name === 'First index title');
+    writeFileSync(indexPath, '{"id":"t-1","thread_name":"Changed index title"}\n');
+    await broker.codexNames?.refresh('t-1');
+    expect(getSession(broker.db, c.welcome.session_id)).toMatchObject({
+      name: 'first-index-title',
+      native_name: 'First index title',
+    });
   });
 
   it('uses the session index when the app-server is unavailable; a custom name still wins', async () => {

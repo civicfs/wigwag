@@ -194,7 +194,8 @@ export function installCodexNames(broker: Broker, names: CodexNames, intervalMs 
     const live = listSessions(broker.db).filter(
       (s) => s.agent === 'codex' && s.state !== 'offline' && s.agent_session_id === threadId,
     );
-    if (live.length === 1) broker.naming.adoptNative(live[0].id, name, origin);
+    if (live.length === 1 && (origin !== 'codex-index' || live[0].native_name === null))
+      broker.naming.adoptNative(live[0].id, name, origin);
   };
   const refreshOne = (s: SessionRow | undefined) => {
     if (s?.agent !== 'codex' || !s.agent_session_id || s.state === 'offline') return;
