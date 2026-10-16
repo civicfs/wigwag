@@ -1,4 +1,4 @@
-// Child for the concurrent-migration test: loads the real src/store/db.ts (Node strips the types),
+// Child for the concurrent-migration test: loads the real src/store/db.ts (Node transforms the types),
 // reports "ready", waits for "go" on stdin so all children call openDb() at the same instant, then
 // prints "ok" or the error message.
 import { registerHooks } from 'node:module';

@@ -40,7 +40,9 @@ describe('openDb under concurrent first open', () => {
     for (let round = 0; round < 4; round++) {
       const file = join(mkdtempSync(join(tmpdir(), 'ww-db-')), 'state.db');
       const procs = Array.from({ length: 8 }, () => {
-        const c = spawn(process.execPath, [CHILD, file], { stdio: ['pipe', 'pipe', 'inherit'] });
+        const c = spawn(process.execPath, ['--experimental-transform-types', CHILD, file], {
+          stdio: ['pipe', 'pipe', 'inherit'],
+        });
         children.push(c);
         return { c, out: lines(c) };
       });
