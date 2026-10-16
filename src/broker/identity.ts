@@ -6,6 +6,7 @@ import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.
 import type { Hello } from '../protocol/rpc.js';
 import { scopeOf } from '../store/links.js';
 import {
+  attachConnection,
   bindAgentSession,
   bindAgentSessionExclusive,
   claimName,
@@ -14,6 +15,7 @@ import {
   holderOf,
   listSessions,
   markAllOffline,
+  markOfflineIfCurrent,
   provisionalName,
   refreshProcess,
   type SessionRow,
@@ -122,7 +124,10 @@ export function installIdentity(broker: Broker): void {
     const workspace = await broker.workspaces.resolve(hello.cwd);
     if (conn.closed || conn.failed) throw new WigwagError('transport', 'connection closed during hello');
     let s = hello.resume_session_id ? getSession(db, hello.resume_session_id) : undefined;
-    if (s && (s.state !== 'offline' || s.agent !== hello.agent)) s = undefined;
+    // W7: a slot handed over by a resume recovery points at its canonical slot; a reconnect hint follows it and never
+    // revives a retired row.
+    for (let hops = 0; s?.retired_into && hops < 8; hops++) s = getSession(db, s.retired_into);
+    if (s && (s.state !== 'offline' || s.agent !== hello.agent || s.retired_at)) s = undefined;
     if (s) {
       setState(db, s.id, 'online-idle');
       refreshProcess(db, s.id, {
@@ -140,6 +145,7 @@ export function installIdentity(broker: Broker): void {
         mcp_ppid: hello.mcp_ppid ?? null,
       });
     conn.sessionId = s.id;
+    conn.generation = attachConnection(db, s.id);
     conn.channel = hello.channel;
     let warning: string | null = null;
     if (!getSession(db, s.id)?.name) {
@@ -196,7 +202,12 @@ export function installIdentity(broker: Broker): void {
     for (const i of intents) if (i.conn === conn) intents.delete(i);
     for (const w of [...waiting]) if (w.intent.conn === conn) dropWaiting(w);
     if (!conn.sessionId) return;
-    setState(db, conn.sessionId, 'offline');
+    if (!markOfflineIfCurrent(db, conn.sessionId, conn.generation)) {
+      broker.log(
+        `disconnect of stale connection ${conn.id} for ${conn.sessionId} (generation ${conn.generation}); slot left as is`,
+      );
+      return;
+    }
     announce(conn.sessionId);
     settleWaiting();
   });

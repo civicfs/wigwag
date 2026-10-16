@@ -9,6 +9,8 @@ export class Connection {
   /** Set only once the hello handshake has fully succeeded; `role` (and so all access) derives from it. */
   hello: Hello | null = null;
   sessionId: string | null = null;
+  /** W7: the slot's conn_generation when this connection took it; a stale connection's close leaves the slot alone. */
+  generation = 0;
   /**
    * E-3: whether this MCP client can take channel pushes (hello.channel); undefined for a peer that did not say. Set during
    * hello, before the session is announced: `hello` itself is published only after the welcome is written.
