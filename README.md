@@ -142,6 +142,14 @@ A plugin reload, MCP crash or broker restart keeps a session's name while its
 parent remains open. `who` shows "parent open, MCP disconnected"; Claude messages
 wait for the next prompt or tool call, while Codex pushes use `codex queue`.
 
+Hello checks the client and broker protocol, schema and package versions before
+registering a session. A stale broker reports `wigwag broker stop` then retry; a
+stale client reports update/reload advice. Stop/restart retain a read-only
+hello/ping fallback to verify the old broker PID; normal RPCs stay gated. `whoami` and `doctor` expose recent
+compatibility warnings. Lifecycle/QuestionReady hooks exit zero on skew. A
+supervised question PreToolUse hook retains its denial with the actionable error,
+so it cannot silently fall back to a direct human prompt.
+
 ## Delegate work and answer questions
 
 Ask the lead to use `delegate` to assign a task to a live worker. For example, the

@@ -1,9 +1,42 @@
 import { z } from 'zod';
-import type { ErrorCode } from '../errors.js';
+import { type ErrorCode, WigwagError } from '../errors.js';
 import { BLOB_REF_RE, NAME_RE } from '../ids.js';
 import { AnswersZ } from '../questions/schema.js';
+import { SCHEMA_VERSION, VERSION } from '../version.js';
 
 export const PROTOCOL_VERSION = 1 as const;
+export const HANDSHAKE_VERSIONS = {
+  protocol: PROTOCOL_VERSION,
+  schema_version: SCHEMA_VERSION,
+  version: VERSION,
+} as const;
+export const BROKER_OLDER = 'broker is older than this client: restart it with `wigwag broker stop` then retry';
+export const CLIENT_OLDER =
+  'client is older than the broker: update/reload the plugin (and update the CLI), then retry';
+
+/** A missing version stamp is a legacy peer, never proof of compatibility. */
+export function assertPeerVersions(raw: unknown, peer: 'broker' | 'client'): void {
+  const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const versionOrder = (value: unknown) => {
+    if (typeof value !== 'string' || !/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(value)) return -1;
+    const got = value.split(/[.-]/).slice(0, 3).map(Number),
+      own = VERSION.split('.').map(Number);
+    return got.map((n, i) => n - own[i]).find((n) => n !== 0) ?? (value === VERSION ? 0 : -1);
+  };
+  const order = [
+    typeof p.protocol === 'number' ? p.protocol - PROTOCOL_VERSION : -1,
+    typeof p.schema_version === 'number' ? p.schema_version - SCHEMA_VERSION : -1,
+    versionOrder(p.version),
+  ].find((n) => n !== 0);
+  if (order === undefined) return;
+  const brokerOlder = peer === 'broker' ? order < 0 : order > 0;
+  throw new WigwagError('schema', brokerOlder ? BROKER_OLDER : CLIENT_OLDER, {
+    kind: 'version-skew',
+    peer,
+    expected: HANDSHAKE_VERSIONS,
+    received: { protocol: p.protocol, schema_version: p.schema_version, version: p.version },
+  });
+}
 
 export const PriorityZ = z.enum(['urgent', 'normal', 'low']);
 export const NameZ = z.string().regex(NAME_RE, 'name must match ^[a-z][a-z0-9-]{1,47}$');
@@ -23,6 +56,8 @@ export const KV_LIST_LIMIT_MAX = 1000;
 export const HelloZ = z
   .object({
     protocol: z.literal(PROTOCOL_VERSION),
+    schema_version: z.number().int().nonnegative().optional(),
+    version: z.string().min(1).max(100).optional(),
     role: z.enum(['mcp', 'hook', 'owner']),
     agent: z.enum(['claude', 'codex']).optional(),
     // final m-2: the workspace is computed from cwd; a relative one would resolve against the broker's own cwd

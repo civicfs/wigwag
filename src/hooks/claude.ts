@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { canConnect, sockPath } from '../client/autospawn.js';
 import { Client } from '../client/client.js';
 import { loadConfig, resolveHome } from '../config.js';
+import { WigwagError } from '../errors.js';
 import { agentAncestor, processChain } from '../proc/ancestors.js';
 import { frameLimit } from '../protocol/frame.js';
 
@@ -32,6 +33,8 @@ function readStdin(maxBytes: number): Promise<string> {
 }
 
 function logError(home: string, event: string, e: unknown): void {
+  if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew')
+    process.stderr.write(`wigwag: ${e.message}\n`);
   try {
     mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
     appendFileSync(

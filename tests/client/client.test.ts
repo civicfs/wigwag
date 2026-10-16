@@ -2,6 +2,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Client } from '../../src/client/client.js';
+import { HANDSHAKE_VERSIONS } from '../../src/protocol/rpc.js';
 import { tmpHome } from '../helpers.js';
 
 const servers: Server[] = [];
@@ -42,7 +43,8 @@ describe('Client frame validation', () => {
 
   it('drops the connection and rejects pending calls when a non-object frame arrives after hello', async () => {
     const path = await fakeBroker((f, s) => {
-      if (f.method === 'hello') s.write(`${JSON.stringify({ id: f.id, result: { role: 'owner' } })}\n`);
+      if (f.method === 'hello')
+        s.write(`${JSON.stringify({ id: f.id, result: { role: 'owner', ...HANDSHAKE_VERSIONS } })}\n`);
       else s.write('null\n');
     });
     const { client } = await Client.connect(path, HELLO, 1 << 20);

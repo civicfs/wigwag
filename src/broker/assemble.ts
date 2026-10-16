@@ -2,6 +2,7 @@ import { loadConfig } from '../config.js';
 import { ClaudeTitleWatcher } from '../native/claude-watch.js';
 import { CodexNames, codexIndexPath, installCodexNames } from '../native/codex-names.js';
 import type { ProcessProbe } from '../proc/identity.js';
+import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
 import { AppServer } from '../questions/app-server.js';
 import { CodexQuestions } from '../questions/codex.js';
 import { installQuestionHooks } from '../questions/hook-handlers.js';
@@ -9,7 +10,6 @@ import { installQuestions } from '../questions/service.js';
 import { ClaudeChannelTransport } from '../transports/claude-channel.js';
 import { CodexQueueTransport } from '../transports/codex-queue.js';
 import type { TransportRegistry } from '../transports/types.js';
-import { VERSION } from '../version.js';
 import { installCodexPushTrust } from './codex-push.js';
 import { DeliveryEngine } from './delivery.js';
 import { installData } from './handlers/data.js';
@@ -23,7 +23,12 @@ import { installNaming } from './naming.js';
 import { Broker } from './server.js';
 
 function installSys(broker: Broker): void {
-  broker.handle('sys.ping', () => ({ pong: true, pid: process.pid, version: VERSION }));
+  broker.handle('sys.ping', () => ({
+    pong: true,
+    pid: process.pid,
+    ...HANDSHAKE_VERSIONS,
+    version_warnings: broker.versionWarnings,
+  }));
 }
 
 function installDelivery(broker: Broker, transports: TransportRegistry): DeliveryEngine {

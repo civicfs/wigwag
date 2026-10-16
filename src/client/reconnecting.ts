@@ -23,6 +23,7 @@ export class ReconnectingClient extends EventEmitter {
   private readonly abort = new AbortController();
   /** Why the last connection attempt failed; cleared on success. Reported to calls that time out waiting. */
   private lastError: string | null = null;
+  private versionError: WigwagError | null = null;
 
   constructor(private readonly o: { home: string; config: Config; entry: string | null; hello: () => Hello }) {
     super();
@@ -67,7 +68,17 @@ export class ReconnectingClient extends EventEmitter {
         throw e;
       }
     } catch (e) {
-      if (!this.stopped) this.lastError = e instanceof Error ? e.message : String(e);
+      if (!this.stopped) {
+        this.lastError = e instanceof Error ? e.message : String(e);
+        if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew') {
+          this.versionError = e;
+          for (const w of this.waiters) {
+            clearTimeout(w.timer);
+            w.reject(e);
+          }
+          this.waiters.clear();
+        }
+      }
       throw e;
     }
   }
@@ -79,6 +90,7 @@ export class ReconnectingClient extends EventEmitter {
     }
     this.client = client;
     this.lastError = null;
+    this.versionError = null;
     client.on('close', () => {
       if (this.client !== client) return;
       this.client = null;
@@ -113,6 +125,7 @@ export class ReconnectingClient extends EventEmitter {
 
   async call<T = unknown>(method: MethodName, params: unknown = {}): Promise<T> {
     if (this.stopped) throw stoppedError();
+    if (!this.client && this.versionError) throw this.versionError;
     const client = this.client ?? (await this.waitConnected());
     return client.call<T>(method, params);
   }

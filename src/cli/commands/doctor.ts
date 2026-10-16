@@ -1,7 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { ensureBroker, sockPath } from '../../client/autospawn.js';
+import { sockPath } from '../../client/autospawn.js';
+import { Client } from '../../client/client.js';
 import { type Config, configPath, loadConfig, resolveHome } from '../../config.js';
-import { cliEntry, out, parseCli, table, UsageError } from '../util.js';
+import { frameLimit } from '../../protocol/frame.js';
+import { HANDSHAKE_VERSIONS } from '../../protocol/rpc.js';
+import { out, parseCli, table, UsageError } from '../util.js';
 import { whichBin } from './init.js';
 
 const run = (bin: string, args: string[]): { ok: boolean; out: string } => {
@@ -61,8 +64,25 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
   }
   if (config) {
     try {
-      await ensureBroker(home, config, cliEntry());
-      add(true, 'broker', sockPath(home));
+      const { client } = await Client.connect(
+        sockPath(home),
+        { protocol: HANDSHAKE_VERSIONS.protocol, role: 'owner' },
+        frameLimit(config),
+        undefined,
+        AbortSignal.timeout(config.broker.start_timeout_ms),
+      );
+      try {
+        const ping = await client.call<{ version_warnings?: string[] }>('sys.ping');
+        add(true, 'broker', sockPath(home));
+        add(
+          true,
+          'broker/client versions',
+          `version ${HANDSHAKE_VERSIONS.version}, protocol ${HANDSHAKE_VERSIONS.protocol}, schema ${HANDSHAKE_VERSIONS.schema_version}`,
+        );
+        if (ping.version_warnings?.length) add(false, 'version skew', ping.version_warnings.join('; '));
+      } finally {
+        client.destroy();
+      }
     } catch (e) {
       add(false, 'broker', (e as Error).message);
     }

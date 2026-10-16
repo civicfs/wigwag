@@ -5,6 +5,7 @@ import { RESERVED_NAMES } from '../ids.js';
 import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.js';
 import { captureIdentity, sameProcess } from '../proc/identity.js';
 import type { Hello } from '../protocol/rpc.js';
+import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
 import { scopeOf } from '../store/links.js';
 import { adoptCanonical, liveNativeHolders, recordLineage, recoveryCandidates } from '../store/recovery.js';
 import {
@@ -387,7 +388,12 @@ export function installIdentity(broker: Broker): void {
 
   broker.handle('session.whoami', ({ conn }) => {
     const s = me(conn.sessionId);
-    return { ...publicSession(db, s), capabilities: capabilitiesFor(broker, s) };
+    return {
+      ...publicSession(db, s),
+      capabilities: capabilitiesFor(broker, s),
+      broker: HANDSHAKE_VERSIONS,
+      version_warnings: broker.versionWarnings,
+    };
   });
   // Spec §17: an agent sees the sessions in its scope; the owner sees every workspace.
   broker.handle('session.who', ({ conn }, { include_offline, limit, offset }) => {

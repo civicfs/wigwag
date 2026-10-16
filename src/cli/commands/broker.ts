@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startBroker } from '../../broker/assemble.js';
 import { canConnect, ensureBroker, sockPath } from '../../client/autospawn.js';
+import { readBrokerStatus } from '../../client/broker-status.js';
 import { Client } from '../../client/client.js';
 import { loadConfig, resolveHome } from '../../config.js';
 import { WigwagError } from '../../errors.js';
@@ -10,7 +11,7 @@ import { usageError } from '../help.js';
 import { cliEntry, out, ownerConnect, parseCli } from '../util.js';
 
 /** The pid reported by a broker answering on this home's socket, or null when none answers (never autospawns). */
-async function liveStatus(home: string): Promise<{ pid: number; version?: string } | null> {
+export async function liveStatus(home: string): Promise<{ pid: number; version?: string } | null> {
   const config = loadConfig(home);
   if (!(await canConnect(sockPath(home)))) return null;
   const signal = AbortSignal.timeout(config.broker.start_timeout_ms);
@@ -28,7 +29,17 @@ async function liveStatus(home: string): Promise<{ pid: number; version?: string
       signal.addEventListener('abort', () => rej(new Error('sys.ping timed out')), { once: true }),
     );
     return await Promise.race([ping, timedOut]);
-  } catch {
+  } catch (e) {
+    if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew') {
+      try {
+        return await readBrokerStatus(
+          sockPath(home),
+          frameLimit(config),
+          signal,
+          (e.data as { peer?: string })?.peer === 'client' ? (e.data as { expected?: unknown }).expected : undefined,
+        );
+      } catch {}
+    }
     return null;
   } finally {
     client?.close();

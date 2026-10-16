@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { createConnection, type Socket } from 'node:net';
 import { type ErrorCode, WigwagError } from '../errors.js';
 import { encode, LineDecoder } from '../protocol/frame.js';
-import type { Hello, MethodName } from '../protocol/rpc.js';
+import { assertPeerVersions, BROKER_OLDER, HANDSHAKE_VERSIONS, type Hello, type MethodName } from '../protocol/rpc.js';
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 
@@ -95,11 +95,19 @@ export class Client extends EventEmitter {
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
       if (signal?.aborted) throw aborted();
-      const welcome = await client.raw('hello', hello);
+      const welcome = await client.raw('hello', { ...HANDSHAKE_VERSIONS, ...hello });
+      assertPeerVersions(welcome, 'broker');
       if (signal?.aborted) throw aborted();
       return { client, welcome };
     } catch (e) {
       client.destroy();
+      if (
+        !signal?.aborted &&
+        e instanceof WigwagError &&
+        e.code === 'bad_request' &&
+        /unrecognized.*(?:schema_version|version)/is.test(e.message)
+      )
+        throw new WigwagError('schema', BROKER_OLDER, { kind: 'version-skew' });
       throw signal?.aborted ? aborted() : e;
     } finally {
       signal?.removeEventListener('abort', onAbort);

@@ -10,12 +10,15 @@ import { type ProcessProbe, systemProbe } from '../proc/identity.js';
 import { frameLimit, LineDecoder } from '../protocol/frame.js';
 import {
   type Access,
+  assertPeerVersions,
   type FeedData,
+  HANDSHAKE_VERSIONS,
   type Hello,
   HelloZ,
   METHODS,
   type MethodName,
   type Params,
+  PROTOCOL_VERSION,
   type WireError,
 } from '../protocol/rpc.js';
 import type { QuestionService } from '../questions/service.js';
@@ -53,6 +56,7 @@ const unlinkIfPresent = (path: string): void => {
 export class Broker {
   readonly db: Db;
   readonly bus = new EventEmitter();
+  readonly versionWarnings: string[] = [];
   readonly connections = new Set<Connection>();
   readonly sockPath: string;
   /** cwd → workspace id, git bounded and cached for this broker's lifetime (final review I-5). */
@@ -309,15 +313,23 @@ export class Broker {
    */
   private async handshake(conn: Connection, id: number, params: unknown): Promise<boolean> {
     try {
+      if (isObject(params) && typeof params.protocol === 'number' && params.protocol !== PROTOCOL_VERSION)
+        assertPeerVersions(params, 'client');
       const hello = HelloZ.parse(params);
+      assertPeerVersions(hello, 'client');
       const welcome = await this.onHello(conn, hello);
       // The peer may have gone away while onHello ran: frames queued behind it must not run.
       if (conn.failed || conn.closed) return false;
-      conn.reply(id, welcome);
+      conn.reply(id, { ...(isObject(welcome) ? welcome : {}), ...HANDSHAKE_VERSIONS });
       conn.hello = hello;
       return true;
     } catch (e) {
       const wire = toWire(e);
+      if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew') {
+        this.versionWarnings.push(e.message);
+        if (this.versionWarnings.length > 20) this.versionWarnings.shift();
+        this.log(`version compatibility: ${e.message}`);
+      }
       if (wire.code === 'internal') this.log(`internal error in hello: ${(e as Error)?.stack ?? String(e)}`);
       conn.fail(id, wire);
       return false;

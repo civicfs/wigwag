@@ -6,7 +6,7 @@ import { Broker } from '../../src/broker/server.js';
 import { canConnect, sockPath } from '../../src/client/autospawn.js';
 import { loadConfig } from '../../src/config.js';
 import { WigwagError } from '../../src/errors.js';
-import { VERSION } from '../../src/version.js';
+import { HANDSHAKE_VERSIONS } from '../../src/protocol/rpc.js';
 import { ownerClient, staleSocket, startBroker, startTestBroker, tmpHome } from '../helpers.js';
 
 const brokers: Broker[] = [];
@@ -21,7 +21,7 @@ function track(b: Broker): Broker {
 }
 
 const line = (v: unknown) => `${JSON.stringify(v)}\n`;
-const HELLO = { protocol: 1, role: 'owner' };
+const HELLO = { ...HANDSHAKE_VERSIONS, role: 'owner' };
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -211,13 +211,13 @@ describe('broker server', () => {
     const badReply = { id: null, error: { code: 'bad_request', message: 'frame must be a JSON object' } };
     s.write(`${bad.join('\n')}\n${line({ id: 1, method: 'hello', params: HELLO })}`);
     await expect.poll(() => got.length).toBe(bad.length + 1);
-    expect(got).toEqual([...bad.map(() => badReply), { id: 1, result: { role: 'owner' } }]);
+    expect(got).toEqual([...bad.map(() => badReply), { id: 1, result: { role: 'owner', ...HANDSHAKE_VERSIONS } }]);
     s.write(`null\n[]\n${line({ id: 2, method: 'sys.ping', params: {} })}`);
     await expect.poll(() => got.length).toBe(bad.length + 4);
     expect(got.slice(bad.length + 1)).toEqual([
       badReply,
       badReply,
-      { id: 2, result: { pong: true, pid: process.pid, version: VERSION } },
+      { id: 2, result: { pong: true, pid: process.pid, ...HANDSHAKE_VERSIONS, version_warnings: [] } },
     ]);
     s.destroy();
   });
@@ -269,7 +269,7 @@ describe('broker server', () => {
     gate.resolve();
     await expect.poll(() => got.length).toBe(2);
     expect(got).toEqual([
-      { id: 1, result: { role: 'owner' } },
+      { id: 1, result: { role: 'owner', ...HANDSHAKE_VERSIONS } },
       { id: 2, result: { role: 'owner' } },
     ]);
     s.destroy();

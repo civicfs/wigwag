@@ -172,6 +172,13 @@ vitest, linted with biome.
   `[a-z0-9-]`, prefixed with the agent when they start with a digit, and
   capped at 43 characters; a name held by any other session or reserved gets `-2`…`-9`, then a random suffix. Unusable
   titles keep the current name. `register` sets `custom`; `register` with `native=true` reverts.
+- **Version compatibility.** Hello and welcome carry the existing protocol version, required schema version and
+  package version. Both ends reject skew before a session is created or RPCs are authorized, with restart advice for
+  an older broker or update/reload advice for an older client. Missing stamps identify a legacy peer. Compatible
+  whoami/doctor calls show the broker's recent rejected-peer warnings. Lifecycle and QuestionReady hooks exit zero
+  without context/decisions on skew; supervised question PreToolUse retains its existing denial, including the
+  actionable compatibility error, to prevent silently asking the human directly. Doctor probes without autospawn. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
+  verification; that path exposes no general RPC client.
 - **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
   `session.bind` tool path for Claude. Exactly one eligible offline or MCP-disconnected, unretired slot of the same
   agent, native ID and workspace is canonical. An empty provisional/unnamed slot is excluded unless it retains an

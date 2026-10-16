@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reject broker/client protocol, schema and package skew at hello with restart or
+  update/reload advice; surface recent warnings in whoami/doctor. Lifecycle hooks
+  fail open; supervised native question hooks preserve their explicit denial.
+
 - Hold Codex queue pushes unless metadata proves a single loaded root with no
   loaded descendant sharing its ID. Recheck before queueing; show the hold reason
   in session, capability, TUI and recovery diagnostics. Hooks/inbox remain usable.
