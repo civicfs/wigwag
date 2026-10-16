@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { WigwagError } from '../errors.js';
 import { RESERVED_NAMES } from '../ids.js';
 import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.js';
-import { captureIdentity } from '../proc/identity.js';
+import { captureIdentity, sameProcess } from '../proc/identity.js';
 import type { Hello } from '../protocol/rpc.js';
 import { scopeOf } from '../store/links.js';
 import {
@@ -15,7 +15,7 @@ import {
   getSession,
   holderOf,
   listSessions,
-  markAllOffline,
+  markDisconnectedIfCurrent,
   markOfflineIfCurrent,
   provisionalName,
   refreshProcess,
@@ -26,6 +26,7 @@ import {
   setState,
 } from '../store/sessions.js';
 import type { Connection } from './connection.js';
+import { parentOnDisconnect, verifyAtStart } from './liveness.js';
 import { isReachable, publicSession } from './registry.js';
 import { afterRename, type RenameCause } from './rename.js';
 import { takeoverText, visibleUnreadCount } from './scope.js';
@@ -79,8 +80,9 @@ export function installIdentity(broker: Broker): void {
   broker.onStop.push(() => {
     for (const w of [...waiting]) dropWaiting(w);
   });
-  // After the lock is held, before any connection: every recorded session is from a previous broker.
-  broker.onStart.push(() => markAllOffline(db));
+  // After the lock is held, before any connection: every recorded session is from a previous broker. W8: verify each
+  // parent instead of marking everything offline (src/broker/liveness.ts).
+  broker.onStart.push(() => void verifyAtStart(broker));
 
   const announce = (id: string) => {
     const s = getSession(db, id) as SessionRow;
@@ -94,6 +96,23 @@ export function installIdentity(broker: Broker): void {
   broker.announce = (id) => void announce(id);
 
   const sameScope = (caller: SessionRow, holder: SessionRow) => scopeOf(db, caller.workspace).has(holder.workspace);
+
+  /** W8: the single MCP-disconnected Claude slot whose recorded parent is `ppid` and is still the same process. */
+  const reattachable = (ppid: number, workspace: string): SessionRow | undefined => {
+    const matches = listSessions(db).filter(
+      (x) =>
+        x.agent === 'claude' &&
+        x.state !== 'offline' &&
+        x.link === 'disconnected' &&
+        !x.retired_at &&
+        x.agent_pid === ppid &&
+        x.workspace === workspace,
+    );
+    const m = matches.length === 1 ? matches[0] : undefined;
+    return m?.agent_start && sameProcess({ pid: ppid, start: m.agent_start }, broker.processProbe) === true
+      ? m
+      : undefined;
+  };
   const liveHolderText = (caller: SessionRow, holder: SessionRow) =>
     sameScope(caller, holder)
       ? `live session ${holder.id} (${holder.agent}, cwd ${holder.cwd})`
@@ -130,9 +149,12 @@ export function installIdentity(broker: Broker): void {
     // W7: a slot handed over by a resume recovery points at its canonical slot; a reconnect hint follows it and never
     // revives a retired row.
     for (let hops = 0; s?.retired_into && hops < 8; hops++) s = getSession(db, s.retired_into);
-    if (s && (s.state !== 'offline' || s.agent !== hello.agent || s.retired_at)) s = undefined;
+    if (s && (s.agent !== hello.agent || s.retired_at || (s.state !== 'offline' && s.link !== 'disconnected')))
+      s = undefined;
+    // W8: a new MCP process under the same live Claude parent (plugin reload, MCP crash) re-attaches to its slot.
+    if (!s && hello.agent === 'claude' && hello.mcp_ppid !== undefined) s = reattachable(hello.mcp_ppid, workspace);
     if (s) {
-      setState(db, s.id, 'online-idle');
+      if (s.state === 'offline') setState(db, s.id, 'online-idle');
       refreshProcess(db, s.id, {
         cwd: hello.cwd,
         workspace,
@@ -205,14 +227,24 @@ export function installIdentity(broker: Broker): void {
     for (const i of intents) if (i.conn === conn) intents.delete(i);
     for (const w of [...waiting]) if (w.intent.conn === conn) dropWaiting(w);
     if (!conn.sessionId) return;
-    if (!markOfflineIfCurrent(db, conn.sessionId, conn.generation)) {
+    const s = getSession(db, conn.sessionId);
+    if (!s || s.state === 'offline' || s.conn_generation !== conn.generation) {
       broker.log(
         `disconnect of stale connection ${conn.id} for ${conn.sessionId} (generation ${conn.generation}); slot left as is`,
       );
       return;
     }
-    announce(conn.sessionId);
-    settleWaiting();
+    const verdict = parentOnDisconnect(s, broker.processProbe, broker.codexNames?.available === true);
+    if (verdict === 'gone') {
+      markOfflineIfCurrent(db, s.id, conn.generation);
+      announce(s.id);
+      settleWaiting();
+      return;
+    }
+    // W8: the parent is open (or not yet verifiable): keep state, name claim and assignments; hooks still deliver.
+    markDisconnectedIfCurrent(db, s.id, conn.generation, verdict);
+    broker.log(`${s.id} (${s.name ?? 'unnamed'}) MCP disconnected; parent ${verdict}; session kept`);
+    announce(s.id);
   });
 
   const me = (sessionId: string | null) => getSession(db, sessionId as string) as SessionRow;
