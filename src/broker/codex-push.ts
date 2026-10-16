@@ -27,7 +27,19 @@ export function installCodexPushTrust(broker: Broker): void {
   broker.checkCodexPush = async (s, fresh = false, announce = true) => {
     if (stopped) return 'app-server-unavailable';
     if (isLegacySession(broker.db, s.id)) return 'app-server-unavailable';
-    const trust = s.agent_session_id ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh) : undefined;
+    const duplicated = () =>
+      !!(
+        s.agent_session_id &&
+        broker.db
+          .prepare(`SELECT 1 FROM sessions
+      WHERE agent='codex' AND agent_session_id=? AND id<>? AND retired_at IS NULL AND state<>'offline' LIMIT 1`)
+          .get(s.agent_session_id, s.id)
+      );
+    const trust = duplicated()
+      ? { trusted: false, reason: 'shared-root' as const }
+      : s.agent_session_id
+        ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh)
+        : undefined;
     if (stopped) return 'app-server-unavailable';
     const current = getSession(broker.db, s.id);
     if (
@@ -37,7 +49,7 @@ export function installCodexPushTrust(broker: Broker): void {
       current.conn_generation !== s.conn_generation
     )
       return 'app-server-unavailable';
-    const reason = trust?.reason ?? (trust?.trusted ? null : 'app-server-unavailable');
+    const reason = duplicated() ? 'shared-root' : (trust?.reason ?? (trust?.trusted ? null : 'app-server-unavailable'));
     broker.db.prepare('UPDATE sessions SET codex_push_reason=? WHERE id=?').run(reason, s.id);
     if (announce && current.codex_push_reason !== reason) {
       // Announce through the usual path so restored trust can release held deliveries.

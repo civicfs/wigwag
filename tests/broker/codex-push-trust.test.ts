@@ -72,6 +72,81 @@ async function boot() {
   return { home, app, broker, pushes, o, c, send };
 }
 describe('Codex push trust at bind, probe and dispatch', () => {
+  it.each(['bind-first', 'reattach-first'])(
+    'keeps one live holder when an offline binding returns (%s)',
+    async (order) => {
+      const { home, broker, c } = await boot();
+      await c.client.call('session.bind', { agent_session_id: 'T' });
+      c.client.destroy();
+      await until(() => getSession(broker.db, c.welcome.session_id)?.link === 'disconnected');
+      setState(broker.db, c.welcome.session_id, 'offline');
+      const other = await mcpClient(home, { agent: 'codex', requested_name: 'other-worker' });
+      cleanup.push(() => other.client.destroy());
+      const reattach = () => mcpClient(home, { agent: 'codex', resume_session_id: c.welcome.session_id });
+      if (order === 'bind-first') {
+        await other.client.call('session.bind', { agent_session_id: 'T' });
+        const attempt = reattach();
+        void attempt.then(
+          ({ client }) => client.destroy(),
+          () => {},
+        );
+        await expect(attempt).rejects.toMatchObject({ code: 'conflict' });
+        expect(getSession(broker.db, c.welcome.session_id)?.state).toBe('offline');
+        expect(getSession(broker.db, c.welcome.session_id)?.agent_session_id).toBe('T');
+      } else {
+        const back = await reattach();
+        cleanup.push(() => back.client.destroy());
+        expect(back.welcome.session_id).toBe(c.welcome.session_id);
+        await expect(other.client.call('session.bind', { agent_session_id: 'T' })).rejects.toMatchObject({
+          code: 'conflict',
+        });
+        expect(getSession(broker.db, other.welcome.session_id)?.agent_session_id).toBeNull();
+      }
+    },
+  );
+  it('holds both live duplicate Codex bindings even when metadata is a clean loaded root', async () => {
+    const { broker, c, send, pushes } = await boot();
+    await c.client.call('session.bind', { agent_session_id: 'T' });
+    const current = getSession(broker.db, c.welcome.session_id);
+    if (!current) throw new Error('missing session');
+    const duplicate = createSession(broker.db, {
+      agent: 'codex',
+      cwd: current.cwd,
+      workspace: current.workspace,
+      pid_chain: [],
+      mcp_ppid: null,
+    });
+    bindAgentSession(broker.db, duplicate.id, 'T');
+    expect(await broker.checkCodexPush(current, true)).toBe('shared-root');
+    expect(await broker.checkCodexPush(getSession(broker.db, duplicate.id) ?? duplicate, true)).toBe('shared-root');
+    const m = await send();
+    await until(() => ['held', 'read'].includes(deliveriesOfMessage(broker.db, m.id)[0]?.state ?? ''));
+    expect(deliveriesOfMessage(broker.db, m.id)[0]).toMatchObject({ state: 'held', hold_reason: 'codex-untrusted' });
+    expect(pushes).toEqual([]);
+  });
+  it('rechecks duplicate bindings after metadata I/O', async () => {
+    const { app, broker, c, send, pushes } = await boot();
+    await c.client.call('session.bind', { agent_session_id: 'T' });
+    let enter = () => {},
+      release = () => {};
+    const entered = new Promise<void>((r) => {
+        enter = r;
+      }),
+      waiting = new Promise<void>((r) => {
+        release = r;
+      });
+    app.pauseList = { entered: enter, release: waiting };
+    const m = await send();
+    await entered;
+    const current = getSession(broker.db, c.welcome.session_id);
+    if (!current) throw new Error('missing session');
+    const duplicate = createSession(broker.db, { agent: 'codex', cwd: current.cwd, pid_chain: [], mcp_ppid: null });
+    bindAgentSession(broker.db, duplicate.id, 'T');
+    release();
+    await until(() => ['held', 'read'].includes(deliveriesOfMessage(broker.db, m.id)[0]?.state ?? ''));
+    expect(deliveriesOfMessage(broker.db, m.id)[0]).toMatchObject({ state: 'held', hold_reason: 'codex-untrusted' });
+    expect(pushes).toEqual([]);
+  });
   it.each(['offline', 'online-idle'] as const)(
     'a descendant presenting root T cannot inject into a %s root',
     async (state) => {

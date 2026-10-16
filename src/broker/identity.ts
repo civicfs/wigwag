@@ -271,6 +271,20 @@ export function installIdentity(broker: Broker): void {
     // W8: a new MCP process under the same live Claude parent (plugin reload, MCP crash) re-attaches to its slot.
     if (!s && !conn.legacy && hello.agent === 'claude' && hello.mcp_ppid !== undefined)
       s = reattachable(hello.mcp_ppid, workspace, conn);
+    const rejoining = s;
+    if (
+      rejoining?.agent === 'codex' &&
+      rejoining.agent_session_id &&
+      listSessions(db).some(
+        (x) =>
+          x.id !== rejoining.id &&
+          x.agent === 'codex' &&
+          x.agent_session_id === rejoining.agent_session_id &&
+          !x.retired_at &&
+          x.state !== 'offline',
+      )
+    )
+      throw new WigwagError('conflict', 'Codex thread is already held by another live slot; not reattached');
     if (s) {
       if (s.state === 'offline') setState(db, s.id, 'online-idle');
       refreshProcess(db, s.id, {
