@@ -462,8 +462,8 @@ export function installIdentity(broker: Broker): void {
       bindAgentSession(db, s.id, p.agent_session_id);
       broker.bus.emit('session.bound', getSession(db, s.id));
     }
-    // W8: the Claude parent's process identity, captured when its pid is new (or still missing, at SessionStart).
-    if (s.agent_pid !== agentPid || (!s.agent_start && p.event === 'SessionStart')) {
+    // W8: the Claude parent's process identity, captured when its pid is new or retried while its start identity is missing.
+    if (s.agent_pid !== agentPid || !s.agent_start) {
       const ident = captureIdentity(agentPid, broker.processProbe);
       setAgentIdentity(db, s.id, agentPid, ident?.start ?? null);
       setParentState(db, s.id, ident ? 'live' : 'unknown');

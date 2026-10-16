@@ -74,6 +74,26 @@ const reset = () => {
 };
 
 describe('parent-verified disconnect (W8)', () => {
+  it('retries missing process identity capture at the next hook boundary', async () => {
+    reset();
+    procs.set(4242, 'start-A');
+    const { home, broker } = await boot();
+    probeFails = true;
+    const a = await bound(home, 4242, 'worker-one', 'sid-retry');
+    expect(getSession(broker.db, a.welcome.session_id)).toMatchObject({ agent_pid: 4242, agent_start: null });
+    probeFails = false;
+    const h = (await connect(home, { protocol: 1, role: 'hook' })).client;
+    await h.call('hook.event', {
+      agent: 'claude',
+      event: 'PostToolUse',
+      agent_session_id: 'sid-retry',
+      cwd: CWD,
+      pid_chain: [9, 4242],
+      agent_pid: 4242,
+    });
+    expect(getSession(broker.db, a.welcome.session_id)).toMatchObject({ agent_start: 'start-A', parent_state: 'live' });
+  });
+
   it('parent alive: the session stays online, link disconnected, and keeps its name against takeover', async () => {
     reset();
     procs.set(4242, 'start-A');
