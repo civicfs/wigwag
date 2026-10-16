@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { type ChildProcess, execFileSync, type SpawnOptions, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +15,14 @@ import { noProcesses } from '../src/proc/identity.js';
 import { frameLimit } from '../src/protocol/frame.js';
 import type { Hello, PushData } from '../src/protocol/rpc.js';
 import { listSessions } from '../src/store/sessions.js';
+import { tsChildArgs } from './fixtures/ts-child-loader.mjs';
+
+export { tsChildArgs };
+
+/** Spawn a fixture that installs ts-child-loader before importing source modules; Node 24/26 compatible. */
+export function spawnTsChild(entry: string, args: string[] = [], options: SpawnOptions = {}): ChildProcess {
+  return spawn(process.execPath, tsChildArgs(entry, args), options);
+}
 
 export const FAKE_CODEX = resolve(import.meta.dirname, 'fixtures/fake-codex.mjs');
 export const STARTED_PRELOAD = resolve(import.meta.dirname, 'fixtures/started.mjs');
