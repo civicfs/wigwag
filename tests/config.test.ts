@@ -74,9 +74,24 @@ describe('config', () => {
     expect(r.added.sort()).toEqual(['codex.name_wait_ms', 'hooks']);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     const after = loadConfig(home);
-    expect(after.codex).toEqual({ binary: '/c', queue_timeout_ms: 7, name_wait_ms: 120000 });
+    expect(after.codex).toEqual({ binary: '/c', queue_timeout_ms: 7, name_wait_ms: 120000, trusted_host_versions: [] });
     expect(after.hooks).toEqual({ deadline_ms: 5000, max_stdin_bytes: 1048576 });
     expect(initHome(home, '/other').added).toEqual([]);
+  });
+  it('loads a 0.2-shaped config without init or writing the file', () => {
+    const home = fresh();
+    const { path } = initHome(home, '/c');
+    const cfg = JSON.parse(readFileSync(path, 'utf8'));
+    delete cfg.codex.trusted_host_versions;
+    delete cfg.questions.codex_idle_grace_ms;
+    const original = JSON.stringify(cfg);
+    writeFileSync(path, original);
+    const loaded = loadConfig(home);
+    expect(loaded.codex.trusted_host_versions).toEqual([]);
+    // This optional key stays absent; the question adapter applies its documented 2000 ms fallback.
+    expect(loaded.questions.codex_idle_grace_ms).toBeUndefined();
+    expect(loaded.codex.binary).toBe('/c');
+    expect(readFileSync(path, 'utf8')).toBe(original);
   });
   it('init leaves a file that is not a JSON object alone', () => {
     const home = fresh();
