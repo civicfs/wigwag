@@ -540,13 +540,13 @@ describe('undelivered messages follow a rename away from the provisional name', 
     expect(where(ids.read)).toBe(old);
   });
 
-  it('does not forward when the session leaves a name it registered itself', async () => {
+  it('also forwards when the session leaves a name it registered itself (W2a)', async () => {
     const { home, broker } = await boot();
     const a = await mcp(home);
     await a.client.call('session.register', { name: 'first-name' });
     const m = await ownerSend(home, 'first-name', 'to-first');
     await a.client.call('session.register', { name: 'second-name' });
-    expect(rows(broker, m.id)[0].recipient).toBe('first-name');
+    expect(rows(broker, m.id)[0].recipient).toBe('second-name');
   });
 
   it('a broadcast that reached both names keeps its old-name row; other messages still move', async () => {

@@ -20,6 +20,7 @@ import {
 } from '../store/sessions.js';
 import type { Connection } from './connection.js';
 import { isReachable, publicSession } from './registry.js';
+import { afterRename, type RenameCause } from './rename.js';
 import { takeoverText, visibleUnreadCount } from './scope.js';
 import type { Broker } from './server.js';
 
@@ -83,6 +84,8 @@ export function installIdentity(broker: Broker): void {
     return s;
   };
 
+  broker.announce = (id) => void announce(id);
+
   const sameScope = (caller: SessionRow, holder: SessionRow) => scopeOf(db, caller.workspace).has(holder.workspace);
   const liveHolderText = (caller: SessionRow, holder: SessionRow) =>
     sameScope(caller, holder)
@@ -91,7 +94,7 @@ export function installIdentity(broker: Broker): void {
 
   const claimProvisional = (s: SessionRow) => {
     for (;;) {
-      if (claimName(db, s.id, provisionalName(s.agent, s.cwd, rand4())).ok) {
+      if (claimName(db, s.id, provisionalName(s.agent, s.cwd, rand4()), 'provisional').ok) {
         provisional.set(s.id, ++tick);
         return;
       }
@@ -99,14 +102,12 @@ export function installIdentity(broker: Broker): void {
   };
 
   /**
-   * `s` just left the provisional name `from` (register, launch intent, a handed-over name): its undelivered messages
-   * addressed to that name follow it, since inbox and unread only look up the name it has now. The caller announces
-   * the session afterwards, which sweeps and delivers the moved backlog.
+   * `s` (its row from before the claim) moved to a new name: W2a forwarding, audit and scope notice (rename.ts). The
+   * caller announces the session afterwards, which sweeps and delivers the moved backlog.
    */
-  const leftProvisional = (s: SessionRow, from: string | null) => {
+  const renamed = (s: SessionRow, cause: RenameCause) => {
     provisional.delete(s.id);
-    const to = getSession(db, s.id)?.name;
-    if (from && to && from !== to) broker.engine?.forward(from, to);
+    afterRename(broker, s.id, s.name, s.name_source, cause);
   };
 
   broker.onHello = async (conn, hello: Hello) => {
@@ -144,7 +145,7 @@ export function installIdentity(broker: Broker): void {
       let ok = false;
       if (want && RESERVED_NAMES.has(want)) warning = `requested name "${want}" is reserved; using a provisional name`;
       else if (want) {
-        const r = claimName(db, s.id, want);
+        const r = claimName(db, s.id, want, 'custom');
         ok = r.ok;
         if (!r.ok)
           warning =
@@ -171,8 +172,7 @@ export function installIdentity(broker: Broker): void {
         continue;
       }
       const previous = holderOf(db, w.intent.name);
-      const from = s.name;
-      const r = claimName(db, s.id, w.intent.name);
+      const r = claimName(db, s.id, w.intent.name, 'custom');
       if (!r.ok && r.reason === 'live') continue; // still held: keep waiting
       dropWaiting(w);
       if (!r.ok) {
@@ -181,7 +181,7 @@ export function installIdentity(broker: Broker): void {
         );
         continue;
       }
-      leftProvisional(s, from);
+      renamed(s, 'launch');
       broker.log(`launch intent: ${w.intent.name} handed to ${s.id} after the previous holder ended`);
       announce(s.id);
       // The old session keeps its row and history but lost the name; owner views must not go on showing it.
@@ -204,8 +204,7 @@ export function installIdentity(broker: Broker): void {
   broker.handle('session.register', ({ conn }, { name }) => {
     if (RESERVED_NAMES.has(name)) throw new WigwagError('bad_request', `"${name}" is reserved`);
     const before = me(conn.sessionId);
-    const wasProvisional = provisional.has(before.id);
-    const r = claimName(db, before.id, name);
+    const r = claimName(db, before.id, name, 'custom');
     // final m-5: a refusal names the holder's session and cwd only when the holder is in the caller's scope.
     if (!r.ok && r.reason === 'scope') throw new WigwagError('name_taken', takeoverText(name, r.holder.workspace));
     if (!r.ok) {
@@ -216,7 +215,7 @@ export function installIdentity(broker: Broker): void {
         sameScope(caller, r.holder) ? { holder_session_id: r.holder.id } : undefined,
       );
     }
-    if (wasProvisional) leftProvisional(before, before.name);
+    renamed(before, 'register');
     announce(conn.sessionId as string);
     return { name };
   });
@@ -271,8 +270,7 @@ export function installIdentity(broker: Broker): void {
     }
     const intent = matching[0];
     intents.delete(intent);
-    const from = s.name;
-    const r = claimName(db, s.id, intent.name);
+    const r = claimName(db, s.id, intent.name, 'custom');
     if (!r.ok) {
       const wait = broker.config.codex.name_wait_ms;
       if (r.reason === 'live') {
@@ -292,7 +290,7 @@ export function installIdentity(broker: Broker): void {
       );
       return;
     }
-    leftProvisional(s, from);
+    renamed(s, 'launch');
   };
 
   broker.handle('session.bind', ({ conn }, { agent_session_id, question_relay_version }) => {

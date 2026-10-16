@@ -62,6 +62,8 @@ export class Broker {
   engine: DeliveryEngine | null = null;
   questions!: QuestionService;
   digestProvider: ((name: string) => string | null) | null = null;
+  /** Identity's announce (sweep the name's backlog, owner broadcast, session.available); set by installIdentity. */
+  announce: (sessionId: string) => void = () => {};
   private readonly handlers = new Map<string, Handler>();
   private readonly logPath: string;
   /** In-flight hello per connection; frames that arrive behind it wait for its outcome. */

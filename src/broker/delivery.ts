@@ -53,6 +53,8 @@ export class DeliveryEngine {
   private readonly now: () => number;
   /** Deliveries whose transport call is running. Keyed `message_id\0recipient`. */
   private readonly inflight = new Set<string>();
+  /** from-name → to-name for a forward that skipped an in-flight push; re-run when that push settles (W2a). */
+  private readonly deferredForwards = new Map<string, string>();
   /** Running transport pushes; a graceful stop waits for them (final review I-10). */
   private readonly running = new Set<Promise<void>>();
   private readonly recipientQueues = new Map<string, Promise<void>>();
@@ -180,20 +182,24 @@ export class DeliveryEngine {
   }
 
   /**
-   * A session left its provisional name `from` for `to`: its undelivered deliveries follow it (append-only history is
-   * untouched). In-flight pushes stay where they are, and a message the new name's scope cannot receive is not moved
+   * A session moved from name `from` to `to` (any rename, W2a): its undelivered deliveries follow it (append-only
+   * history is untouched). In-flight pushes follow once settled; a message the new name's scope cannot receive is not moved
    * (spec §17). Pending and failed deliveries are dispatched again under the new name (their timers and queued
    * dispatches were keyed by the old one); held ones are picked up by the `session.available` sweep that follows.
    */
-  forward(from: string, to: string): void {
-    const moved = moveDeliveries(
-      this.d.db,
-      from,
-      to,
-      (x) =>
-        !this.busy({ message_id: x.message_id, recipient: from }) &&
-        scopeViolation(this.d.db, x.message.from_workspace, to) === null,
-    );
+  forward(from: string, to: string): number {
+    let skipped = false;
+    const moved = moveDeliveries(this.d.db, from, to, (x) => {
+      if (this.busy({ message_id: x.message_id, recipient: from })) {
+        skipped = true;
+        return false;
+      }
+      return scopeViolation(this.d.db, x.message.from_workspace, to) === null;
+    });
+    // A later rename of `to` must carry deferred deliveries all the way to the newest name.
+    for (const [f, t] of this.deferredForwards) if (t === from) this.deferredForwards.set(f, to);
+    if (skipped) this.deferredForwards.set(from, to);
+    else this.deferredForwards.delete(from);
     for (const row of moved) {
       this.d.emitFeed('delivery', { ...row, recipient_unread: visibleUnreadCount(this.d.db, to) });
       if (row.state === 'pending' || row.state === 'failed') {
@@ -203,6 +209,7 @@ export class DeliveryEngine {
       }
     }
     if (moved.length) this.d.log(`forwarded ${moved.length} undelivered message(s) from ${from} to ${to}`);
+    return moved.length;
   }
 
   /** Recipients are dispatched in parallel: one slow transport (a hung `codex queue`) does not delay the others. */
@@ -351,6 +358,12 @@ export class DeliveryEngine {
       markPushed(new Set(keys.map((k) => k.message_id)));
     } finally {
       for (const k of keys) this.inflight.delete(DeliveryEngine.id(k));
+      if (!this.drained) {
+        for (const recipient of new Set(keys.map((k) => k.recipient))) {
+          const to = this.deferredForwards.get(recipient);
+          if (to) this.forward(recipient, to);
+        }
+      }
     }
   }
 

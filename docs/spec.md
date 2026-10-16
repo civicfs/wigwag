@@ -141,14 +141,16 @@ vitest, linted with biome.
   registering another name or going offline, or `codex.name_wait_ms`. Only a live-holder refusal waits; an
   out-of-scope offline holder still refuses for good. No hook is used: Codex 0.160.1 lists a `sessionEnd` hook event, but the MCP
   connection closing already marks the thread's end (a hook would add nothing the broker does not see).
-- **Messages follow a rename.** When a session leaves the provisional name the broker gave it (by `register`, an applied
-  launch intent, or a handed-over launcher name), its `pending`, `held`, `stuck` and `failed` deliveries addressed to the
-  old name move to the new name in one transaction, because inbox and unread look up only the current name. Messages stay
-  append-only (`to_target` keeps the old name); each moved delivery gets a delivery event `forwarded from <old>`. A delivery
-  is not moved when the new name could not receive it under §17 (never across a scope boundary), when its push is in
-  flight, or when the message already has a delivery to the new name (an `all` broadcast that reached both). Pending and
-  failed deliveries are dispatched again, and the session is announced so held backlog is swept and delivered. Leaving a
-  name the session chose itself does not forward.
+- **Messages follow a rename (W2a, 0.3.0).** Whenever a session's name changes (`register`, an applied launch intent, a
+  handed-over launcher name, native-name adoption, or resume recovery), its `pending`, `held`, `stuck` and `failed`
+  deliveries addressed to the old name move to the new name in one transaction, because inbox and unread look up only
+  the current name. Messages stay append-only (`to_target` keeps the old name); each moved delivery gets a delivery
+  event `forwarded from <old>`. A delivery is not moved when the new name could not receive it under §17, or when the
+  message already has a delivery to the new name (an `all` broadcast that reached both). A delivery whose push is in
+  flight moves when that push settles. Active subscriptions and mutes move with the name, the rename is recorded in
+  `session_renames`, live sessions in scope get a low-priority `session renamed: <old> → <new>` notice (not sent when
+  the old name was an unused provisional name), and owners get the session. Pending and failed deliveries are
+  dispatched again, and the session is announced so held backlog is swept and delivered.
 - **Rename**: `register(name)` tool. Rejected if a *live* session holds it. If the holder is offline, the new
   session takes the name and inherits its undelivered backlog (delivered as one digest on first wake).
 - **Binding the MCP connection to the agent session:**
