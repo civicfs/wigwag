@@ -277,6 +277,9 @@ export const METHODS = {
   'owner.link': m('owner', z.object({ a: z.string().min(1), b: z.string().min(1) })),
   'owner.unlink': m('owner', z.object({ a: z.string().min(1), b: z.string().min(1) })),
   'owner.links': m('owner', z.object({})),
+  // W7: resume-recovery flags and duplicate slots; retiring excludes an offline slot from automatic recovery.
+  'owner.recovery': m('owner', z.object({ limit: z.number().int().positive().max(200).default(50) })),
+  'owner.retire_slot': m('owner', z.object({ session_id: z.string().min(1) })),
 } as const;
 
 export type MethodName = keyof typeof METHODS;

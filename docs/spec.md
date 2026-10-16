@@ -161,6 +161,38 @@ vitest, linted with biome.
   second cannot be distinguished.
 - **Rename**: `register(name)` tool. Rejected if a *live* session holds it. If the holder is offline, the new
   session takes the name and inherits its undelivered backlog (delivered as one digest on first wake).
+- **Native names (W2, 0.3.0).** `sessions.name_source` is `provisional`, `native` or `custom`. Claude: the hook's
+  `session_title`, then `<transcript dir>/<session_id>/custom-title.json`, then (SessionStart only) the newest
+  `custom-title` record for the session in the last 256 KiB of the transcript; refreshed at SessionStart,
+  UserPromptSubmit and PostToolUse, and by a sidecar watcher plus a 15 s reconcile. Codex: `thread.name` from a
+  metadata-only `thread/read` on a dedicated app-server connection (never `thread/resume`, never `title`), refreshed on
+  bind, on `thread/name/updated`, and every 30 s; the last 64 KiB of `session_index.jsonl` when the app-server is
+  unreachable may supply the first native name only; it never changes an existing native name. Display titles have
+  control characters removed and are capped at 200 characters before storage. Titles are lowercased, folded to
+  `[a-z0-9-]`, prefixed with the agent when they start with a digit, and
+  capped at 43 characters; a name held by any other session or reserved gets `-2`…`-9`, then a random suffix. Unusable
+  titles keep the current name. `register` sets `custom`; `register` with `native=true` reverts.
+- **Resume recovery (W7, 0.3.0).** At the first native bind of a live slot, exactly one offline or MCP-disconnected,
+  unretired slot of the same agent, native id and workspace that is named or holds an active assignment is the canonical slot: in one
+  transaction the live connection takes it (process fields, state, native binding, a new connection generation), the
+  new slot is retired into it, readiness is cleared, and synchronous native questions of its active worker assignment
+  are cancelled. Codex additionally requires the bound id to be a root thread verified through `thread/read`
+  (`id = sessionId`, no parent, non-sub-agent source); otherwise the bind keeps the 0.2 behavior. Several candidates,
+  a live holder, or a slot already bound to another conversation never take over; each is recorded in
+  `session_lineage` and shown by `wigwag recovery`. Disconnects only mark a slot offline when the closing connection
+  holds its current generation. Changed-native-id continuations and assignment native-id rebinding are not automatic
+  in 0.3.0.
+- **Parent liveness (W8, 0.3.0).** `sessions.link` (`connected | disconnected`) is separate from `parent_state`
+  (`live | gone | unknown`). A Claude hook bind records the agent pid and its start identity (Linux: boot id, start
+  ticks, uid; macOS: UTC `ps lstart` to the second, uid). On MCP disconnect and at broker start the parent is verified:
+  Claude by pid plus start identity, Codex by `thread/loaded/list` on the metadata-only app-server connection. A live
+  parent keeps the session `online-*` with `link: disconnected`, its name claim and its assignments; Claude pushes are
+  held as `disconnected` and delivered at the next hook boundary or MCP re-attach; Codex pushes continue through
+  `codex queue`. An immediate probe and an extra check about 2 s after disconnect catch exits promptly; a 10 s probe loop
+  continues checking and marks the session offline once the parent is gone. No recorded evidence at
+  disconnect (Claude without identity, Codex without app-server) keeps the 0.2 behavior; an unverifiable parent (probe
+  error, legacy row at broker start) goes offline after 3 consecutive unknown probes and 60 s. A new MCP process under
+  the same verified Claude parent re-attaches to the slot.
 - **Binding the MCP connection to the agent session:**
   - Codex: the plugin declares `SessionStart` / `Stop` / `Interrupt` hooks of `type: "mcp_tool"` calling the
     plugin's own server (`session_bind`, `turn_ended`) with `${session_id}` — same pattern the bundled `browser`

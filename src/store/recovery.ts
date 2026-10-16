@@ -240,3 +240,23 @@ export function adoptCanonical(
     };
   });
 }
+
+export interface DuplicateGroup {
+  agent: Agent;
+  native_id: string;
+  workspace: string;
+  session_ids: string[];
+}
+
+/** Migration diagnostics (S-E: nine slots for one conversation): unretired slots sharing agent, native id and workspace. */
+export function duplicateNativeSlots(db: Db): DuplicateGroup[] {
+  return (
+    db
+      .prepare(
+        `SELECT agent, agent_session_id AS native_id, workspace, group_concat(id, ',') AS ids FROM sessions
+         WHERE agent_session_id IS NOT NULL AND retired_at IS NULL
+         GROUP BY agent, agent_session_id, workspace HAVING count(*) > 1 ORDER BY max(last_seen_at) DESC`,
+      )
+      .all() as Array<{ agent: Agent; native_id: string; workspace: string; ids: string }>
+  ).map((r) => ({ agent: r.agent, native_id: r.native_id, workspace: r.workspace, session_ids: r.ids.split(',') }));
+}

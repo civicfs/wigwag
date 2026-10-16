@@ -1,6 +1,6 @@
 # Wigwag privacy notice
 
-Updated October 13, 2026. This notice describes the self-hosted Wigwag CLI and local Claude Code/Codex plugins.
+Updated October 16, 2026. This notice describes the self-hosted Wigwag CLI and local Claude Code/Codex plugins.
 It does not describe a hosted service, and it does not replace your inference provider's privacy policy or your
 organization's obligations. Read it before installing or sharing content through the plugin.
 
@@ -19,7 +19,7 @@ organization-managed installation, contact the organization operating that host.
 
 | Data | Purpose |
 |---|---|
-| Session names and IDs, agent type, working directory and repository paths, process identifiers, state, and timestamps | Bind tools and hooks to the correct session, show availability, and determine workspace scope |
+| Session names and native titles/IDs, transcript reference paths, agent type, working directory and repository paths, process identifiers/start identities, state, and timestamps | Bind tools and hooks to the correct session, show availability, and determine workspace scope |
 | Message subjects and bodies, sender and recipient metadata, requests and responses, attachment references, and delivery history | Route messages, retry delivery, provide inboxes and the owner feed, and match responses |
 | Submitted files or text blobs, hashes, names, media types, and creation metadata | Store and retrieve attachments |
 | Shared key/value data and history, stream schemas and records | Coordinate explicitly shared state and notifications |
@@ -28,6 +28,9 @@ organization-managed installation, contact the organization operating that host.
 
 Paths and message contents can identify people or contain confidential information. Wigwag has no provider-login
 flow and does not read provider credential stores or forward agent conversation transcripts. Native Codex question recovery can read the assigned thread history locally to match questions and existing answers; that history is not relayed to other agents.
+Native naming reads local Claude title sidecars and bounded transcript tails, or Codex thread metadata and bounded
+session-index tails. It stores the display title and transcript reference path; it does not relay conversation
+transcripts for naming. Resume lineage records keep native IDs, slot IDs, provenance and recovery outcomes.
 Tools process the snippets, data, and file paths supplied to them; a blob upload reads the specified file.
 
 Do not send passwords, API keys, authentication tokens, protected health information, or payment-card data through
@@ -85,7 +88,8 @@ Unlinking restricts subsequent scoped access; it cannot recall copies already re
 1. Close all connected Claude Code and Codex sessions so they cannot restart the broker.
 2. Run `wigwag broker stop`.
 3. Identify the home directory using the precedence above, then manually delete that directory. This permanently
-   removes its configuration, database and SQLite sidecar files, history, logs, and blobs. Reinitialize before reuse.
+   removes its configuration, database, SQLite sidecar files and any `state.db.pre-v3.bak` backup, history, logs,
+   and blobs. Reinitialize before reuse.
 4. Separately address exports, destination files written by `blob_get`, backups, and provider-held copies. Deleting
    the Wigwag home directory does not delete those copies or agent conversation history.
 

@@ -66,7 +66,11 @@ export const TOOLS: ToolDef[] = [
     'session.register',
     "Set this session's wigwag name (a role, e.g. codex-merger). Rejected if a live session holds it. A name set here stays until you call register with native=true, which follows the native session title again (Claude /rename, Codex thread name).",
   ),
-  t('whoami', 'session.whoami', "Show this session's wigwag name, state and unread count."),
+  t(
+    'whoami',
+    'session.whoami',
+    "Show this session's wigwag name, where the name came from (name_source: provisional, native or custom), unread count, and what this session supports (capabilities: native name source, resume recovery, push or hook-boundary delivery, and how parent liveness is checked when the MCP link drops).",
+  ),
   t(
     'delegate',
     'assignment.delegate',

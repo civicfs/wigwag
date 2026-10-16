@@ -276,3 +276,14 @@ export function provisionalName(agent: Agent, cwd: string, rand4: string): strin
     .slice(0, 40 - agent.length);
   return [agent, slug || 'session', rand4].join('-');
 }
+
+/** Owner resolution (W7): an offline slot is excluded from automatic resume recovery and duplicate diagnostics. */
+export function retireSlot(db: Db, id: string): boolean {
+  return (
+    Number(
+      db
+        .prepare(`UPDATE sessions SET retired_at = ? WHERE id = ? AND state = 'offline' AND retired_at IS NULL`)
+        .run(nowIso(), id).changes,
+    ) === 1
+  );
+}

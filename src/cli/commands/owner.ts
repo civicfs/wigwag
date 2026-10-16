@@ -288,3 +288,47 @@ export async function cmdLinks(args: string[]): Promise<void> {
     );
   });
 }
+
+type RecoveryReport = {
+  flags: Array<{
+    id: number;
+    agent: string;
+    native_id: string;
+    session_id: string;
+    reason: string | null;
+    created_at: string;
+  }>;
+  duplicates: Array<{ agent: string; native_id: string; workspace: string; session_ids: string[] }>;
+};
+
+export async function cmdRecovery(args: string[]): Promise<void> {
+  if (args[0] === 'retire') {
+    if (args.length !== 2 || !args[1]) throw usageError('recovery');
+    await withOwner(async (c) => {
+      await c.call('owner.retire_slot', { session_id: args[1] });
+      out(`retired ${args[1]}`);
+    });
+    return;
+  }
+  if (args.some((a) => a !== '--json')) throw usageError('recovery');
+  await withOwner(async (c) => {
+    const r = await c.call<RecoveryReport>('owner.recovery', {});
+    if (args.includes('--json')) return out(JSON.stringify(r, null, 2));
+    const parts: string[] = [];
+    if (r.flags.length)
+      parts.push(
+        table([
+          ['FLAG', 'AGENT', 'NATIVE ID', 'NEW SLOT', 'REASON', 'AT'],
+          ...r.flags.map((f) => [String(f.id), f.agent, f.native_id, f.session_id, f.reason ?? '', f.created_at]),
+        ]),
+      );
+    if (r.duplicates.length)
+      parts.push(
+        table([
+          ['AGENT', 'NATIVE ID', 'WORKSPACE', 'SLOTS'],
+          ...r.duplicates.map((d) => [d.agent, d.native_id, workspaceLabel(d.workspace), d.session_ids.join(' ')]),
+        ]),
+      );
+    out(parts.length ? parts.join('\n\n') : 'nothing to resolve');
+  });
+}

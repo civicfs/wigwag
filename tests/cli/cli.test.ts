@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { signalBroker } from '../../src/cli/commands/broker.js';
+import { bindAgentSession, claimName, createSession, setState } from '../../src/store/sessions.js';
 import { VERSION } from '../../src/version.js';
 import { DIST_MAIN, gitRepo, mcpClient, startTestBroker, tmpHome } from '../helpers.js';
 
@@ -96,6 +97,7 @@ describe('cli', () => {
       'link',
       'unlink',
       'links',
+      'recovery',
       'tui',
       'claude',
       'codex',
@@ -317,6 +319,7 @@ describe('cli', () => {
       ['unlink', 'a-a'],
       ['link', 'a-a', 'b-b', 'c-c'],
       ['links', 'extra'],
+      ['recovery', 'extra'],
       // R38: numeric flags are range-checked against the RPC bounds; doctor rejects unknown flags as usage errors
       ['tail', '--limit', '0'],
       ['tail', '--limit', '1001'],
@@ -397,6 +400,34 @@ describe('cli links (spec §17)', () => {
       const bad = await runCli(home, ['link', 'no-such-session', repoB]);
       expect(bad.code).toBe(1);
       expect(bad.stderr).toContain('No session named "no-such-session"');
+    } finally {
+      await broker.stop();
+    }
+  });
+});
+
+describe('cli recovery (W7)', () => {
+  it('reports nothing to resolve, then retires a duplicate slot', async () => {
+    const { home, broker } = await startTestBroker();
+    try {
+      expect((await runCli(home, ['recovery'])).stdout.trim()).toBe('nothing to resolve');
+      const ids = ['dup-one', 'dup-two'].map((name) => {
+        const s = createSession(broker.db, {
+          agent: 'claude',
+          cwd: '/w',
+          workspace: '/w',
+          pid_chain: [],
+          mcp_ppid: null,
+        });
+        claimName(broker.db, s.id, name, 'custom');
+        bindAgentSession(broker.db, s.id, 'sid-dup');
+        setState(broker.db, s.id, 'offline');
+        return s.id;
+      });
+      expect((await runCli(home, ['recovery'])).stdout).toContain('sid-dup');
+      expect((await runCli(home, ['recovery', 'retire', ids[0]])).stdout.trim()).toBe(`retired ${ids[0]}`);
+      const json = JSON.parse((await runCli(home, ['recovery', '--json'])).stdout);
+      expect(json.duplicates).toEqual([]);
     } finally {
       await broker.stop();
     }

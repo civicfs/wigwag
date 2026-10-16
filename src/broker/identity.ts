@@ -26,6 +26,7 @@ import {
   setParentState,
   setState,
 } from '../store/sessions.js';
+import { capabilitiesFor } from './capabilities.js';
 import type { Connection } from './connection.js';
 import { parentOnDisconnect, verifyAtStart } from './liveness.js';
 import { isReachable, publicSession } from './registry.js';
@@ -360,7 +361,10 @@ export function installIdentity(broker: Broker): void {
     return { name };
   });
 
-  broker.handle('session.whoami', ({ conn }) => publicSession(db, me(conn.sessionId)));
+  broker.handle('session.whoami', ({ conn }) => {
+    const s = me(conn.sessionId);
+    return { ...publicSession(db, s), capabilities: capabilitiesFor(broker, s) };
+  });
   // Spec §17: an agent sees the sessions in its scope; the owner sees every workspace.
   broker.handle('session.who', ({ conn }, { include_offline, limit, offset }) => {
     const owner = conn.role === 'owner';

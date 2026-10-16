@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Adopt native session names (Claude `/rename`, Codex thread names), sanitized and
+  suffixed on collision; an explicit `register` wins and `register native=true`
+  reverts. Codex's index can supply the first native name; later updates require
+  an authoritative app-server answer.
+- Forward undelivered mail and the session's own active subscriptions and mutes
+  on every rename; notify live sessions in scope and owners. Deferred forwarding
+  stops if another session claims the old name.
+- Reclaim the previous slot when a native session resumes (Codex: verified root
+  threads only), with connection generations, lineage records, `wigwag recovery`
+  diagnostics and per-session capabilities in `whoami`.
+- Keep a session, its name and assignments while its parent remains open after an
+  MCP disconnect or broker restart. Hold Claude pushes for the next hook and
+  recheck after two seconds, then every ten seconds. Mark offline when the parent
+  is confirmed gone or unverifiable past its grace period. macOS identities use
+  UTC start time plus uid with one-second resolution.
 - Before upgrading an existing database to schema v3, save a mode-0600 clear-text
   copy at `state.db.pre-v3.bak`. Keep it after success or an uncertain outcome.
   A confirmed rollback removes only the backup created by that attempt so retry

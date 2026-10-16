@@ -113,7 +113,16 @@ still required.
 
 Names use lowercase letters, digits, and hyphens, start with a letter, and contain
 2–48 characters. `owner`, `all`, and `wigwag` are reserved. Without `--as`, Wigwag
-assigns a provisional name; an agent can change it with `register`.
+assigns a provisional name and then adopts the session's native name (Claude
+`/rename` or Codex thread name), sanitized and suffixed on collision. A name set
+with `register` stays until `register` with `native=true`. Resuming a native
+session reclaims its old wigwag slot when exactly one offline or MCP-disconnected,
+unretired slot holds that native id (Codex: verified root threads only); `wigwag recovery` lists what it
+refused and lets the owner retire stale slots. A plugin reload, MCP crash or
+broker restart no longer takes a session offline while its Claude process (same
+pid and start time) or Codex thread (still loaded) is open: it keeps its name,
+`who` shows "parent open, MCP disconnected", and Claude messages wait for the next
+prompt or tool call. Codex pushes continue through `codex queue`.
 
 ## Delegate work and answer questions
 
@@ -260,7 +269,7 @@ retain their existing response formats and are not covered by this page budget.
 
 | Tools | Purpose |
 |---|---|
-| `register`, `whoami`, `who` | Name, binding, roles, and sessions in scope; `who` pages 25 by default, up to 50, using `offset`; `include_offline` adds history |
+| `register`, `whoami`, `who` | Name (custom, or the native title with `register native=true`), binding, roles, capabilities, and sessions in scope; `who` pages 25 by default, up to 50, using `offset`; `include_offline` adds history |
 | `send`, `reply` | Send a body with optional subject and priority, or reply by message ID |
 | `inbox`, `read_message`, `ack` | Bounded inbox pages, full-message chunks, acknowledgements |
 | `mute`, `unmute` | Hold traffic from a sender or stream |
@@ -279,6 +288,8 @@ tool boundary.
 
 ```sh
 wigwag who
+wigwag recovery [--json]
+wigwag recovery retire <session-id>
 wigwag send test-worker --subject "Status check" --body "Report progress and blockers."
 wigwag tail -f --name test-worker
 wigwag deliveries --stuck

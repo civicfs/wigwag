@@ -14,6 +14,7 @@ import { DeliveryEngine } from './delivery.js';
 import { installData } from './handlers/data.js';
 import { installMessages } from './handlers/messages.js';
 import { installOwner } from './handlers/owner.js';
+import { installRecovery } from './handlers/recovery.js';
 import { installRequests } from './handlers/requests.js';
 import { installIdentity } from './identity.js';
 import { installLiveness, type LivenessOptions } from './liveness.js';
@@ -69,6 +70,7 @@ export async function startBroker(
   installData(broker);
   installRequests(broker);
   installOwner(broker);
+  installRecovery(broker);
   const questions = installQuestions(broker);
   installQuestionHooks(broker, questions);
   installCodexNames(

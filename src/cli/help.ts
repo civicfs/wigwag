@@ -174,6 +174,15 @@ export const COMMANDS: CommandHelp[] = [
     flags: [],
   },
   {
+    name: 'recovery',
+    summary: 'show resume-recovery flags and duplicate session slots',
+    usage: ['wigwag recovery [--json]', 'wigwag recovery retire <session-id>'],
+    flags: [
+      ['--json', 'print the raw report'],
+      ['retire <session-id>', 'exclude an offline slot from automatic resume recovery'],
+    ],
+  },
+  {
     name: 'tui',
     summary: 'open the owner view',
     usage: ['wigwag tui'],
