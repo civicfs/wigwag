@@ -180,11 +180,20 @@ vitest, linted with biome.
   capped at 43 characters; a name held by any other session or reserved gets `-2`…`-9`, then a random suffix. Unusable
   titles keep the current name. `register` sets `custom`; `register` with `native=true` reverts.
 - **Version compatibility.** Hello and welcome carry the existing protocol version, required schema version and
-  package version. Both ends reject skew before a session is created or RPCs are authorized, with restart advice for
-  an older broker or update/reload advice for an older client. Missing stamps identify a legacy peer. Compatible
-  whoami/doctor calls show the broker's recent rejected-peer warnings. Lifecycle and QuestionReady hooks exit zero
+  package version. Both ends reject protocol/schema incompatibility before a session is created or RPCs are authorized,
+  with restart advice for an older broker or update/reload advice for an older client. Package versions only warn.
+  Compatible whoami/ping/doctor calls show recent compatibility warnings. Lifecycle and QuestionReady hooks exit zero
   without context/decisions on skew; supervised question PreToolUse retains its existing denial, including the
-  actionable compatibility error, to prevent silently asking the human directly. Doctor probes without autospawn and opens an existing database read-only without migrations. Clean closed databases use immutable URI mode; existing WAL/shm uses ordinary read-only
+  actionable compatibility error, to prevent silently asking the human directly. Protocol/schema mismatches reject
+  before session creation; package versions alone warn and remain connected. Unstamped same-protocol 0.2 mcp/hook/owner
+  clients are accepted in degraded mode, shown in whoami/doctor/TUI as `legacy client 0.2: reload plugin for new features`.
+  A legacy MCP reconnect preserves a slot only with its explicit resume_session_id, matching agent/workspace and an
+  unretired offline/disconnected slot; it never follows retirement links or takes over by parent identity. Its compatibility
+  observation persists in session_lineage without a schema change; only a genuinely stamped valid reconnect to that same
+  slot clears it. Legacy clients cannot capture parent identity, recover/adopt either side of a slot handoff or establish
+  Codex push trust; liveness stays unverified. A missing package stamp stays degraded even with a matching schema stamp.
+  New clients still reject unstamped old brokers with restart advice. The question-hook fail-open/deny distinction remains.
+  Doctor probes without autospawn and opens an existing database read-only without migrations. Clean closed databases use immutable URI mode; existing WAL/shm uses ordinary read-only
   access so committed WAL content is visible. Unsupported URI support falls back to ordinary read-only access with
   a diagnostic. SQLite bookkeeping sidecars may be created, but database content is never changed or copied. It reports schema,
   pre-v3/v4 backup presence/modes, disconnected/unknown live slots, missing Claude process identities, unresolved

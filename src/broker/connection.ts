@@ -14,6 +14,8 @@ export class Connection {
   generation = 0;
   /** Captured at hello; an older connected MCP may be replaced only after this process is gone. */
   mcpIdentity: ProcessIdentity | null = null;
+  /** An unstamped client retains 0.2 messaging but cannot provide new identity/recovery evidence. */
+  legacy = false;
   /**
    * E-3: whether this MCP client can take channel pushes (hello.channel); undefined for a peer that did not say. Set during
    * hello, before the session is announced: `hello` itself is published only after the welcome is written.

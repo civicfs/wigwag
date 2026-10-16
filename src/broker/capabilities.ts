@@ -1,3 +1,4 @@
+import { isLegacySession } from '../store/compatibility.js';
 import type { SessionRow } from '../store/sessions.js';
 import { type CodexPushBlockReason, codexPushBlock } from './codex-push.js';
 import type { Broker } from './server.js';
@@ -15,6 +16,20 @@ export interface SessionCapabilities {
 }
 
 export function capabilitiesFor(broker: Broker, s: SessionRow): SessionCapabilities {
+  if (isLegacySession(broker.db, s.id))
+    return {
+      native_names: s.agent === 'claude' ? 'claude-hook-sidecar' : 'codex-session-index',
+      resume_recovery: 'unavailable',
+      resume_recovery_reason: 'legacy-client',
+      delivery:
+        s.agent === 'codex' || s.link === 'disconnected' || broker.connectionFor(s.id)?.channel === false
+          ? 'hook-boundary'
+          : 'push',
+      ...(s.agent === 'codex'
+        ? { codex_push: 'held' as const, codex_push_reason: 'app-server-unavailable' as const }
+        : {}),
+      parent_liveness: 'unavailable',
+    };
   if (s.agent === 'claude')
     return {
       native_names: 'claude-hook-sidecar',

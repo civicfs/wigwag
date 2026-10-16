@@ -6,6 +6,7 @@ import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.
 import { captureIdentity, sameProcess } from '../proc/identity.js';
 import type { Hello } from '../protocol/rpc.js';
 import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
+import { isLegacySession, recordClientCompatibility } from '../store/compatibility.js';
 import { scopeOf } from '../store/links.js';
 import { adoptCanonical, liveNativeHolders, recordLineage, recoveryCandidates } from '../store/recovery.js';
 import {
@@ -115,6 +116,7 @@ export function installIdentity(broker: Broker): void {
     const matches = listSessions(db).filter(
       (x) =>
         x.agent === 'claude' &&
+        !isLegacySession(db, x.id) &&
         x.state !== 'offline' &&
         (x.link === 'disconnected' ||
           [...broker.connections].some(
@@ -165,6 +167,7 @@ export function installIdentity(broker: Broker): void {
     evidence: Record<string, unknown>,
     gate: { verified: boolean; reason: string },
   ): SessionRow | null => {
+    if (isLegacySession(db, self.id)) return null;
     const base = { agent: self.agent, native_id: native, workspace: self.workspace, session_id: self.id };
     if (self.agent_session_id !== null && self.agent_session_id !== native) {
       recordLineage(db, {
@@ -248,15 +251,24 @@ export function installIdentity(broker: Broker): void {
     if (conn.closed || conn.failed) throw new WigwagError('transport', 'connection closed during hello');
     const mcpPid = hello.pid_chain[0];
     conn.mcpIdentity =
-      hello.agent === 'claude' && mcpPid !== undefined ? captureIdentity(mcpPid, broker.processProbe) : null;
+      !conn.legacy && hello.agent === 'claude' && mcpPid !== undefined
+        ? captureIdentity(mcpPid, broker.processProbe)
+        : null;
     let s = hello.resume_session_id ? getSession(db, hello.resume_session_id) : undefined;
     // W7: a slot handed over by a resume recovery points at its canonical slot; a reconnect hint follows it and never
     // revives a retired row.
-    for (let hops = 0; s?.retired_into && hops < 8; hops++) s = getSession(db, s.retired_into);
-    if (s && (s.agent !== hello.agent || s.retired_at || (s.state !== 'offline' && s.link !== 'disconnected')))
+    for (let hops = 0; !conn.legacy && s?.retired_into && hops < 8; hops++) s = getSession(db, s.retired_into);
+    if (
+      s &&
+      (s.agent !== hello.agent ||
+        ((conn.legacy || isLegacySession(db, s.id)) && s.workspace !== workspace) ||
+        (isLegacySession(db, s.id) && hello.resume_session_id !== s.id) ||
+        s.retired_at ||
+        (s.state !== 'offline' && s.link !== 'disconnected'))
+    )
       s = undefined;
     // W8: a new MCP process under the same live Claude parent (plugin reload, MCP crash) re-attaches to its slot.
-    if (!s && hello.agent === 'claude' && hello.mcp_ppid !== undefined)
+    if (!s && !conn.legacy && hello.agent === 'claude' && hello.mcp_ppid !== undefined)
       s = reattachable(hello.mcp_ppid, workspace, conn);
     if (s) {
       if (s.state === 'offline') setState(db, s.id, 'online-idle');
@@ -277,6 +289,7 @@ export function installIdentity(broker: Broker): void {
     const previousConnection = broker.connectionFor(s.id);
     conn.sessionId = s.id;
     conn.generation = attachConnection(db, s.id);
+    recordClientCompatibility(db, getSession(db, s.id) as SessionRow, hello, conn.legacy);
     if (previousConnection && previousConnection !== conn)
       previousConnection.fail(null, { code: 'transport', message: 'MCP connection superseded by its replacement' });
     conn.channel = hello.channel;
@@ -472,7 +485,8 @@ export function installIdentity(broker: Broker): void {
     const first = me(conn.sessionId);
     // W7 (S-E): a Codex hook's session_id is the tree-root id, shared by descendants. Automatic recovery is limited to
     // an app-server-verified root thread. That check is I/O, so it runs first; everything after it is revalidated.
-    const trustedThreadId = first.agent === 'codex' ? broker.trustedThreadId(first) : null;
+    const trustedThreadId =
+      first.agent === 'codex' && !isLegacySession(db, first.id) ? broker.trustedThreadId(first) : null;
     const single =
       first.agent === 'codex' &&
       trustedThreadId === agent_session_id &&
@@ -596,7 +610,7 @@ export function installIdentity(broker: Broker): void {
     );
   };
 
-  broker.handle('hook.event', async (_ctx, p) => {
+  broker.handle('hook.event', async ({ conn }, p) => {
     // The only await: resolved first, so the selection and binding below run in one tick.
     const hookWorkspace = await broker.workspaces.resolve(p.cwd);
     const bound = listSessions(db).filter(
@@ -655,7 +669,7 @@ export function installIdentity(broker: Broker): void {
       s = candidates[0];
       if (wrongWorkspace(s)) return { bound: false, additional_context: null };
       // Verify the incoming parent before adoption decides whether a synchronous hook is still polling.
-      if (s.agent_pid !== agentPid || !s.agent_start) {
+      if (!conn.legacy && !isLegacySession(db, s.id) && (s.agent_pid !== agentPid || !s.agent_start)) {
         const ident = captureIdentity(agentPid, broker.processProbe);
         setAgentIdentity(db, s.id, agentPid, ident?.start ?? null);
         setParentState(db, s.id, ident ? 'live' : 'unknown');
@@ -663,18 +677,20 @@ export function installIdentity(broker: Broker): void {
         capturedParent = true;
       }
       // W7: the Claude hook's session_id is the conversation id itself (S-E), so no further verification is needed.
-      const recovered = recoverOnBind(
-        s,
-        p.agent_session_id,
-        { hook: `claude ${p.event}`, source: p.source ?? null },
-        { verified: true, reason: 'unverified' },
-      );
+      const recovered = conn.legacy
+        ? null
+        : recoverOnBind(
+            s,
+            p.agent_session_id,
+            { hook: `claude ${p.event}`, source: p.source ?? null },
+            { verified: true, reason: 'unverified' },
+          );
       if (recovered) s = recovered;
       else bindAgentSession(db, s.id, p.agent_session_id);
       broker.bus.emit('session.bound', getSession(db, s.id));
     }
     // W8: the Claude parent's process identity, captured when its pid is new or retried while its start identity is missing.
-    if (!capturedParent && (s.agent_pid !== agentPid || !s.agent_start)) {
+    if (!conn.legacy && !isLegacySession(db, s.id) && !capturedParent && (s.agent_pid !== agentPid || !s.agent_start)) {
       const ident = captureIdentity(agentPid, broker.processProbe);
       setAgentIdentity(db, s.id, agentPid, ident?.start ?? null);
       setParentState(db, s.id, ident ? 'live' : 'unknown');

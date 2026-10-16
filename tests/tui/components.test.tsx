@@ -23,6 +23,32 @@ const msg: MessageRow = {
 };
 
 describe('tui components', () => {
+  it('shows a legacy client reload warning in the session row', () => {
+    const f =
+      render(
+        <SessionsPane
+          sessions={[
+            {
+              id: 's',
+              name: 'old-worker',
+              agent: 'claude',
+              state: 'online-idle',
+              cwd: '/',
+              workspace: '/',
+              workspace_label: '/',
+              bound: true,
+              unread: 0,
+              last_seen_at: '',
+              ...{ compatibility_warning: 'legacy client 0.2: reload plugin for new features' },
+            },
+          ]}
+          selected={0}
+          focused
+          width={120}
+        />,
+      ).lastFrame() ?? '';
+    expect(f).toContain('legacy client 0.2: reload plugin for new features');
+  });
   it('shows why a Codex queue push is held', () => {
     const text = 'Codex push held: thread identity unverified (descendant-loaded)';
     const f =

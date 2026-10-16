@@ -8,7 +8,8 @@ import { sockPath } from '../../client/autospawn.js';
 import { Client } from '../../client/client.js';
 import { type Config, configPath, loadConfig, resolveHome } from '../../config.js';
 import { frameLimit } from '../../protocol/frame.js';
-import { HANDSHAKE_VERSIONS } from '../../protocol/rpc.js';
+import { HANDSHAKE_VERSIONS, LEGACY_CLIENT_WARNING } from '../../protocol/rpc.js';
+import { isLegacySession } from '../../store/compatibility.js';
 import { SCHEMA_VERSION } from '../../version.js';
 import { out, parseCli, table, UsageError } from '../util.js';
 import { whichBin } from './init.js';
@@ -101,6 +102,10 @@ function inspectState(
     const report = (name: string, n: number, detail: string) =>
       n ? warn(name, `${n} session(s); ${detail}`) : add(true, name, `0 session(s); ${detail}`);
     if (version >= 3) {
+      const legacyCount = (
+        db.prepare('SELECT id FROM sessions WHERE retired_at IS NULL').all() as Array<{ id: string }>
+      ).filter((s) => isLegacySession(opened.db, s.id)).length;
+      if (legacyCount) warn('legacy clients', `${legacyCount} session(s); ${LEGACY_CLIENT_WARNING}`);
       const live = "state<>'offline' AND retired_at IS NULL";
       report(
         'MCP disconnected',
@@ -219,6 +224,7 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
           `version ${HANDSHAKE_VERSIONS.version}, protocol ${HANDSHAKE_VERSIONS.protocol}, schema ${HANDSHAKE_VERSIONS.schema_version}`,
         );
         if (ping.version_warnings?.length) warn('recent version skew', ping.version_warnings.join('; '));
+        if (client.versionWarning) warn('broker/client package versions', client.versionWarning);
       } finally {
         signal.removeEventListener('abort', abort);
         client.destroy();

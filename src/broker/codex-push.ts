@@ -1,3 +1,4 @@
+import { isLegacySession } from '../store/compatibility.js';
 import type { HoldReason } from '../store/messages.js';
 import type { CodexPushReason, SessionRow } from '../store/sessions.js';
 import { getSession } from '../store/sessions.js';
@@ -24,6 +25,8 @@ export function installCodexPushTrust(broker: Broker): void {
     stopped = true;
   });
   broker.checkCodexPush = async (s, fresh = false, announce = true) => {
+    if (stopped) return 'app-server-unavailable';
+    if (isLegacySession(broker.db, s.id)) return 'app-server-unavailable';
     const trust = s.agent_session_id ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh) : undefined;
     if (stopped) return 'app-server-unavailable';
     const current = getSession(broker.db, s.id);

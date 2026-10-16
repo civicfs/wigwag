@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Accept package-version skew with a soft reload warning; only protocol/schema
+  incompatibility rejects a handshake. Preserve unstamped 0.2 clients in degraded
+  mode, including explicit remembered-slot reconnects across broker restarts.
+  Persist and display legacy status; disable identity, recovery/adoption and
+  Codex push trust until a valid stamped reconnect upgrades that same slot.
+
 - Hold Codex pushes while its MCP link is disconnected, including a disconnect
   during metadata I/O. Reuse disconnected holds, retain throttle precedence and
   release on reattach or hook delivery; fresh loaded-root trust remains required.
@@ -15,7 +21,7 @@
   recovery flags/duplicates, Codex push holds and compatibility without starting
   a broker or migrating local state.
 
-- Reject broker/client protocol, schema and package skew at hello with restart or
+- Reject broker/client protocol and schema incompatibility at hello with restart or
   update/reload advice; surface recent warnings in whoami/doctor. Lifecycle hooks
   fail open; supervised native question hooks preserve their explicit denial.
 

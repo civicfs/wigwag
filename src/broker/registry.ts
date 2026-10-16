@@ -1,3 +1,5 @@
+import { LEGACY_CLIENT_WARNING } from '../protocol/rpc.js';
+import { isLegacySession } from '../store/compatibility.js';
 import type { Db } from '../store/db.js';
 import { scopeOf } from '../store/links.js';
 import {
@@ -50,6 +52,8 @@ export interface PublicSession {
   bound: boolean;
   unread: number;
   last_seen_at: string;
+  client_mode?: 'legacy' | 'current';
+  compatibility_warning?: string | null;
   name_source?: NameSource;
   native_name?: string | null;
   link?: Link;
@@ -74,6 +78,8 @@ export const publicSession = (db: Db, s: SessionRow): PublicSession => ({
   bound: s.agent_session_id !== null,
   unread: s.name ? visibleUnreadCount(db, s.name) : 0,
   last_seen_at: s.last_seen_at,
+  client_mode: isLegacySession(db, s.id) ? 'legacy' : 'current',
+  compatibility_warning: isLegacySession(db, s.id) ? LEGACY_CLIENT_WARNING : null,
   name_source: s.name_source,
   native_name: s.native_name,
   link: s.link,

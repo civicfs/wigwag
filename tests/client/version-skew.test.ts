@@ -7,6 +7,7 @@ import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
 import { ReconnectingClient } from '../../src/client/reconnecting.js';
 import { loadConfig } from '../../src/config.js';
+import { assertPeerVersions, HANDSHAKE_VERSIONS } from '../../src/protocol/rpc.js';
 import { openDb } from '../../src/store/db.js';
 import { createSession } from '../../src/store/sessions.js';
 import { DIST_MAIN, mcpClient, startTestBroker, tmpHome } from '../helpers.js';
@@ -70,23 +71,53 @@ const command = (home: string, args: string[], input = '') =>
     child.stdin.end(input);
   });
 describe('protocol/schema version skew', () => {
-  it('rejects a legacy client before creating a session and exposes the warning to a compatible whoami', async () => {
+  it('accepts legacy clients in degraded mode and exposes the warning to whoami/ping/doctor', async () => {
     const { home, broker } = await startTestBroker();
     cleanup.push(() => broker.stop());
-    const old = await rawHello(home, {
-      protocol: 1,
-      role: 'mcp',
-      agent: 'claude',
-      cwd: '/w',
-      pid_chain: [],
-      mcp_ppid: 2,
-    });
-    expect(old.error?.message).toContain('client is older than the broker');
-    expect(broker.db.prepare('SELECT count(*) AS n FROM sessions').get()).toEqual({ n: 0 });
-    const peer = await mcpClient(home);
+    const peer = await mcpClient(home, { schema_version: undefined, version: undefined });
     cleanup.push(() => peer.client.close());
     const who = await peer.client.call<{ version_warnings: string[] }>('session.whoami');
-    expect(who.version_warnings.join(' ')).toContain('update/reload the plugin');
+    expect(who).toMatchObject({
+      client_mode: 'legacy',
+      compatibility_warning: 'legacy client 0.2: reload plugin for new features',
+    });
+    expect(who.version_warnings.join(' ')).toContain('legacy client 0.2');
+    const ping = await peer.client.call<{ version_warnings: string[] }>('sys.ping');
+    expect(ping.version_warnings.join(' ')).toContain('legacy client 0.2');
+    const diagnostic = await command(home, ['doctor', '--claude-only']);
+    expect(diagnostic.stdout).toContain('legacy client 0.2');
+  });
+  it.each(['0.1.9', '0.2.1'])('accepts package version %s with a soft warning in both directions', async (version) => {
+    expect(() => assertPeerVersions({ ...HANDSHAKE_VERSIONS, version }, 'client')).not.toThrow();
+    const { home, broker } = await startTestBroker();
+    cleanup.push(() => broker.stop());
+    const peer = await mcpClient(home, { version });
+    cleanup.push(() => peer.client.close());
+    const who = await peer.client.call<{ version_warnings: string[] }>('session.whoami');
+    expect(who.version_warnings.join(' ')).toContain(`client ${version} differs from broker`);
+    const diagnostic = await command(home, ['doctor', '--claude-only']);
+    expect(diagnostic.stdout).toContain('restart/reload when convenient');
+    const remoteHome = await fakeBroker({ role: 'owner', ...HANDSHAKE_VERSIONS, version });
+    const current = await Client.connect(sockPath(remoteHome), { protocol: 1, role: 'owner' }, 1 << 20);
+    cleanup.push(() => current.client.destroy());
+    expect((current.client as unknown as { versionWarning: string }).versionWarning).toContain(
+      `differs from broker ${version}`,
+    );
+    const remoteDiagnostic = await command(remoteHome, ['doctor', '--claude-only']);
+    expect(remoteDiagnostic.stdout).toContain(`differs from broker ${version}`);
+  });
+  it('rejects missing schema stamps with a package version, mismatched legacy protocols and unknown roles', () => {
+    for (const p of [
+      { protocol: 1, role: 'mcp', version: '0.2.0' },
+      { protocol: 2, role: 'mcp' },
+      { protocol: 1, role: 'future' },
+    ])
+      expect(() => assertPeerVersions(p, 'client')).toThrow();
+  });
+  it('a missing package stamp cannot upgrade a client to full features', () => {
+    expect(
+      assertPeerVersions({ protocol: 1, schema_version: HANDSHAKE_VERSIONS.schema_version, role: 'mcp' }, 'client'),
+    ).toMatchObject({ legacy: true });
   });
   it.each([
     ['older', { role: 'owner' }],
@@ -176,11 +207,21 @@ describe('protocol/schema version skew', () => {
     const { home, broker } = await startTestBroker();
     cleanup.push(() => broker.stop());
     for (const fields of [
+      { protocol: 0, schema_version: 4 },
+      { protocol: 1, schema_version: 3 },
       { protocol: 999, schema_version: 4 },
       { protocol: 1, schema_version: 999 },
     ]) {
-      const reply = await rawHello(home, { role: 'owner', version: '0.2.0', ...fields });
-      expect(reply.error?.message).toContain('broker is older than this client');
+      const reply = await rawHello(home, {
+        role: 'mcp',
+        agent: 'claude',
+        cwd: home,
+        pid_chain: [],
+        version: '0.2.0',
+        ...fields,
+      });
+      expect(reply.error?.message).toMatch(/(?:broker|client) is older/);
+      expect(broker.db.prepare('SELECT count(*) AS n FROM sessions').get()).toEqual({ n: 0 });
     }
   });
 });

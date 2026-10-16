@@ -1,4 +1,5 @@
 import { checkIdentities, type ProcessProbe, sameProcess } from '../proc/identity.js';
+import { isLegacySession } from '../store/compatibility.js';
 import { nowIso, tx } from '../store/db.js';
 import {
   getSession,
@@ -40,7 +41,9 @@ export function verifyAtStart(broker: Pick<Broker, 'db' | 'processProbe' | 'log'
 } {
   const db = broker.db;
   const rows = listSessions(db).filter((s) => s.state !== 'offline' && !s.retired_at);
-  const claude = rows.filter((s) => s.agent === 'claude' && s.agent_pid !== null && s.agent_start);
+  const claude = rows.filter(
+    (s) => s.agent === 'claude' && !isLegacySession(db, s.id) && s.agent_pid !== null && s.agent_start,
+  );
   const checks = checkIdentities(
     claude.map((s) => ({ pid: s.agent_pid as number, start: s.agent_start as string })),
     broker.processProbe,
@@ -142,12 +145,16 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
     }
     const rows = sessions.filter((s) => s.state !== 'offline' && s.link === 'disconnected' && !s.retired_at);
     if (!rows.length) return;
-    const withId = rows.filter((s) => s.agent === 'claude' && s.agent_pid !== null && s.agent_start);
+    const withId = rows.filter(
+      (s) => s.agent === 'claude' && !isLegacySession(db, s.id) && s.agent_pid !== null && s.agent_start,
+    );
     const checks = checkIdentities(
       withId.map((s) => ({ pid: s.agent_pid as number, start: s.agent_start as string })),
       broker.processProbe,
     );
-    const loaded = rows.some((s) => s.agent === 'codex') ? ((await broker.codexNames?.loadedThreads()) ?? null) : null;
+    const loaded = rows.some((s) => s.agent === 'codex' && !isLegacySession(db, s.id))
+      ? ((await broker.codexNames?.loadedThreads()) ?? null)
+      : null;
     if (stopped) return;
     for (const s of rows) {
       const fresh = getSession(db, s.id);
@@ -159,7 +166,8 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
       )
         continue;
       let v: ParentVerdict;
-      if (s.agent === 'claude') {
+      if (isLegacySession(db, s.id)) v = 'unknown';
+      else if (s.agent === 'claude') {
         const i = withId.indexOf(s);
         v = i < 0 || checks === null ? 'unknown' : checks[i] ? 'live' : 'gone';
       } else

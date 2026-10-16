@@ -148,9 +148,18 @@ parent remains open. `who` shows "parent open, MCP disconnected"; Claude message
 wait for the next prompt or tool call. Codex pushes also wait for the MCP link;
 reattachment releases the backlog only after fresh thread-identity verification.
 
-Hello checks the client and broker protocol, schema and package versions before
-registering a session. A stale broker reports `wigwag broker stop` then retry; a
-stale client reports update/reload advice. Stop/restart retain a read-only
+Hello checks protocol and schema before registering a session. Incompatible
+versions report `wigwag broker stop` then retry for an older broker, or
+update/reload advice for an older client. Package-version differences alone are
+accepted with a soft warning in whoami/ping/doctor: restart/reload when convenient.
+An unstamped 0.2 client using the same protocol keeps messaging in degraded mode;
+whoami, doctor and the TUI show `legacy client 0.2: reload plugin for new features`.
+Only a valid explicit remembered session ID preserves its name, mail and assignments
+on reconnect. Legacy slots have no parent identity or Codex push trust and cannot
+recover/adopt or take over another slot by parent identity. Their durable degraded
+marker clears only on a stamped reconnect to the same eligible slot, agent and
+workspace. A new client against an unstamped old broker still requires a restart.
+Stop/restart retain a read-only
 hello/ping fallback to verify the old broker PID; normal RPCs stay gated. `whoami` and `doctor` expose recent
 compatibility warnings. Doctor reads existing state without starting a broker or
 migrating the database; clean closed files use immutable URI reads. Where normal

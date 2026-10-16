@@ -9,6 +9,7 @@ type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export class Client extends EventEmitter {
+  versionWarning: string | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private closed = false;
@@ -96,7 +97,7 @@ export class Client extends EventEmitter {
     try {
       if (signal?.aborted) throw aborted();
       const welcome = await client.raw('hello', { ...HANDSHAKE_VERSIONS, ...hello });
-      assertPeerVersions(welcome, 'broker');
+      client.versionWarning = assertPeerVersions(welcome, 'broker').warning;
       if (signal?.aborted) throw aborted();
       return { client, welcome };
     } catch (e) {

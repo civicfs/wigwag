@@ -1,3 +1,4 @@
+import { isLegacySession } from './compatibility.js';
 import { type Db, nowIso, tx } from './db.js';
 import { type Agent, getSession, type NameSource, type SessionRow, type SessionState } from './sessions.js';
 
@@ -122,7 +123,7 @@ export const recoveryCandidates = (
          ORDER BY s.last_seen_at DESC`,
       )
       .all(q.agent, q.native, q.workspace, q.exceptId),
-  );
+  ).filter((s) => !isLegacySession(db, s.id));
 
 export type AdoptResult =
   | {
@@ -159,6 +160,7 @@ export function adoptCanonical(
     const c = getSession(db, x.canonicalId);
     if (
       !c ||
+      isLegacySession(db, c.id) ||
       (c.state !== 'offline' && c.link !== 'disconnected') ||
       c.retired_at ||
       c.agent_session_id !== x.native ||
@@ -167,6 +169,7 @@ export function adoptCanonical(
       return { ok: false, reason: 'canonical-changed' };
     if (
       !p ||
+      isLegacySession(db, p.id) ||
       p.state === 'offline' ||
       p.link !== 'connected' ||
       p.retired_at ||

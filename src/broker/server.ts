@@ -324,23 +324,35 @@ export class Broker {
       if (isObject(params) && typeof params.protocol === 'number' && params.protocol !== PROTOCOL_VERSION)
         assertPeerVersions(params, 'client');
       const hello = HelloZ.parse(params);
-      assertPeerVersions(hello, 'client');
+      const compatibility = assertPeerVersions(hello, 'client');
+      conn.legacy = compatibility.legacy;
+      if (compatibility.warning) this.recordVersionWarning(compatibility.warning);
       const welcome = await this.onHello(conn, hello);
       // The peer may have gone away while onHello ran: frames queued behind it must not run.
       if (conn.failed || conn.closed) return false;
-      conn.reply(id, { ...(isObject(welcome) ? welcome : {}), ...HANDSHAKE_VERSIONS });
+      conn.reply(id, {
+        ...(isObject(welcome) ? welcome : {}),
+        ...HANDSHAKE_VERSIONS,
+        ...(compatibility.warning
+          ? { compatibility_warning: compatibility.warning, client_mode: compatibility.legacy ? 'legacy' : 'current' }
+          : {}),
+      });
       conn.hello = hello;
       return true;
     } catch (e) {
       const wire = toWire(e);
       if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew') {
-        this.versionWarnings.push(e.message);
-        if (this.versionWarnings.length > 20) this.versionWarnings.shift();
-        this.log(`version compatibility: ${e.message}`);
+        this.recordVersionWarning(e.message);
       }
       if (wire.code === 'internal') this.log(`internal error in hello: ${(e as Error)?.stack ?? String(e)}`);
       conn.fail(id, wire);
       return false;
     }
+  }
+
+  private recordVersionWarning(message: string): void {
+    if (!this.versionWarnings.includes(message)) this.versionWarnings.push(message);
+    if (this.versionWarnings.length > 20) this.versionWarnings.shift();
+    this.log(`version compatibility: ${message}`);
   }
 }

@@ -14,21 +14,39 @@ export const BROKER_OLDER = 'broker is older than this client: restart it with `
 export const CLIENT_OLDER =
   'client is older than the broker: update/reload the plugin (and update the CLI), then retry';
 
-/** A missing version stamp is a legacy peer, never proof of compatibility. */
-export function assertPeerVersions(raw: unknown, peer: 'broker' | 'client'): void {
+export const LEGACY_CLIENT_WARNING = 'legacy client 0.2: reload plugin for new features';
+
+/** Protocol/schema are compatibility gates; package releases only advise a convenient reload. */
+export function assertPeerVersions(
+  raw: unknown,
+  peer: 'broker' | 'client',
+): { legacy: boolean; warning: string | null } {
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const versionOrder = (value: unknown) => {
-    if (typeof value !== 'string' || !/^\d+\.\d+\.\d+(?:[-+].*)?$/.test(value)) return -1;
-    const got = value.split(/[.-]/).slice(0, 3).map(Number),
-      own = VERSION.split('.').map(Number);
-    return got.map((n, i) => n - own[i]).find((n) => n !== 0) ?? (value === VERSION ? 0 : -1);
-  };
+  const oldRole = p.role === 'mcp' || p.role === 'hook' || p.role === 'owner';
+  if (
+    peer === 'client' &&
+    p.protocol === PROTOCOL_VERSION &&
+    p.schema_version === undefined &&
+    p.version === undefined &&
+    oldRole
+  )
+    return { legacy: true, warning: LEGACY_CLIENT_WARNING };
   const order = [
     typeof p.protocol === 'number' ? p.protocol - PROTOCOL_VERSION : -1,
     typeof p.schema_version === 'number' ? p.schema_version - SCHEMA_VERSION : -1,
-    versionOrder(p.version),
   ].find((n) => n !== 0);
-  if (order === undefined) return;
+  if (order === undefined) {
+    if (peer === 'client' && p.version === undefined) return { legacy: true, warning: LEGACY_CLIENT_WARNING };
+    const client = peer === 'client' ? p.version : VERSION;
+    const broker = peer === 'broker' ? p.version : VERSION;
+    return {
+      legacy: false,
+      warning:
+        p.version === VERSION
+          ? null
+          : `client ${client ?? 'unknown'} differs from broker ${broker ?? 'unknown'}; restart/reload when convenient`,
+    };
+  }
   const brokerOlder = peer === 'broker' ? order < 0 : order > 0;
   throw new WigwagError('schema', brokerOlder ? BROKER_OLDER : CLIENT_OLDER, {
     kind: 'version-skew',
