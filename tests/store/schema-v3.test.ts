@@ -169,6 +169,27 @@ describe('pre-v3 backup', () => {
     db.close();
   });
 
+  it('keeps its backup when rollback fails and the transaction is still open', () => {
+    const file = v2File();
+    const exec = DatabaseSync.prototype.exec;
+    let failedDb: DatabaseSync | undefined;
+    const spy = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, sql) {
+      if (sql === SCHEMA_V3) {
+        failedDb = this;
+        throw new Error('fixture migration failure');
+      }
+      if (sql === 'ROLLBACK') throw new Error('fixture rollback failure');
+      exec.call(this, sql);
+    });
+    try {
+      expect(() => openDb(file)).toThrow('fixture rollback failure');
+      expect(existsSync(preV3BackupPath(file))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      failedDb?.close();
+    }
+  });
+
   it.each(['committed', 'unreadable'])('keeps its backup when migration outcome is %s', (outcome) => {
     const file = v2File();
     const exec = DatabaseSync.prototype.exec;

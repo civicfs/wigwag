@@ -139,7 +139,7 @@ export function openDb(file: string): Db {
       // Remove only our redundant snapshot after a confirmed rollback. Unknown/committed outcomes keep it.
       if (createdBackup && snapshot) {
         try {
-          if (schemaVersion(db) < 3) {
+          if (!db.isTransaction && schemaVersion(db) < 3) {
             const bak = preV3BackupPath(file);
             const own = lstatSync(snapshot);
             const published = lstatSync(bak);
