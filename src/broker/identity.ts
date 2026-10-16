@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import { WigwagError } from '../errors.js';
 import { RESERVED_NAMES } from '../ids.js';
 import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.js';
+import { captureIdentity } from '../proc/identity.js';
 import type { Hello } from '../protocol/rpc.js';
 import { scopeOf } from '../store/links.js';
 import {
@@ -19,7 +20,9 @@ import {
   provisionalName,
   refreshProcess,
   type SessionRow,
+  setAgentIdentity,
   setNativeRef,
+  setParentState,
   setState,
 } from '../store/sessions.js';
 import type { Connection } from './connection.js';
@@ -419,6 +422,12 @@ export function installIdentity(broker: Broker): void {
       if (wrongWorkspace(s)) return { bound: false, additional_context: null };
       bindAgentSession(db, s.id, p.agent_session_id);
       broker.bus.emit('session.bound', getSession(db, s.id));
+    }
+    // W8: the Claude parent's process identity, captured when its pid is new (or still missing, at SessionStart).
+    if (s.agent_pid !== agentPid || (!s.agent_start && p.event === 'SessionStart')) {
+      const ident = captureIdentity(agentPid, broker.processProbe);
+      setAgentIdentity(db, s.id, agentPid, ident?.start ?? null);
+      setParentState(db, s.id, ident ? 'live' : 'unknown');
     }
     if (validTranscriptPath(p.transcript_path, p.agent_session_id) && s.native_ref !== p.transcript_path)
       setNativeRef(db, s.id, p.transcript_path);

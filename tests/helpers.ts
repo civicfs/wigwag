@@ -9,6 +9,7 @@ import type { Broker } from '../src/broker/server.js';
 import { sockPath } from '../src/client/autospawn.js';
 import { Client } from '../src/client/client.js';
 import { configPath, initHome, loadConfig } from '../src/config.js';
+import { noProcesses } from '../src/proc/identity.js';
 import { frameLimit } from '../src/protocol/frame.js';
 import type { Hello, PushData } from '../src/protocol/rpc.js';
 
@@ -33,7 +34,9 @@ export function tmpHome(): string {
 }
 
 export async function startTestBroker(home = tmpHome()): Promise<{ home: string; broker: Broker }> {
-  return { home, broker: await startBroker(home) };
+  // W8: a probe that knows no process, so no session records a parent and a closed MCP client goes offline at once,
+  // as before. Liveness tests pass their own probe to startBroker.
+  return { home, broker: await startBroker(home, { processProbe: noProcesses }) };
 }
 
 export async function ownerClient(home: string): Promise<Client> {

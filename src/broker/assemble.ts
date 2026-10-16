@@ -1,6 +1,7 @@
 import { loadConfig } from '../config.js';
 import { ClaudeTitleWatcher } from '../native/claude-watch.js';
 import { CodexNames, codexIndexPath, installCodexNames } from '../native/codex-names.js';
+import type { ProcessProbe } from '../proc/identity.js';
 import { AppServer } from '../questions/app-server.js';
 import { CodexQuestions } from '../questions/codex.js';
 import { installQuestionHooks } from '../questions/hook-handlers.js';
@@ -44,10 +45,16 @@ function installDelivery(broker: Broker, transports: TransportRegistry): Deliver
 
 export async function startBroker(
   home: string,
-  opts: { transports?: TransportRegistry; codexNames?: CodexNames; codexNameRefreshMs?: number } = {},
+  opts: {
+    transports?: TransportRegistry;
+    codexNames?: CodexNames;
+    codexNameRefreshMs?: number;
+    processProbe?: ProcessProbe;
+  } = {},
 ): Promise<Broker> {
   const config = loadConfig(home);
   const broker = new Broker(home, config);
+  if (opts.processProbe) broker.processProbe = opts.processProbe;
   const transports = opts.transports ?? {
     claude: new ClaudeChannelTransport((id) => broker.connectionFor(id)),
     codex: new CodexQueueTransport(config.codex.binary, config.codex.queue_timeout_ms),
