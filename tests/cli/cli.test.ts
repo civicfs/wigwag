@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { signalBroker } from '../../src/cli/commands/broker.js';
+import { insertMessage } from '../../src/store/messages.js';
 import { bindAgentSession, claimName, createSession, setState } from '../../src/store/sessions.js';
 import { VERSION } from '../../src/version.js';
 import { DIST_MAIN, gitRepo, mcpClient, startTestBroker, tmpHome } from '../helpers.js';
@@ -420,12 +421,35 @@ describe('cli recovery (W7)', () => {
           mcp_ppid: null,
         });
         claimName(broker.db, s.id, name, 'custom');
-        bindAgentSession(broker.db, s.id, 'sid-dup');
+        bindAgentSession(broker.db, s.id, 'sid-dup\u001b[2J');
         setState(broker.db, s.id, 'offline');
         return s.id;
       });
-      expect((await runCli(home, ['recovery'])).stdout).toContain('sid-dup');
-      expect((await runCli(home, ['recovery', 'retire', ids[0]])).stdout.trim()).toBe(`retired ${ids[0]}`);
+      const report = (await runCli(home, ['recovery'])).stdout;
+      expect(report).toContain('sid-dup\\u001b[2J');
+      expect(report).not.toContain('\u001b');
+      const retained = insertMessage(
+        broker.db,
+        {
+          from_name: 'owner',
+          to_target: 'dup-one',
+          kind: 'message',
+          priority: 'low',
+          subject: 'retained',
+          body: 'b',
+          attachments: [],
+          reply_to: null,
+          request_id: null,
+          expires_at: null,
+          stream: null,
+        },
+        ['dup-one'],
+      );
+      expect((await runCli(home, ['recovery'])).stdout).toContain('custom');
+      expect((await runCli(home, ['recovery', 'retire', ids[0]])).stderr).toContain('undelivered');
+      expect((await runCli(home, ['recovery', 'retire', ids[0], '--force'])).stdout.trim()).toBe(`retired ${ids[0]}`);
+      broker.db.prepare("UPDATE deliveries SET state='read' WHERE message_id=?").run(retained.id);
+
       const json = JSON.parse((await runCli(home, ['recovery', '--json'])).stdout);
       expect(json.duplicates).toEqual([]);
     } finally {

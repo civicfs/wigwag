@@ -112,7 +112,7 @@ export const recoveryCandidates = (
            AND (
              (s.name IS NOT NULL AND s.name_source <> 'provisional' AND NOT EXISTS (
                SELECT 1 FROM session_lineage l WHERE l.session_id = s.id AND l.native_id = s.agent_session_id
-                 AND l.cause = 'resume' AND l.outcome = 'flagged' AND l.resolved_at IS NULL))
+                 AND l.cause = 'resume' AND l.outcome = 'flagged'))
              OR EXISTS (SELECT 1 FROM assignments a WHERE a.ended_at IS NULL
                 AND (a.worker_session_id = s.id OR a.orchestrator_session_id = s.id))
              OR EXISTS (SELECT 1 FROM deliveries d WHERE d.recipient = s.name AND d.state IN ('pending','held','failed','stuck'))
@@ -226,6 +226,7 @@ export function adoptCanonical(
       "UPDATE question_relays SET state = 'cancelled', error = ?, updated_at = ? WHERE id = ? AND state IN ('pending', 'answered')",
     );
     for (const id of stale) cancel.run('Native session resumed; this question is no longer waiting', at, id);
+    resolveLineage(db, [p.id, c.id]);
     const lineageId = recordLineage(db, {
       agent: c.agent,
       native_id: x.native,
@@ -249,11 +250,58 @@ export function adoptCanonical(
   });
 }
 
+export interface RecoverySlot {
+  session_id: string;
+  name: string | null;
+  name_source: NameSource;
+  last_seen_at: string;
+  state: SessionState;
+  link: SessionRow['link'];
+  assignments: Array<{ id: string; role: 'worker' | 'orchestrator' }>;
+  held_pending: number;
+  undelivered: number;
+}
+
+export function recoverySlot(db: Db, id: string): RecoverySlot | null {
+  const s = getSession(db, id);
+  if (!s) return null;
+  const assignments = db
+    .prepare(`SELECT id, 'worker' AS role FROM assignments WHERE worker_session_id=? AND ended_at IS NULL
+    UNION ALL SELECT id, 'orchestrator' AS role FROM assignments WHERE orchestrator_session_id=? AND ended_at IS NULL
+    ORDER BY id, role`)
+    .all(id, id) as RecoverySlot['assignments'];
+  const mail = db
+    .prepare(`SELECT count(*) AS undelivered,
+    coalesce(sum(CASE WHEN state IN ('pending','held') THEN 1 ELSE 0 END),0) AS held_pending
+    FROM deliveries WHERE recipient=? AND state IN ('pending','held','failed','stuck')`)
+    .get(s.name) as { undelivered: number; held_pending: number };
+  return {
+    session_id: s.id,
+    name: s.name,
+    name_source: s.name_source,
+    last_seen_at: s.last_seen_at,
+    state: s.state,
+    link: s.link,
+    assignments,
+    ...mail,
+  };
+}
+
+/** Resolve the display event without erasing the refused-shell history used by candidate selection. */
+export function resolveLineage(db: Db, sessionIds: string[]): void {
+  const ids = JSON.stringify(sessionIds);
+  db.prepare(`UPDATE session_lineage SET resolved_at=? WHERE outcome='flagged' AND resolved_at IS NULL AND (
+    session_id IN (SELECT value FROM json_each(?)) OR canonical_session_id IN (SELECT value FROM json_each(?))
+    OR EXISTS (SELECT 1 FROM json_each(session_lineage.evidence_json, '$.candidates') c WHERE c.value IN (SELECT value FROM json_each(?)))
+  )`).run(nowIso(), ids, ids, ids);
+}
+
 export interface DuplicateGroup {
   agent: Agent;
   native_id: string;
   workspace: string;
   session_ids: string[];
+  slots: RecoverySlot[];
 }
 
 /** Migration diagnostics (S-E: nine slots for one conversation): unretired slots sharing agent, native id and workspace. */
@@ -266,5 +314,11 @@ export function duplicateNativeSlots(db: Db): DuplicateGroup[] {
          GROUP BY agent, agent_session_id, workspace HAVING count(*) > 1 ORDER BY max(last_seen_at) DESC`,
       )
       .all() as Array<{ agent: Agent; native_id: string; workspace: string; ids: string }>
-  ).map((r) => ({ agent: r.agent, native_id: r.native_id, workspace: r.workspace, session_ids: r.ids.split(',') }));
+  ).map((r) => ({
+    agent: r.agent,
+    native_id: r.native_id,
+    workspace: r.workspace,
+    session_ids: r.ids.split(','),
+    slots: r.ids.split(',').map((id) => recoverySlot(db, id) as RecoverySlot),
+  }));
 }

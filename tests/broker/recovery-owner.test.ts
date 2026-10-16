@@ -6,8 +6,9 @@ import { loadConfig } from '../../src/config.js';
 import { CodexNames } from '../../src/native/codex-names.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
-import { recoveryCandidates } from '../../src/store/recovery.js';
-import { bindAgentSession, claimName, createSession, setState } from '../../src/store/sessions.js';
+import { insertMessage } from '../../src/store/messages.js';
+import { recordLineage, recoveryCandidates } from '../../src/store/recovery.js';
+import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { ownerClient, startBroker, startTestBroker, tmpHome } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
@@ -55,7 +56,12 @@ describe('owner recovery diagnostics (W7)', () => {
       {},
     );
     expect(report.duplicates).toEqual([
-      { agent: 'claude', native_id: 'sid-dup', workspace: '/w', session_ids: expect.arrayContaining([a, b]) },
+      expect.objectContaining({
+        agent: 'claude',
+        native_id: 'sid-dup',
+        workspace: '/w',
+        session_ids: expect.arrayContaining([a, b]),
+      }),
     ]);
     await expect(o.call('owner.retire_slot', { session_id: live.welcome.session_id })).rejects.toMatchObject({
       code: 'conflict',
@@ -69,6 +75,156 @@ describe('owner recovery diagnostics (W7)', () => {
         (s) => s.id,
       ),
     ).toEqual([b]);
+  });
+
+  it.each(['pending', 'held', 'failed', 'stuck'])(
+    'reports and protects a slot with %s backlog; force resolves its flags',
+    async (state) => {
+      const { home, broker } = await startTestBroker();
+      cleanup.push(() => broker.stop());
+      const slots = ['protected-one', 'duplicate-two'].map((name) => {
+        const s = createSession(broker.db, {
+          agent: 'claude',
+          cwd: '/w',
+          workspace: '/w',
+          pid_chain: [],
+          mcp_ppid: null,
+        });
+        claimName(broker.db, s.id, name, 'custom');
+        bindAgentSession(broker.db, s.id, 'sid-protected');
+        setState(broker.db, s.id, 'offline');
+        return s.id;
+      });
+      const message = insertMessage(
+        broker.db,
+        {
+          from_name: 'owner',
+          to_target: 'protected-one',
+          kind: 'message',
+          priority: 'low',
+          subject: 'retained',
+          body: 'b',
+          attachments: [],
+          reply_to: null,
+          request_id: null,
+          expires_at: null,
+          stream: null,
+        },
+        ['protected-one'],
+      );
+      broker.db.prepare('UPDATE deliveries SET state=? WHERE message_id=?').run(state, message.id);
+      const shell = createSession(broker.db, {
+        agent: 'claude',
+        cwd: '/w',
+        workspace: '/w',
+        pid_chain: [],
+        mcp_ppid: null,
+      });
+      claimName(broker.db, shell.id, 'refused-shell', 'native');
+      bindAgentSession(broker.db, shell.id, 'sid-protected');
+      setState(broker.db, shell.id, 'offline');
+      recordLineage(broker.db, {
+        agent: 'claude',
+        native_id: 'sid-protected',
+        workspace: '/w',
+        session_id: shell.id,
+        cause: 'resume',
+        outcome: 'flagged',
+        reason: 'ambiguous',
+        evidence: { candidates: slots },
+      });
+      const owner = await ownerClient(home);
+      cleanup.push(() => owner.close());
+      const report = await owner.call<{ duplicates: Array<{ slots: Array<Record<string, unknown>> }> }>(
+        'owner.recovery',
+      );
+      expect(report.duplicates[0].slots).toContainEqual(
+        expect.objectContaining({
+          session_id: slots[0],
+          name: 'protected-one',
+          name_source: 'custom',
+          state: 'offline',
+          link: 'connected',
+          held_pending: ['pending', 'held'].includes(state) ? 1 : 0,
+          undelivered: 1,
+          assignments: [],
+          last_seen_at: expect.any(String),
+        }),
+      );
+      await expect(owner.call('owner.retire_slot', { session_id: slots[0] })).rejects.toMatchObject({
+        code: 'conflict',
+        message: expect.stringMatching(/1 undelivered/),
+      });
+      expect(getSession(broker.db, slots[0])?.retired_at).toBeNull();
+      await owner.call('owner.retire_slot', { session_id: slots[0], force: true });
+      expect((await owner.call<{ flags: unknown[] }>('owner.recovery')).flags).toEqual([]);
+      expect(
+        recoveryCandidates(broker.db, {
+          agent: 'claude',
+          native: 'sid-protected',
+          workspace: '/w',
+          exceptId: 'new',
+        }).map((s) => s.id),
+      ).toEqual([slots[1]]);
+    },
+  );
+
+  it('reports active assignment roles and refuses retirement without force', async () => {
+    const { home, broker } = await startTestBroker();
+    cleanup.push(() => broker.stop());
+    const make = (name: string, native: string) => {
+      const s = createSession(broker.db, {
+        agent: 'claude',
+        cwd: '/w',
+        workspace: '/w',
+        pid_chain: [],
+        mcp_ppid: null,
+      });
+      claimName(broker.db, s.id, name, 'custom');
+      bindAgentSession(broker.db, s.id, native);
+      setState(broker.db, s.id, 'offline');
+      return s.id;
+    };
+    const lead = make('lead-protected', 'lead-native');
+    const worker = make('worker-protected', 'worker-native');
+    make('lead-duplicate', 'lead-native');
+    make('worker-duplicate', 'worker-native');
+    const m = insertMessage(
+      broker.db,
+      {
+        from_name: 'owner',
+        to_target: 'worker-protected',
+        kind: 'message',
+        priority: 'low',
+        subject: 'task',
+        body: 'b',
+        attachments: [],
+        reply_to: null,
+        request_id: null,
+        expires_at: null,
+        stream: null,
+      },
+      ['worker-protected'],
+    );
+    broker.db.prepare("UPDATE deliveries SET state='read' WHERE message_id=?").run(m.id);
+    broker.db
+      .prepare('INSERT INTO assignments VALUES (?,?,?,?,?,?,?,?,?,NULL)')
+      .run('req-active', lead, 'lead-native', worker, 'worker-native', 'k', '{}', m.id, 't');
+    const owner = await ownerClient(home);
+    cleanup.push(() => owner.close());
+    const report = await owner.call<{ duplicates: Array<{ slots: Array<Record<string, unknown>> }> }>('owner.recovery');
+    const slots = report.duplicates.flatMap((d) => d.slots);
+    expect(slots).toContainEqual(
+      expect.objectContaining({ session_id: lead, assignments: [{ id: 'req-active', role: 'orchestrator' }] }),
+    );
+    expect(slots).toContainEqual(
+      expect.objectContaining({ session_id: worker, assignments: [{ id: 'req-active', role: 'worker' }] }),
+    );
+    await expect(owner.call('owner.retire_slot', { session_id: worker })).rejects.toMatchObject({
+      code: 'conflict',
+      message: expect.stringMatching(/req-active/),
+    });
+    await owner.call('owner.retire_slot', { session_id: worker, force: true });
   });
 
   it('whoami states what this session supports', async () => {

@@ -1,5 +1,6 @@
 import { WigwagError } from '../../errors.js';
-import { duplicateNativeSlots, listLineage } from '../../store/recovery.js';
+import { tx } from '../../store/db.js';
+import { duplicateNativeSlots, listLineage, recoverySlot, resolveLineage } from '../../store/recovery.js';
 import { getSession, retireSlot, type SessionRow } from '../../store/sessions.js';
 import { publicSession } from '../registry.js';
 import type { Broker } from '../server.js';
@@ -17,12 +18,21 @@ export function installRecovery(broker: Broker): void {
     flags: listLineage(db, { outcome: 'flagged', unresolved: true, limit }),
     duplicates: duplicateNativeSlots(db),
   }));
-  broker.handle('owner.retire_slot', (_c, { session_id }) => {
-    const s = getSession(db, session_id);
-    if (!s) throw new WigwagError('not_found', `No session ${session_id}`);
-    if (s.state !== 'offline')
-      throw new WigwagError('conflict', `Session ${session_id} is live; only an offline slot can be retired`);
-    if (!retireSlot(db, session_id)) throw new WigwagError('conflict', `Session ${session_id} is already retired`);
+  broker.handle('owner.retire_slot', (_c, { session_id, force }) => {
+    tx(db, () => {
+      const s = getSession(db, session_id);
+      if (!s) throw new WigwagError('not_found', `No session ${session_id}`);
+      if (s.state !== 'offline')
+        throw new WigwagError('conflict', `Session ${session_id} is live; only an offline slot can be retired`);
+      const details = recoverySlot(db, session_id);
+      if (!force && details && (details.assignments.length || details.undelivered))
+        throw new WigwagError(
+          'conflict',
+          `Session ${session_id} has ${details.assignments.length} active assignment(s) (${details.assignments.map((a) => a.id).join(', ')}) and ${details.undelivered} undelivered message(s); use --force to retire it anyway`,
+        );
+      if (!retireSlot(db, session_id)) throw new WigwagError('conflict', `Session ${session_id} is already retired`);
+      resolveLineage(db, [session_id]);
+    });
     broker.log(`owner retired slot ${session_id}`);
     broker.broadcastOwner('session', publicSession(db, getSession(db, session_id) as SessionRow));
     return { session_id };

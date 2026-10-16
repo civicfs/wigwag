@@ -176,10 +176,11 @@ export const COMMANDS: CommandHelp[] = [
   {
     name: 'recovery',
     summary: 'show resume-recovery flags and duplicate session slots',
-    usage: ['wigwag recovery [--json]', 'wigwag recovery retire <session-id>'],
+    usage: ['wigwag recovery [--json]', 'wigwag recovery retire <session-id> [--force]'],
     flags: [
       ['--json', 'print the raw report'],
       ['retire <session-id>', 'exclude an offline slot from automatic resume recovery'],
+      ['--force', 'retire despite active assignments or undelivered mail'],
     ],
   },
   {

@@ -280,6 +280,32 @@ describe('adoptCanonical', () => {
     ]);
   });
 
+  it('successful adoption resolves flags involving either adopted slot', () => {
+    const c = mk({ name: 'canonical-one', native: 'sid-1', offline: true });
+    const p = mk({ name: 'new-one' });
+    recordLineage(db, {
+      agent: 'claude',
+      native_id: 'sid-1',
+      workspace: '/w',
+      session_id: p.id,
+      cause: 'resume',
+      outcome: 'flagged',
+      reason: 'ambiguous',
+      evidence: { candidates: [c.id] },
+    });
+    expect(
+      adoptCanonical(db, {
+        provisionalId: p.id,
+        canonicalId: c.id,
+        native: 'sid-1',
+        state: 'online-idle',
+        evidence: {},
+      }).ok,
+    ).toBe(true);
+    expect(listLineage(db, { outcome: 'flagged', unresolved: true, limit: 10 })).toEqual([]);
+    expect(listLineage(db, { outcome: 'flagged', limit: 10 })[0]?.resolved_at).toEqual(expect.any(String));
+  });
+
   it('a canonical slot that lost its name takes the provisional name', () => {
     const c = mk({ native: 'sid-1' });
     const p = mk({ name: 'claude-w-abcd', ppid: 600 });

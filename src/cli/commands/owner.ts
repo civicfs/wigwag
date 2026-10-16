@@ -4,6 +4,7 @@ import type { OwnerDelivery } from '../../broker/handlers/owner.js';
 import type { PublicSession } from '../../broker/registry.js';
 import { FEED_LIMIT_MAX, type FeedData, KV_LIST_LIMIT_MAX, STREAM_READ_LIMIT_MAX } from '../../protocol/rpc.js';
 import type { MessageRow } from '../../store/messages.js';
+import type { DuplicateGroup } from '../../store/recovery.js';
 import { resolveWorkspace, workspaceLabel } from '../../workspace.js';
 import { usageError } from '../help.js';
 import { formatMessage, out, ownerConnect, parseCli, parseCount, table } from '../util.js';
@@ -298,15 +299,20 @@ type RecoveryReport = {
     reason: string | null;
     created_at: string;
   }>;
-  duplicates: Array<{ agent: string; native_id: string; workspace: string; session_ids: string[] }>;
+  duplicates: DuplicateGroup[];
 };
 
 export async function cmdRecovery(args: string[]): Promise<void> {
   if (args[0] === 'retire') {
-    if (args.length !== 2 || !args[1]) throw usageError('recovery');
+    const { positionals, values } = parseCli({
+      args: args.slice(1),
+      allowPositionals: true,
+      options: { force: { type: 'boolean' } },
+    });
+    if (positionals.length !== 1 || !positionals[0]) throw usageError('recovery');
     await withOwner(async (c) => {
-      await c.call('owner.retire_slot', { session_id: args[1] });
-      out(`retired ${args[1]}`);
+      await c.call('owner.retire_slot', { session_id: positionals[0], force: values.force ?? false });
+      out(`retired ${positionals[0]}`);
     });
     return;
   }
@@ -325,8 +331,34 @@ export async function cmdRecovery(args: string[]): Promise<void> {
     if (r.duplicates.length)
       parts.push(
         table([
-          ['AGENT', 'NATIVE ID', 'WORKSPACE', 'SLOTS'],
-          ...r.duplicates.map((d) => [d.agent, d.native_id, workspaceLabel(d.workspace), d.session_ids.join(' ')]),
+          [
+            'AGENT',
+            'NATIVE ID',
+            'WORKSPACE',
+            'SLOT',
+            'NAME',
+            'SOURCE',
+            'LAST SEEN',
+            'STATE/LINK',
+            'ASSIGNMENT/ROLE',
+            'HELD/PENDING',
+            'UNDELIVERED',
+          ],
+          ...r.duplicates.flatMap((d) =>
+            d.slots.map((s) => [
+              d.agent,
+              d.native_id,
+              workspaceLabel(d.workspace),
+              s.session_id,
+              s.name ?? '-',
+              s.name_source,
+              s.last_seen_at,
+              `${s.state}/${s.link}`,
+              s.assignments.map((a) => `${a.id}/${a.role}`).join(' ') || '-',
+              String(s.held_pending),
+              String(s.undelivered),
+            ]),
+          ),
         ]),
       );
     out(parts.length ? parts.join('\n\n') : 'nothing to resolve');
