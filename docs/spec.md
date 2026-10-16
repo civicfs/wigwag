@@ -318,7 +318,11 @@ vitest, linted with biome.
   held as `disconnected` and delivered at the next hook boundary or MCP re-attach. Codex queue pushes additionally
   require fresh loaded-root trust; active throttles keep their throttled hold reason ahead of disconnected holds.
   An immediate probe and an extra check about 2 s after disconnect catch exits promptly; a 10 s probe loop
-  continues checking and marks the session offline once the parent is gone. No recorded evidence at
+  continues checking and marks the session offline once the parent is gone. Each Codex pass shares one bounded
+  metadata snapshot across slots (at most 256 thread reads, batches of eight), with a per-pass deadline and a final
+  loaded-set recheck. New unread threads fail closed until the next pass. Claude probes run independently on every
+  kick; a slow Codex pass cannot delay them. Shutdown cancels snapshot deadlines and ignores late results.
+  No recorded evidence at
   disconnect (Claude without identity, Codex without app-server) keeps the 0.2 behavior; an unverifiable parent (probe
   error, legacy row at broker start) goes offline after 3 consecutive unknown probes and 60 s. A new MCP process under
   the same verified Claude parent re-attaches to a disconnected slot. Replacing an older connected MCP additionally

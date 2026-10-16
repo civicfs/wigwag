@@ -33,7 +33,7 @@ export function installCodexPushTrust(broker: Broker, now: () => number = Date.n
   broker.onStop.push(() => {
     stopped = true;
   });
-  broker.checkCodexPush = async (s, fresh = false, announce = true, proof) => {
+  broker.checkCodexPush = async (s, fresh = false, announce = true, proof, snapshot) => {
     if (stopped) return 'app-server-unavailable';
     const matches = (current: SessionRow | undefined): current is SessionRow =>
       !!current &&
@@ -77,7 +77,7 @@ export function installCodexPushTrust(broker: Broker, now: () => number = Date.n
         : reuse
           ? { trusted: true, reason: null }
           : s.agent_session_id
-            ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh)
+            ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh, snapshot)
             : undefined;
     if (stopped) return 'app-server-unavailable';
     const current = getSession(broker.db, s.id);

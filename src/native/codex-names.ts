@@ -17,6 +17,10 @@ export interface CodexThreadMeta {
 }
 export type CodexPushTrust = { trusted: true; reason: null } | { trusted: false; reason: CodexPushReason };
 export type CodexReadResult = { available: true; meta: CodexThreadMeta | null } | { available: false };
+export interface CodexMetadataSnapshot {
+  loaded: Set<string> | null;
+  reads: Map<string, CodexReadResult>;
+}
 
 const ROOT_SOURCES = new Set(['cli', 'vscode', 'exec', 'appServer']);
 const nonEmpty = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -71,6 +75,7 @@ export class CodexNames {
   private connecting: Promise<AppConnection> | null = null;
   private stopped = false;
   private readonly trustCache = new Map<string, { at: number; value: CodexPushTrust }>();
+  private readonly snapshots = new Set<AbortController>();
 
   constructor(
     private readonly opts: { factory: () => AppConnection; indexPath: string; log?: (line: string) => void },
@@ -128,35 +133,63 @@ export class CodexNames {
     }
   }
 
+  /** One bounded pass shared by every slot. Re-list after reads; newly loaded, unread threads fail closed. */
+  async metadataSnapshot(deadlineMs = 10000): Promise<CodexMetadataSnapshot> {
+    const unknown = (): CodexMetadataSnapshot => ({ loaded: null, reads: new Map() });
+    if (this.stopped || deadlineMs <= 0) return unknown();
+    const controller = new AbortController();
+    this.snapshots.add(controller);
+    const cancelled = new Promise<CodexMetadataSnapshot>((resolve) => {
+      controller.signal.addEventListener('abort', () => resolve(unknown()), { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(), deadlineMs);
+    timer.unref();
+    const work = (async (): Promise<CodexMetadataSnapshot> => {
+      const loaded = await this.loadedThreads();
+      if (controller.signal.aborted || this.stopped || loaded === null) return unknown();
+      const reads = new Map<string, CodexReadResult>();
+      if (loaded.size > 256) return { loaded, reads };
+      const ids = [...loaded];
+      for (let i = 0; i < ids.length; i += 8) {
+        const batch = ids.slice(i, i + 8);
+        const results = await Promise.all(batch.map((id) => this.read(id)));
+        if (controller.signal.aborted || this.stopped) return unknown();
+        batch.forEach((id, j) => {
+          reads.set(id, results[j]);
+        });
+      }
+      const current = await this.loadedThreads();
+      if (controller.signal.aborted || this.stopped) return unknown();
+      return { loaded: current, reads };
+    })();
+    try {
+      return await Promise.race([work.catch(unknown), cancelled]);
+    } finally {
+      clearTimeout(timer);
+      this.snapshots.delete(controller);
+    }
+  }
+
   /** Bounded metadata-only evidence; a fresh push check never uses bind-time cached trust. */
-  async pushTrust(threadId: string, fresh = false): Promise<CodexPushTrust> {
+  async pushTrust(threadId: string, fresh = false, snapshot?: CodexMetadataSnapshot): Promise<CodexPushTrust> {
     const cached = this.trustCache.get(threadId);
-    if (!fresh && cached && Date.now() - cached.at < 2000) return cached.value;
+    if (!snapshot && !fresh && cached && Date.now() - cached.at < 2000) return cached.value;
     let reason: CodexPushReason | null = 'app-server-unavailable';
-    const loaded = this.stopped ? null : await this.loadedThreads();
+    const data = snapshot ?? (await this.metadataSnapshot());
+    const loaded = this.stopped ? null : data.loaded;
     if (loaded && loaded.size > 256) reason = 'too-many-loaded';
     else if (loaded) {
       if (!loaded.has(threadId)) reason = 'root-not-loaded';
       else {
-        const own = await this.read(threadId);
-        if (!own.available || !own.meta?.sessionId) reason = 'unreadable-loaded';
+        const own = data.reads.get(threadId);
+        if (!own?.available || !own.meta?.sessionId) reason = 'unreadable-loaded';
         else {
           if (!own.meta.root) reason = 'shared-root';
           else {
             reason = null;
-            const others = [...loaded].filter((id) => id !== threadId);
-            // Eight metadata reads at a time; unreadable entries cannot prove the absence of a shared root.
-            for (let i = 0; i < others.length; i += 8) {
-              const reads = await Promise.all(others.slice(i, i + 8).map((id) => this.read(id)));
-              if (reads.some((r) => r.available && r.meta?.sessionId === threadId)) {
-                reason = 'descendant-loaded';
-                break;
-              }
-              if (reads.some((r) => !r.available || !r.meta?.sessionId)) {
-                reason = 'unreadable-loaded';
-                break;
-              }
-            }
+            const others = [...loaded].filter((id) => id !== threadId).map((id) => data.reads.get(id));
+            if (others.some((r) => r?.available && r.meta?.sessionId === threadId)) reason = 'descendant-loaded';
+            else if (others.some((r) => !r?.available || !r.meta?.sessionId)) reason = 'unreadable-loaded';
           }
         }
       }
@@ -223,6 +256,8 @@ export class CodexNames {
 
   stop(): void {
     this.stopped = true;
+    for (const controller of this.snapshots) controller.abort();
+    this.snapshots.clear();
     this.trustCache.clear();
     this.app?.close();
     this.app = null;

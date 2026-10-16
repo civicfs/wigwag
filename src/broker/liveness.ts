@@ -79,6 +79,7 @@ export interface LivenessOptions {
   disconnectRecheckMs?: number;
   graceMs?: number;
   graceProbes?: number;
+  codexDeadlineMs?: number;
   now?: () => number;
 }
 export interface Liveness {
@@ -123,7 +124,38 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
     if (changed) broker.announce(s.id);
   };
 
-  const probeOnce = async () => {
+  const apply = (s: SessionRow, v: ParentVerdict) => {
+    const fresh = getSession(db, s.id);
+    if (
+      !fresh ||
+      fresh.retired_at ||
+      fresh.state === 'offline' ||
+      fresh.link !== 'disconnected' ||
+      fresh.conn_generation !== s.conn_generation ||
+      fresh.agent_session_id !== s.agent_session_id
+    )
+      return;
+    if (v === 'gone') {
+      offline(fresh, s.agent === 'claude' ? 'parent process gone' : 'thread no longer loaded');
+      return;
+    }
+    if (v === 'live') {
+      unknownSince.delete(s.id);
+      mark(fresh, 'live');
+      return;
+    }
+    const u = unknownSince.get(s.id) ?? { first: now(), probes: 0, generation: s.conn_generation };
+    u.probes++;
+    unknownSince.set(s.id, u);
+    if (u.probes >= graceProbes && now() - u.first >= graceMs) {
+      offline(fresh, `parent unverifiable for ${u.probes} probes; falling back to offline`);
+      return;
+    }
+    mark(fresh, 'unknown');
+  };
+
+  // Every kick probes Claude synchronously, even if the coalesced Codex pass is still waiting on native I/O.
+  const probeClaude = (): SessionRow[] => {
     const sessions = listSessions(db);
     const current = new Map(sessions.map((s) => [s.id, s]));
     for (const [id, grace] of unknownSince) {
@@ -145,50 +177,29 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
       withId.map((s) => ({ pid: s.agent_pid as number, start: s.agent_start as string })),
       broker.processProbe,
     );
-    const apply = (s: SessionRow, v: ParentVerdict) => {
-      const fresh = getSession(db, s.id);
-      if (
-        !fresh ||
-        fresh.retired_at ||
-        fresh.state === 'offline' ||
-        fresh.link !== 'disconnected' ||
-        fresh.conn_generation !== s.conn_generation
-      )
-        return;
-      if (v === 'gone') {
-        offline(fresh, s.agent === 'claude' ? 'parent process gone' : 'thread no longer loaded');
-        return;
-      }
-      if (v === 'live') {
-        unknownSince.delete(s.id);
-        mark(fresh, 'live');
-        return;
-      }
-      const u = unknownSince.get(s.id) ?? { first: now(), probes: 0, generation: s.conn_generation };
-      u.probes++;
-      unknownSince.set(s.id, u);
-      if (u.probes >= graceProbes && now() - u.first >= graceMs) {
-        offline(fresh, `parent unverifiable for ${u.probes} probes; falling back to offline`);
-        return;
-      }
-      mark(fresh, 'unknown');
-    };
-    // Claude verdicts are synchronous: apply them before any potentially slow Codex I/O.
     for (const s of rows.filter((s) => s.agent === 'claude')) {
       const i = withId.indexOf(s);
       apply(s, isLegacySession(db, s.id) || i < 0 || checks === null ? 'unknown' : checks[i] ? 'live' : 'gone');
     }
-    for (const s of sessions.filter(
+    return sessions;
+  };
+
+  const probeOnce = async (sessions: SessionRow[]) => {
+    const live = sessions.filter(
       (s) => s.agent === 'codex' && s.agent_session_id && !s.retired_at && s.state !== 'offline',
-    )) {
-      await broker.checkCodexPush(s, true);
+    );
+    const snapshot = live.some((s) => !isLegacySession(db, s.id))
+      ? await broker.codexNames?.metadataSnapshot(opts.codexDeadlineMs ?? broker.config.questions.app_server_timeout_ms)
+      : undefined;
+    if (stopped) return;
+    for (const s of live) {
+      await broker.checkCodexPush(s, true, true, undefined, snapshot);
       if (stopped) return;
     }
-    const codex = rows.filter((s) => s.agent === 'codex');
-    const loaded = codex.some((s) => !isLegacySession(db, s.id))
-      ? ((await broker.codexNames?.loadedThreads()) ?? null)
-      : null;
-    if (stopped) return;
+    const codex = sessions.filter(
+      (s) => s.agent === 'codex' && s.state !== 'offline' && s.link === 'disconnected' && !s.retired_at,
+    );
+    const loaded = snapshot?.loaded ?? null;
     for (const s of codex)
       apply(
         s,
@@ -206,7 +217,8 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
 
   const probeNow = (): Promise<void> => {
     if (stopped) return Promise.resolve();
-    running ??= probeOnce()
+    const sessions = probeClaude();
+    running ??= probeOnce(sessions)
       .catch((e) => broker.log(`liveness probe failed: ${(e as Error).message}`))
       .finally(() => {
         running = null;

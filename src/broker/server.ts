@@ -84,6 +84,7 @@ export class Broker {
     fresh?: boolean,
     announce?: boolean,
     proof?: import('../transports/types.js').CodexPushProof,
+    snapshot?: import('../native/codex-names.js').CodexMetadataSnapshot,
   ) => Promise<import('./codex-push.js').CodexPushBlockReason | null> = async () => 'app-server-unavailable';
   processProbe: ProcessProbe = systemProbe;
   /** No trusted concrete Codex thread ID is available from the shipped hooks yet. */

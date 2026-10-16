@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Share one deadline-bounded Codex metadata snapshot per liveness pass, recheck
+  the loaded set after reads, and keep Claude process probes independent of
+  stalled native I/O. Stop cancels outstanding snapshots and ignores late results.
+
 - Reattach a restarted Codex MCP to one verified disconnected slot after fresh
   loaded-root metadata and current trust/generation checks, retaining its name,
   mail and assignment. General Codex resume recovery remains unavailable.

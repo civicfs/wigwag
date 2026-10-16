@@ -27,9 +27,10 @@ it.each(['fresh', 'age-999', 'age-1000', 'disconnected', 'generation', 'native',
       async connect() {}
       async call(method: string, p: { threadId?: string }) {
         if (method === 'thread/loaded/list') {
-          scans++;
           return { data: ['T'] };
         }
+        // This fixture has one root: count metadata scans, excluding each scan's before/after listings.
+        scans++;
         return { thread: { id: p.threadId, sessionId: p.threadId, source: 'cli', parentThreadId: null } };
       }
       close() {}
