@@ -95,8 +95,8 @@ export const liveNativeHolders = (db: Db, agent: Agent, native: string, exceptId
 
 /**
  * W7: offline slots a resumed native session may reclaim, plus (W8) live slots whose MCP link dropped: a new MCP
- * process for the same native session re-attaches to them. A slot with no name and no active assignment holds nothing
- * worth reclaiming (its name moved on with its mail), so it is not a candidate and never makes a match ambiguous.
+ * process for the same native session re-attaches to them. Empty provisional/unnamed slots and unresolved refused-resume shells are excluded unless they retain
+ * assignments, undelivered mail, subscriptions or mutes. A refused slot keeps its explicit name without creating loops.
  */
 export const recoveryCandidates = (
   db: Db,
@@ -109,8 +109,16 @@ export const recoveryCandidates = (
         `SELECT s.id FROM sessions s
          WHERE s.agent = ? AND s.agent_session_id = ? AND s.workspace = ? AND s.id <> ?
            AND (s.state = 'offline' OR s.link = 'disconnected') AND s.retired_at IS NULL
-           AND (s.name IS NOT NULL OR EXISTS (SELECT 1 FROM assignments a WHERE a.ended_at IS NULL
-                AND (a.worker_session_id = s.id OR a.orchestrator_session_id = s.id)))
+           AND (
+             (s.name IS NOT NULL AND s.name_source <> 'provisional' AND NOT EXISTS (
+               SELECT 1 FROM session_lineage l WHERE l.session_id = s.id AND l.native_id = s.agent_session_id
+                 AND l.cause = 'resume' AND l.outcome = 'flagged' AND l.resolved_at IS NULL))
+             OR EXISTS (SELECT 1 FROM assignments a WHERE a.ended_at IS NULL
+                AND (a.worker_session_id = s.id OR a.orchestrator_session_id = s.id))
+             OR EXISTS (SELECT 1 FROM deliveries d WHERE d.recipient = s.name AND d.state IN ('pending','held','failed','stuck'))
+             OR EXISTS (SELECT 1 FROM subscriptions sub WHERE sub.session_name = s.name AND sub.removed_at IS NULL)
+             OR EXISTS (SELECT 1 FROM mutes m WHERE m.session_name = s.name AND m.removed_at IS NULL)
+           )
          ORDER BY s.last_seen_at DESC`,
       )
       .all(q.agent, q.native, q.workspace, q.exceptId),

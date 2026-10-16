@@ -5,7 +5,7 @@ import { loadConfig } from '../../src/config.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
-import { listLineage } from '../../src/store/recovery.js';
+import { listLineage, recoveryCandidates } from '../../src/store/recovery.js';
 import {
   bindAgentSession,
   claimName,
@@ -229,6 +229,33 @@ describe('claude resume recovery (W7)', () => {
     expect(listLineage(broker.db, { outcome: 'flagged', limit: 5 })).toMatchObject([
       { reason: 'ambiguous', session_id: fresh.welcome.session_id },
     ]);
+  });
+
+  it('repeated refused resumes do not add recoverable shells, even after native titles arrive', async () => {
+    const { home, broker } = await boot();
+    const initial = await mcp(home, 100);
+    const workspace = getSession(broker.db, initial.welcome.session_id)?.workspace as string;
+    const canonicalIds = ['retained-one', 'retained-two'].map((name) => {
+      const s = createSession(broker.db, { agent: 'claude', cwd: CWD, workspace, pid_chain: [], mcp_ppid: null });
+      claimName(broker.db, s.id, name, 'custom');
+      bindAgentSession(broker.db, s.id, 'sid-1');
+      setState(broker.db, s.id, 'offline');
+      return s.id;
+    });
+    const h = await hook(home);
+    for (const ppid of [600, 700, 800]) {
+      const fresh = await mcp(home, ppid);
+      await h.call('hook.event', { ...ev('SessionStart', ppid), session_title: 'Same resumed conversation' });
+      fresh.client.close();
+      await settle();
+      const candidates = recoveryCandidates(broker.db, {
+        agent: 'claude',
+        native: 'sid-1',
+        workspace,
+        exceptId: 'new',
+      });
+      expect(candidates.map((s) => s.id).sort()).toEqual([...canonicalIds].sort());
+    }
   });
 
   it('two fresh processes resuming at once: exactly one adopts, the other stays unbound', async () => {

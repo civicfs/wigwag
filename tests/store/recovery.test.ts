@@ -137,6 +137,54 @@ describe('recovery candidates', () => {
     expect(liveNativeHolders(db, 'claude', 'sid-retired', 'other')).toEqual([]);
   });
 
+  it('ignores provisional and unnamed empty shells while retaining the assigned canonical slot', () => {
+    const lead = mk({ name: 'lead-one', native: 'lead-native' });
+    const canonical = mk({ name: 'worker-one', native: 'sid-1', offline: true });
+    assign(canonical, lead);
+    const provisional = mk({ name: 'claude-work-ab2c', native: 'sid-1', offline: true });
+    db.prepare("UPDATE sessions SET name_source='provisional' WHERE id=?").run(provisional.id);
+    mk({ native: 'sid-1', offline: true });
+    expect(
+      recoveryCandidates(db, { agent: 'claude', native: 'sid-1', workspace: '/w', exceptId: 'new' }).map((s) => s.id),
+    ).toEqual([canonical.id]);
+  });
+
+  it.each(['pending', 'held', 'failed', 'stuck'])('a refused shell becomes eligible when it gains %s mail', (state) => {
+    const shell = mk({ name: 'explicit-shell', native: 'sid-1', offline: true });
+    recordLineage(db, {
+      agent: 'claude',
+      native_id: 'sid-1',
+      workspace: '/w',
+      session_id: shell.id,
+      cause: 'resume',
+      outcome: 'flagged',
+      reason: 'ambiguous',
+      evidence: {},
+    });
+    const q = { agent: 'claude' as const, native: 'sid-1', workspace: '/w', exceptId: 'new' };
+    expect(recoveryCandidates(db, q)).toEqual([]);
+    const m = insertMessage(
+      db,
+      {
+        from_name: 'owner',
+        to_target: shell.name as string,
+        kind: 'message',
+        priority: 'low',
+        subject: 'retained work',
+        body: 'b',
+        attachments: [],
+        reply_to: null,
+        request_id: null,
+        expires_at: null,
+        stream: null,
+      },
+      [shell.name as string],
+    );
+    db.prepare('UPDATE deliveries SET state=? WHERE message_id=?').run(state, m.id);
+    expect(recoveryCandidates(db, q).map((s) => s.id)).toEqual([shell.id]);
+    expect(getSession(db, shell.id)?.name_source).toBe('custom');
+  });
+
   it('a link-disconnected slot (W8) is a candidate, not a live holder, and can be adopted', () => {
     const me = mk({ agent: 'codex', ppid: 600 });
     const detached = mk({ agent: 'codex', name: 'codex-helper', native: 'T', detached: true });
