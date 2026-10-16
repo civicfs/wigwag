@@ -102,6 +102,13 @@ export function installIdentity(broker: Broker): void {
 
   const sameScope = (caller: SessionRow, holder: SessionRow) => scopeOf(db, caller.workspace).has(holder.workspace);
 
+  const mcpGone = (c: Connection): boolean => {
+    const pid = c.mcpIdentity?.pid ?? c.hello?.pid_chain?.[0];
+    if (pid === undefined) return false;
+    if (c.mcpIdentity) return sameProcess(c.mcpIdentity, broker.processProbe) === false;
+    return broker.processProbe([pid])?.has(pid) === false;
+  };
+
   /** W8: the single disconnected or older-connected Claude slot whose recorded parent is `ppid` and is still the same process. */
   const reattachable = (ppid: number, workspace: string, conn: Connection): SessionRow | undefined => {
     const matches = listSessions(db).filter(
@@ -110,7 +117,7 @@ export function installIdentity(broker: Broker): void {
         x.state !== 'offline' &&
         (x.link === 'disconnected' ||
           [...broker.connections].some(
-            (c) => c.sessionId === x.id && c.generation === x.conn_generation && c.id < conn.id,
+            (c) => c.sessionId === x.id && c.generation === x.conn_generation && c.id < conn.id && mcpGone(c),
           )) &&
         !x.retired_at &&
         x.agent_pid === ppid &&
@@ -225,6 +232,9 @@ export function installIdentity(broker: Broker): void {
     // disconnect already ran, so a session created now would stay online forever).
     const workspace = await broker.workspaces.resolve(hello.cwd);
     if (conn.closed || conn.failed) throw new WigwagError('transport', 'connection closed during hello');
+    const mcpPid = hello.pid_chain[0];
+    conn.mcpIdentity =
+      hello.agent === 'claude' && mcpPid !== undefined ? captureIdentity(mcpPid, broker.processProbe) : null;
     let s = hello.resume_session_id ? getSession(db, hello.resume_session_id) : undefined;
     // W7: a slot handed over by a resume recovery points at its canonical slot; a reconnect hint follows it and never
     // revives a retired row.

@@ -1,4 +1,5 @@
 import type { Socket } from 'node:net';
+import type { ProcessIdentity } from '../proc/identity.js';
 import { encode } from '../protocol/frame.js';
 import type { Hello, WireError } from '../protocol/rpc.js';
 
@@ -11,6 +12,8 @@ export class Connection {
   sessionId: string | null = null;
   /** W7: the slot's conn_generation when this connection took it; a stale connection's close leaves the slot alone. */
   generation = 0;
+  /** Captured at hello; an older connected MCP may be replaced only after this process is gone. */
+  mcpIdentity: ProcessIdentity | null = null;
   /**
    * E-3: whether this MCP client can take channel pushes (hello.channel); undefined for a peer that did not say. Set during
    * hello, before the session is announced: `hello` itself is published only after the welcome is written.

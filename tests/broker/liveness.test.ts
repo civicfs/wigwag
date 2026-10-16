@@ -192,6 +192,41 @@ describe('parent-verified disconnect (W8)', () => {
     },
   );
 
+  it.each(['live', 'unknown', 'gone', 'reused'])(
+    'takes an older connected slot only when its MCP process is verified gone (%s)',
+    async (mode) => {
+      reset();
+      procs.set(4242, 'parent-start');
+      procs.set(5001, 'mcp-old');
+      procs.set(5002, 'mcp-new');
+      const { home, broker } = await boot();
+      const old = await mcp(home, 4242, { requested_name: 'worker-one', pid_chain: [5001, 4242] });
+      const h = (await connect(home, { protocol: 1, role: 'hook' })).client;
+      await h.call('hook.event', {
+        agent: 'claude',
+        event: 'SessionStart',
+        agent_session_id: 'sid-two-mcp',
+        cwd: CWD,
+        pid_chain: [9, 4242],
+        agent_pid: 4242,
+      });
+      const oldConn = broker.connectionFor(old.welcome.session_id);
+      if (mode === 'gone') procs.delete(5001);
+      if (mode === 'reused') procs.set(5001, 'different-process');
+      if (mode === 'unknown') broker.processProbe = (pids) => (pids.includes(5001) ? null : probe(pids));
+      const fresh = await mcp(home, 4242, { pid_chain: [5002, 4242] });
+      if (mode === 'gone' || mode === 'reused') {
+        expect(fresh.welcome.session_id).toBe(old.welcome.session_id);
+        expect(oldConn?.failed).toBe(true);
+      } else {
+        expect(fresh.welcome.session_id).not.toBe(old.welcome.session_id);
+        expect(oldConn?.failed).toBe(false);
+        expect(await old.client.call('session.whoami')).toMatchObject({ id: old.welcome.session_id });
+        expect(await fresh.client.call('session.whoami')).toMatchObject({ id: fresh.welcome.session_id });
+      }
+    },
+  );
+
   it('keeps different Claude parents, unverified parents and Codex daemon clients separate', async () => {
     reset();
     procs.set(4242, 'start-A');
