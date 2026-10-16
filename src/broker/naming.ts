@@ -77,7 +77,13 @@ export function installNaming(broker: Broker): NameService {
     const display = raw.trim().slice(0, 200);
     if (display !== s.native_name) setNativeName(db, s.id, display);
     if (s.name_source === 'custom') return { changed: false, name: s.name };
-    if (s.name_source === 'native' && s.name && derivedFrom(s.name, base)) return { changed: false, name: s.name };
+    if (
+      s.name_source === 'native' &&
+      s.name &&
+      sanitizeNativeName(s.native_name, s.agent) === base &&
+      derivedFrom(s.name, base)
+    )
+      return { changed: false, name: s.name };
     for (const candidate of nameCandidates(base)) {
       const holder = holderOf(db, candidate);
       if (holder && holder.id !== s.id) continue;

@@ -61,6 +61,37 @@ describe('sanitizeNativeName', () => {
 });
 
 describe('native name adoption', () => {
+  it.each([
+    ['Fix test', 'Fix', 'fix'],
+    ['API docs', 'API', 'api'],
+    ['Web auth', 'Web', 'web'],
+  ])('shortens %s to %s without mistaking a word for a collision suffix', async (before, after, want) => {
+    const { home, broker } = await boot();
+    const a = await mcp(home);
+    broker.naming.adoptNative(a.welcome.session_id, before, 'claude-hook');
+    expect(broker.naming.adoptNative(a.welcome.session_id, after, 'claude-hook')).toEqual({
+      changed: true,
+      name: want,
+    });
+    expect(await a.client.call('session.whoami')).toMatchObject({ name: want, native_name: after });
+  });
+
+  it('keeps a genuine random collision suffix when its original base becomes free', async () => {
+    const { home, broker } = await boot();
+    const holders = [];
+    for (const [i, name] of ['plan', ...Array.from({ length: 8 }, (_, n) => `plan-${n + 2}`)].entries()) {
+      holders.push(await mcp(home, { requested_name: name, mcp_ppid: 401 + i }));
+    }
+    const a = await mcp(home, { mcp_ppid: 420 });
+    const first = broker.naming.adoptNative(a.welcome.session_id, 'Plan', 'claude-hook').name;
+    expect(first).toMatch(/^plan-[a-z2-7]{4}$/);
+    await holders[0].client.call('session.register', { name: 'free-plan' });
+    expect(broker.naming.adoptNative(a.welcome.session_id, 'Plan', 'claude-sidecar')).toEqual({
+      changed: false,
+      name: first,
+    });
+  });
+
   it('adopts a sanitized native name for a provisional session and audits it', async () => {
     const { home, broker } = await boot();
     const a = await mcp(home);
