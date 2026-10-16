@@ -306,6 +306,32 @@ describe('adoptCanonical', () => {
     expect(listLineage(db, { outcome: 'flagged', limit: 10 })[0]?.resolved_at).toEqual(expect.any(String));
   });
 
+  it.each(['same', 'different', 'unknown', 'gone'])(
+    'preserves synchronous relays only under the same verified live Claude parent (%s)',
+    (mode) => {
+      const lead = mk({ name: 'lead-one', native: 'L' });
+      const c = mk({ name: 'worker-one', native: 'sid-1', detached: true, ppid: 4242 });
+      assign(c, lead);
+      setAgentIdentity(db, c.id, 4242, 'parent-A');
+      setParentState(db, c.id, mode === 'gone' ? 'gone' : 'live');
+      const p = mk({ name: 'new-one', ppid: mode === 'different' ? 4343 : 4242 });
+      setAgentIdentity(db, p.id, mode === 'different' ? 4343 : 4242, 'parent-A');
+      setParentState(db, p.id, mode === 'unknown' ? 'unknown' : 'live');
+      const r = adoptCanonical(db, {
+        provisionalId: p.id,
+        canonicalId: c.id,
+        native: 'sid-1',
+        state: 'online-idle',
+        evidence: {},
+      });
+      if (!r.ok) throw new Error(r.reason);
+      expect(r.cancelledRelays).toEqual(mode === 'same' ? [] : ['req-q1']);
+      expect(db.prepare('SELECT state FROM question_relays WHERE id=?').get('req-q1')).toEqual({
+        state: mode === 'same' ? 'pending' : 'cancelled',
+      });
+    },
+  );
+
   it('a canonical slot that lost its name takes the provisional name', () => {
     const c = mk({ native: 'sid-1' });
     const p = mk({ name: 'claude-w-abcd', ppid: 600 });

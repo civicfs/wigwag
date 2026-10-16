@@ -170,6 +170,64 @@ describe('claude resume recovery (W7)', () => {
     expect(back.welcome.session_id).toBe(old.welcome.session_id);
   });
 
+  it.each(['pending', 'answered'])(
+    'a polling Claude question stays %s after MCP adoption under the same live parent',
+    async (state) => {
+      const { home, broker } = await boot();
+      const processes = new Map([
+        [400, 'parent-A'],
+        [401, 'old-mcp'],
+        [601, 'new-mcp'],
+      ]);
+      broker.processProbe = (pids) =>
+        new Map(pids.flatMap((pid) => (processes.has(pid) ? [[pid, processes.get(pid) as string]] : [])));
+      const lead = await mcp(home, 100, { requested_name: 'lead-one' });
+      await lead.client.call('session.bind', { agent_session_id: 'L' });
+      const { old, h } = await oldSession(home);
+      broker.questions.markReady(old.welcome.session_id, 'sid-1');
+      await lead.client.call('assignment.delegate', {
+        to: 'worker-one',
+        subject: 'task',
+        body: 'b',
+        idempotency_key: 'k',
+      });
+      const q = broker.questions.capture(old.welcome.session_id, {
+        native_session_id: 'sid-1',
+        turn_id: 't',
+        tool_use_id: 'u',
+        kind: 'claude',
+        questions: [
+          {
+            id: 'q1',
+            header: '',
+            question: 'Which?',
+            options: [{ label: 'A', description: '' }],
+            multiSelect: false,
+            allowOther: true,
+          },
+        ],
+      });
+      if (!q) throw new Error('missing fixture relay');
+      if (state === 'answered') await lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['A'] } });
+      const fresh = await mcp(home, 400, { pid_chain: [601, 400] });
+      expect(fresh.welcome.session_id).not.toBe(old.welcome.session_id);
+      old.client.close();
+      await settle();
+      await h.call('hook.event', ev('SessionStart', 400));
+      expect(await fresh.client.call('session.whoami')).toMatchObject({ id: old.welcome.session_id });
+      expect(
+        await h.call('hook.question_poll', {
+          agent: 'claude',
+          native_session_id: 'sid-1',
+          cwd: CWD,
+          agent_pid: 400,
+          pid_chain: [9, 400],
+          relay_id: q.id,
+        }),
+      ).toMatchObject({ state });
+    },
+  );
+
   it('keeps an active assignment, cancels its stale question, and requires fresh readiness', async () => {
     const { home, broker } = await boot();
     const lead = await mcp(home, 100, { requested_name: 'lead-one' });

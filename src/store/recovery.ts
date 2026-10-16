@@ -213,15 +213,26 @@ export function adoptCanonical(
         at,
       );
     db.prepare('DELETE FROM question_integrations WHERE session_id IN (?, ?)').run(p.id, c.id);
-    const stale = (
-      db
-        .prepare(
-          `SELECT q.id FROM question_relays q JOIN assignments a ON a.id = q.assignment_id
+    const sameLiveClaudeParent =
+      c.agent === 'claude' &&
+      p.agent === 'claude' &&
+      c.agent_pid !== null &&
+      c.agent_pid === p.agent_pid &&
+      !!c.agent_start &&
+      c.agent_start === p.agent_start &&
+      c.parent_state === 'live' &&
+      p.parent_state === 'live';
+    const stale = sameLiveClaudeParent
+      ? []
+      : (
+          db
+            .prepare(
+              `SELECT q.id FROM question_relays q JOIN assignments a ON a.id = q.assignment_id
            WHERE a.ended_at IS NULL AND a.worker_session_id = ? AND q.native_session_id = ?
              AND q.kind IN ('claude', 'codex') AND q.state IN ('pending', 'answered') ORDER BY q.id`,
-        )
-        .all(c.id, x.native) as Array<{ id: string }>
-    ).map((r) => r.id);
+            )
+            .all(c.id, x.native) as Array<{ id: string }>
+        ).map((r) => r.id);
     const cancel = db.prepare(
       "UPDATE question_relays SET state = 'cancelled', error = ?, updated_at = ? WHERE id = ? AND state IN ('pending', 'answered')",
     );

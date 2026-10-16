@@ -604,6 +604,7 @@ export function installIdentity(broker: Broker): void {
       return { bound: false, additional_context: null };
     }
     let s: SessionRow | undefined = bound[0];
+    let capturedParent = false;
     if (s && s.mcp_ppid !== agentPid) {
       broker.log(
         `hook.event ${p.event}: ${p.agent_session_id} is bound to session ${s.id} of agent pid ${s.mcp_ppid}, the hook's agent is pid ${agentPid}; not bound`,
@@ -627,6 +628,14 @@ export function installIdentity(broker: Broker): void {
       }
       s = candidates[0];
       if (wrongWorkspace(s)) return { bound: false, additional_context: null };
+      // Verify the incoming parent before adoption decides whether a synchronous hook is still polling.
+      if (s.agent_pid !== agentPid || !s.agent_start) {
+        const ident = captureIdentity(agentPid, broker.processProbe);
+        setAgentIdentity(db, s.id, agentPid, ident?.start ?? null);
+        setParentState(db, s.id, ident ? 'live' : 'unknown');
+        s = getSession(db, s.id) as SessionRow;
+        capturedParent = true;
+      }
       // W7: the Claude hook's session_id is the conversation id itself (S-E), so no further verification is needed.
       const recovered = recoverOnBind(
         s,
@@ -639,7 +648,7 @@ export function installIdentity(broker: Broker): void {
       broker.bus.emit('session.bound', getSession(db, s.id));
     }
     // W8: the Claude parent's process identity, captured when its pid is new or retried while its start identity is missing.
-    if (s.agent_pid !== agentPid || !s.agent_start) {
+    if (!capturedParent && (s.agent_pid !== agentPid || !s.agent_start)) {
       const ident = captureIdentity(agentPid, broker.processProbe);
       setAgentIdentity(db, s.id, agentPid, ident?.start ?? null);
       setParentState(db, s.id, ident ? 'live' : 'unknown');
