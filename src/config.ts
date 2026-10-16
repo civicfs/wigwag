@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { WigwagError } from './errors.js';
+import { assertRehearsalAccess, rehearsalMode } from './rehearsal.js';
 
 export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
   if (env.WIGWAG_HOME) return env.WIGWAG_HOME;
@@ -47,6 +48,10 @@ export const ConfigSchema = z
         app_server_socket: z.string().startsWith('/'),
       })
       .strict(),
+    rehearsal: z
+      .object({ enabled: z.boolean().default(false), allow_external_paths: z.boolean().default(false) })
+      .strict()
+      .default({ enabled: false, allow_external_paths: false }),
     spawn: z.object({ enabled: z.literal(false) }).strict(),
   })
   .strict();
@@ -82,6 +87,7 @@ export const INIT_VALUES: Omit<Config, 'codex'> & { codex: Omit<Config['codex'],
       'app-server-control.sock',
     ),
   },
+  rehearsal: { enabled: false, allow_external_paths: false },
   spawn: { enabled: false },
 };
 
@@ -126,6 +132,7 @@ function writeConfigAtomic(path: string, cfg: unknown): void {
  * that is not a JSON object is left untouched (loadConfig reports it).
  */
 export function initHome(home: string, codexBinary: string): { path: string; created: boolean; added: string[] } {
+  assertRehearsalAccess(home);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   chmodSync(home, 0o700);
   mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
@@ -175,5 +182,6 @@ export function loadConfig(home: string): Config {
   const r = ConfigSchema.safeParse(raw);
   if (!r.success)
     throw new WigwagError('config', `Invalid config ${path}:\n${z.prettifyError(r.error)}\nRun: wigwag init`);
+  assertRehearsalAccess(home, rehearsalMode(r.data));
   return r.data;
 }

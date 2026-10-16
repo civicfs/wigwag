@@ -22,6 +22,7 @@ import {
   type WireError,
 } from '../protocol/rpc.js';
 import type { QuestionService } from '../questions/service.js';
+import { markRehearsal, type RehearsalMode, rehearsalMode, validateRehearsal } from '../rehearsal.js';
 import { type Db, openDb } from '../store/db.js';
 import type { SessionRow } from '../store/sessions.js';
 import { WorkspaceResolver } from '../workspace.js';
@@ -60,6 +61,7 @@ export class Broker {
     if (!this.database) throw new WigwagError('internal', 'Broker database is not open');
     return this.database;
   }
+  readonly rehearsal: RehearsalMode;
   readonly bus = new EventEmitter();
   readonly versionWarnings: string[] = [];
   readonly connections = new Set<Connection>();
@@ -110,6 +112,7 @@ export class Broker {
     readonly home: string,
     readonly config: Config,
   ) {
+    this.rehearsal = rehearsalMode(config);
     mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
     this.sockPath = join(home, 'broker.sock');
     this.logPath = join(home, 'logs', 'broker.log');
@@ -152,7 +155,9 @@ export class Broker {
 
   private async doStart(): Promise<void> {
     try {
+      await validateRehearsal(this.home, this.config, this.rehearsal);
       this.lock = BrokerLock.acquire(this.home);
+      markRehearsal(this.home, this.rehearsal);
       this.database = openDb(join(this.home, 'state.db'));
       for (const f of this.onOpen) f();
       for (const f of this.onStart) f();
@@ -339,6 +344,11 @@ export class Broker {
       if (isObject(params) && typeof params.protocol === 'number' && params.protocol !== PROTOCOL_VERSION)
         assertPeerVersions(params, 'client');
       const hello = HelloZ.parse(params);
+      if (this.rehearsal.enabled && hello.role !== 'owner')
+        throw new WigwagError(
+          'forbidden',
+          'Rehearsal accepts owner clients only; native MCP/hook clients are disabled.',
+        );
       const compatibility = assertPeerVersions(hello, 'client');
       conn.legacy = compatibility.legacy;
       if (compatibility.warning) this.recordVersionWarning(compatibility.warning);

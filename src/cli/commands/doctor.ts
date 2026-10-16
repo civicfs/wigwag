@@ -10,6 +10,12 @@ import { type Config, configPath, loadConfig, resolveHome } from '../../config.j
 import { codexHostWarning } from '../../protocol/codex-hook.js';
 import { frameLimit } from '../../protocol/frame.js';
 import { HANDSHAKE_VERSIONS, LEGACY_CLIENT_WARNING } from '../../protocol/rpc.js';
+import {
+  assertRehearsalAccess,
+  assertRehearsalHome,
+  assertRehearsalStorage,
+  homeRehearsalMode,
+} from '../../rehearsal.js';
 import { isLegacySession } from '../../store/compatibility.js';
 import { SCHEMA_VERSION } from '../../version.js';
 import { out, parseCli, table, UsageError } from '../util.js';
@@ -216,6 +222,13 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
     throw new UsageError('--claude-only and --codex-only are exclusive');
   const checkClaude = !values['codex-only'];
   const checkCodex = !values['claude-only'];
+  const home = resolveHome(),
+    mode = homeRehearsalMode(home);
+  assertRehearsalAccess(home, mode);
+  if (mode.enabled) {
+    assertRehearsalHome(home);
+    assertRehearsalStorage(home);
+  }
   const rows: string[][] = [['STATUS', 'CHECK', 'DETAIL']];
   let allOk = true;
   const add = (ok: boolean, name: string, detail: string) => {
@@ -232,7 +245,10 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
     'git (workspace ids)',
     git.out.trim() || 'git not found on PATH: each directory becomes its own workspace',
   );
-  const home = resolveHome();
+  if (mode.enabled) {
+    add(true, 'rehearsal', 'owner-only; native I/O disabled; no app-server, question adapter, native probes or pushes');
+    if (mode.warning) warn('rehearsal external paths', mode.warning);
+  }
   inspectState(home, add, warn);
   let config: Config | null = null;
   try {
@@ -271,7 +287,7 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
     } catch (e) {
       add(false, 'broker', (e as Error).message);
     }
-    if (checkCodex) {
+    if (checkCodex && !mode.enabled) {
       const features = run(config.codex.binary, ['features', 'list']);
       add(features.ok, 'codex binary', config.codex.binary);
       add(
@@ -281,7 +297,7 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
       );
     }
   }
-  if (checkClaude) {
+  if (checkClaude && !mode.enabled) {
     const claude = run('claude', ['--version']);
     add(
       claude.ok && atLeast(claude.out, [2, 1, 80]),
@@ -292,6 +308,10 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
   const ww = whichBin('wigwag');
   add(ww !== null, 'wigwag on PATH', ww ?? 'not found: run ./install.sh in the repo');
   out(table(rows));
+  if (mode.enabled) {
+    process.exitCode = allOk ? 0 : 1;
+    return;
+  }
   out(`\nStart Claude with push delivery:  wigwag claude --as <name>   (runs: ${CLAUDE_LAUNCH})`);
   out('Start Codex:                      wigwag codex --as <name>');
   process.exitCode = allOk ? 0 : 1;

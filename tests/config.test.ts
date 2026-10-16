@@ -22,6 +22,7 @@ describe('config', () => {
     const cfg = loadConfig(home);
     expect(cfg.codex.binary).toBe('/usr/local/bin/codex');
     expect(cfg.spawn.enabled).toBe(false);
+    expect(cfg.rehearsal).toEqual({ enabled: false, allow_external_paths: false });
     expect(cfg.hooks).toEqual({ deadline_ms: 5000, max_stdin_bytes: 1048576 });
     expect(initHome(home, '/other').created).toBe(false);
     expect(loadConfig(home).codex.binary).toBe('/usr/local/bin/codex');
@@ -82,11 +83,13 @@ describe('config', () => {
     const home = fresh();
     const { path } = initHome(home, '/c');
     const cfg = JSON.parse(readFileSync(path, 'utf8'));
+    delete cfg.rehearsal;
     delete cfg.codex.trusted_host_versions;
     delete cfg.questions.codex_idle_grace_ms;
     const original = JSON.stringify(cfg);
     writeFileSync(path, original);
     const loaded = loadConfig(home);
+    expect(loaded.rehearsal).toEqual({ enabled: false, allow_external_paths: false });
     expect(loaded.codex.trusted_host_versions).toEqual([]);
     // This optional key stays absent; the question adapter applies its documented 2000 ms fallback.
     expect(loaded.questions.codex_idle_grace_ms).toBeUndefined();

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add owner-only rehearsal for copied homes, disabling native readers, question
+  adapters, watchers, process probes, pushes and updates by construction. Refuse
+  live/default homes and escaped paths; external native paths need an explicit
+  warning-bearing override that never enables I/O. Write a private sticky marker
+  before migration; normal updated clients refuse the marked copy until the
+  owner explicitly runs `wigwag rehearsal clear` with its broker stopped.
+  Doctor reports rehearsal and skips native executable probes.
+
 - Share one deadline-bounded Codex metadata snapshot per liveness pass, recheck
   the loaded set after reads, and keep Claude process probes independent of
   stalled native I/O. Stop cancels outstanding snapshots and ignores late results.

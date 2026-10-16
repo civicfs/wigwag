@@ -242,6 +242,45 @@ before retrying. Migration
 never removes a pre-existing backup automatically. A retained backup from an
 already-completed migration does not block normal startup.
 
+### Upgrade rehearsal on an isolated copy
+
+Prepare a separate, private copy of the Wigwag home while its source is safely
+quiescent; this command does not copy live state. Use the updated CLI only:
+
+```sh
+export WIGWAG_HOME=/absolute/path/to/private-copy
+export WIGWAG_REHEARSAL=1
+# Prefer native socket, binary, CODEX_HOME and CLAUDE_CONFIG_DIR paths inside this copy.
+# If retaining external paths from the copied config, explicitly opt in:
+export WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS=1
+wigwag broker run
+# In another shell with the same environment:
+wigwag doctor
+wigwag recovery --json
+```
+
+Rehearsal accepts owner clients only. It can migrate and inspect the copy, but
+creates no native app-server reader, question adapter, title watcher or process
+probe loop, sends no native pushes/answers, and skips update checks. Native
+MCP/hook clients and launch/install/update commands are refused. Retained mail,
+assignments and answered relays remain available for owner inspection. Doctor
+skips Claude/Codex executable probes. Config keys `rehearsal.enabled` and
+`rehearsal.allow_external_paths` provide the same controls; environment values
+of `1` force them on. External paths require the explicit override and a loud
+ping/doctor warning; native I/O stays disabled. Without the override, native
+socket/binary and effective Codex/Claude home paths must be absolute and resolve
+inside the copy. Storage paths must always stay inside it, including symlinks.
+
+Rehearsal refuses the default live home (including XDG/aliases) and any home
+with a running broker socket. It writes `rehearsal.json` with mode 0600 under
+the broker lock before opening the database, even if migration later fails.
+The updated normal broker and CLI refuse a marked home. To deliberately release
+a stopped copy, use `WIGWAG_HOME=/absolute/path/to/private-copy wigwag rehearsal clear`.
+This removes only the marker; also disable the config mode/unset the environment
+switch before normal use. A later normal start may contact native integrations
+and apply retained answers. The marker cannot protect against old 0.2 binaries;
+never use those against the copy after migration.
+
 `unverified-bind` holds Codex push and shows "reload the Wigwag plugin / restart
 this Codex session to enable push; inbox delivery works". Reload legacy/pre-guard
 sessions; for an unsupported host version, also check the verified-version

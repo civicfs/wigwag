@@ -217,7 +217,16 @@ describe('broker server', () => {
     expect(got.slice(bad.length + 1)).toEqual([
       badReply,
       badReply,
-      { id: 2, result: { pong: true, pid: process.pid, ...HANDSHAKE_VERSIONS, version_warnings: [] } },
+      {
+        id: 2,
+        result: {
+          pong: true,
+          pid: process.pid,
+          ...HANDSHAKE_VERSIONS,
+          version_warnings: [],
+          rehearsal: { enabled: false, allow_external_paths: false, native_io: true, warning: null },
+        },
+      },
     ]);
     s.destroy();
   });

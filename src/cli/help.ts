@@ -13,6 +13,12 @@ export interface CommandHelp {
 /** The single source for `--help`, `help`, and every usage error. */
 export const COMMANDS: CommandHelp[] = [
   {
+    name: 'rehearsal',
+    summary: 'explicitly remove a stopped copied home’s rehearsal marker',
+    usage: ['wigwag rehearsal clear'],
+    flags: [],
+  },
+  {
     name: 'update',
     summary: 'check for updates, or explicitly apply one',
     usage: ['wigwag update [--check | --apply] [--json]'],

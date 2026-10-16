@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyUpdate, checkUpdate, notifyUpdate, type Run } from '../../src/update/update.js';
 import { VERSION } from '../../src/version.js';
+import { tmpHome } from '../helpers.js';
 
 afterEach(() => vi.restoreAllMocks());
 const next = '99.0.0';
@@ -135,4 +136,17 @@ describe('npm updates', () => {
     await notifyUpdate(home, read);
     expect(read).toHaveBeenCalledTimes(1);
   });
+});
+
+it('rehearsal suppresses update notice network and cache writes', async () => {
+  const home = tmpHome(),
+    reader = vi.fn(async () => '99.0.0');
+  vi.stubEnv('WIGWAG_REHEARSAL', '1');
+  try {
+    await notifyUpdate(home, reader);
+    expect(reader).not.toHaveBeenCalled();
+    expect(existsSync(join(home, 'update-check.json'))).toBe(false);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

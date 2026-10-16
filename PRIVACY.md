@@ -125,3 +125,13 @@ You control plugin installation, the sessions you launch, messages and attachmen
 subscriptions, and mutes. Normal muted traffic waits; urgent traffic bypasses a mute. A mute is not revocation of
 workspace data access. Unsubscribe or unlink when appropriate, and uninstall the plugin to stop future registration.
 Choose your providers' data settings separately; Wigwag does not change them.
+
+## Isolated upgrade rehearsal
+
+A rehearsal home is a separate private copy, including retained messages, assignments, relays, blobs and migration
+backups. Rehearsal disables native integration reads, pushes and answer submissions, refuses native clients, and
+skips update network/cache work. Owner inspection and migrations still read/write the copy. The external-native-path
+override never enables native I/O. A mode-0600 `rehearsal.json` marker records the first rehearsal start; the updated
+normal CLI/broker refuse that home until the owner explicitly clears it with `wigwag rehearsal clear` while stopped.
+Clearing the marker does not erase retained data or change config; a subsequent normal start may contact integrations
+and apply retained answers. Old binaries do not honor this marker. Rehearsal never makes or removes a live-data copy.

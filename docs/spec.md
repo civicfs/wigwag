@@ -225,6 +225,22 @@ vitest, linted with biome.
   leaves a pre-existing file that blocks the next migration/start until the operator inspects and moves/removes it.
   Confirmed rollback removes only this attempt's redundant backup; unknown outcomes preserve it. Completed
   migrations skip their old snapshots at startup; a retained successful backup alone does not block startup.
+- **Owner-only upgrade rehearsal.** Config `rehearsal.enabled`/`rehearsal.allow_external_paths` default false;
+  `WIGWAG_REHEARSAL=1` and `WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS=1` force them on. CLI use requires an explicit
+  absolute WIGWAG_HOME distinct from the default live home (including XDG/symlink aliases) and any running
+  broker's socket home. Before DB open, native socket/binary and effective CODEX_HOME/CLAUDE_CONFIG_DIR paths
+  must resolve inside that home unless the explicit external-path override is set. Storage, mutex, logs and
+  broker socket paths cannot escape even with that override. Ping/doctor display mode and a loud override warning.
+  Native readers, app-server/question adapters, title watchers and liveness intervals are never constructed;
+  the process probe is fixed unknown and injected native factories/transports cannot enable I/O. Native pushes
+  are held; retained assignments/answered relays cannot submit answers. MCP/hook hello is refused before identity
+  creation, leaving owner inspection/migration RPCs available. Native launch/install/uninstall/update/MCP commands
+  are refused; native hooks fail open without discovery; update notices skip network and cache writes; doctor
+  skips native executable probes. On first start a mode-0600 rehearsal.json marker is written under the mutex
+  before state.db is opened. Normal updated broker/CLI refuse this marked home. The explicit owner command
+  `wigwag rehearsal clear` requires a stopped broker and removes only that marker under the mutex. Config/environment
+  mode must also be disabled before normal use, which may contact integrations and apply retained answers.
+  This guard cannot constrain old binaries and does not copy source data or confer live-upgrade authorization.
 - **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
   `session.bind` tool path for Claude. A raw Claude internal bind cannot change a non-null native ID or target any
   other unretired canonical slot, including an offline one; it must use a trusted hook instead.
