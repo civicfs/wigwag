@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { tailLines } from './tail.js';
 
@@ -8,22 +8,42 @@ export type ClaudeTitleOrigin = 'claude-hook' | 'claude-sidecar' | 'claude-trans
 
 /** S-B: the hook's transcript path must be `<dir>/<session_id>.jsonl`; anything else is not this session's transcript. */
 export function validTranscriptPath(path: unknown, sessionId: string): path is string {
-  return typeof path === 'string' && isAbsolute(path) && basename(path) === `${sessionId}.jsonl`;
+  return (
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(sessionId) &&
+    typeof path === 'string' &&
+    isAbsolute(path) &&
+    basename(path) === `${sessionId}.jsonl`
+  );
 }
 
 /** Claude 2.1.300 writes `join(dirname(transcriptPath), sessionId, "custom-title.json")` on /rename (S-B). */
-export const sidecarPath = (transcriptPath: string, sessionId: string): string =>
-  join(dirname(transcriptPath), sessionId, 'custom-title.json');
+export function sidecarPath(transcriptPath: string, sessionId: string): string {
+  if (!validTranscriptPath(transcriptPath, sessionId)) throw new Error('invalid Claude transcript identity');
+  return join(dirname(transcriptPath), sessionId, 'custom-title.json');
+}
 
 const title = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
 export function readSidecarTitle(transcriptPath: string, sessionId: string): string | null {
+  let fd: number | undefined;
   try {
-    const p = sidecarPath(transcriptPath, sessionId);
-    if (statSync(p).size > SIDECAR_MAX_BYTES) return null;
-    return title((JSON.parse(readFileSync(p, 'utf8')) as { customTitle?: unknown }).customTitle);
+    fd = openSync(sidecarPath(transcriptPath, sessionId), constants.O_RDONLY | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > SIDECAR_MAX_BYTES) return null;
+    // One extra byte detects growth after fstat without ever reading an unbounded stream.
+    const buf = Buffer.alloc(SIDECAR_MAX_BYTES + 1);
+    let off = 0;
+    while (off < buf.length) {
+      const n = readSync(fd, buf, off, buf.length - off, off);
+      if (n === 0) break;
+      off += n;
+    }
+    if (off > SIDECAR_MAX_BYTES) return null;
+    return title((JSON.parse(buf.subarray(0, off).toString('utf8')) as { customTitle?: unknown }).customTitle);
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
@@ -33,6 +53,7 @@ export function readTranscriptTitle(
   sessionId: string,
   maxBytes = TRANSCRIPT_TAIL_BYTES,
 ): string | null {
+  if (!validTranscriptPath(transcriptPath, sessionId)) return null;
   const lines = tailLines(transcriptPath, maxBytes);
   if (!lines) return null;
   for (let i = lines.length - 1; i >= 0; i--) {

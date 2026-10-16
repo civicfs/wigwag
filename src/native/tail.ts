@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
 
 /**
  * The lines in the last `maxBytes` of a file, oldest first. A line cut by the window start is dropped; a torn last line
@@ -7,8 +7,11 @@ import { closeSync, fstatSync, openSync, readSync } from 'node:fs';
 export function tailLines(path: string, maxBytes: number): string[] | null {
   let fd: number | undefined;
   try {
-    fd = openSync(path, 'r');
-    const size = fstatSync(fd).size;
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) return null;
+    fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return null;
+    const size = stat.size;
     const start = Math.max(0, size - maxBytes);
     const buf = Buffer.alloc(size - start);
     let off = 0;

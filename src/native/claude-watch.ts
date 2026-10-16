@@ -69,7 +69,10 @@ export class ClaudeTitleWatcher {
     this.unwatch(s.id);
     try {
       const watcher = watch(dir, { persistent: false }, () => this.schedule(s.id));
-      watcher.on('error', () => this.unwatch(s.id));
+      watcher.on('error', () => {
+        if (this.watchers.get(s.id)?.watcher === watcher) this.unwatch(s.id);
+        else watcher.close();
+      });
       this.watchers.set(s.id, { dir, watcher });
     } catch {
       // The periodic reconcile still covers this session.

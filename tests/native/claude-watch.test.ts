@@ -24,9 +24,9 @@ async function boundSession(withSidecarDir = false) {
   const { home, broker } = await startTestBroker();
   cleanup.push(() => broker.stop());
   const dir = mkdtempSync(join(tmpdir(), 'ww-cw-'));
-  const transcript = join(dir, 'sid-1.jsonl');
+  const transcript = join(dir, '5d7c100a-7597-483c-bc8c-88a81970184d.jsonl');
   writeFileSync(transcript, '');
-  if (withSidecarDir) mkdirSync(join(dir, 'sid-1'));
+  if (withSidecarDir) mkdirSync(join(dir, '5d7c100a-7597-483c-bc8c-88a81970184d'));
   const a = await connect(home, {
     protocol: 1,
     role: 'mcp',
@@ -39,7 +39,7 @@ async function boundSession(withSidecarDir = false) {
   await h.client.call('hook.event', {
     agent: 'claude',
     event: 'SessionStart',
-    agent_session_id: 'sid-1',
+    agent_session_id: '5d7c100a-7597-483c-bc8c-88a81970184d',
     cwd: '/Users/x/code/myproject',
     pid_chain: [9, 400],
     agent_pid: 400,
@@ -48,8 +48,8 @@ async function boundSession(withSidecarDir = false) {
   const watcher = new ClaudeTitleWatcher(broker, 3_600_000);
   cleanup.push(() => watcher.stop());
   const write = (t: string, mtimeOffsetS = 0) => {
-    mkdirSync(join(dir, 'sid-1'), { recursive: true });
-    const p = join(dir, 'sid-1', 'custom-title.json');
+    mkdirSync(join(dir, '5d7c100a-7597-483c-bc8c-88a81970184d'), { recursive: true });
+    const p = join(dir, '5d7c100a-7597-483c-bc8c-88a81970184d', 'custom-title.json');
     writeFileSync(p, JSON.stringify({ customTitle: t }));
     const at = new Date(Date.now() + mtimeOffsetS * 1000);
     utimesSync(p, at, at);

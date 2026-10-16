@@ -38,7 +38,7 @@ const hook = async (home: string) => (await connect(home, { protocol: 1, role: '
 const ev = (event: string, extra: Record<string, unknown> = {}) => ({
   agent: 'claude',
   event,
-  agent_session_id: 'sid-1',
+  agent_session_id: '5d7c100a-7597-483c-bc8c-88a81970184d',
   cwd: '/Users/x/code/myproject',
   pid_chain: [9, 400],
   agent_pid: 400,
@@ -46,14 +46,17 @@ const ev = (event: string, extra: Record<string, unknown> = {}) => ({
 });
 function transcriptFile(opts: { sidecar?: string; record?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'ww-tr-'));
-  const path = join(dir, 'sid-1.jsonl');
+  const path = join(dir, '5d7c100a-7597-483c-bc8c-88a81970184d.jsonl');
   const line = opts.record
-    ? { type: 'custom-title', sessionId: 'sid-1', customTitle: opts.record }
-    : { type: 'user', sessionId: 'sid-1' };
+    ? { type: 'custom-title', sessionId: '5d7c100a-7597-483c-bc8c-88a81970184d', customTitle: opts.record }
+    : { type: 'user', sessionId: '5d7c100a-7597-483c-bc8c-88a81970184d' };
   writeFileSync(path, `${JSON.stringify(line)}\n`);
   if (opts.sidecar) {
-    mkdirSync(join(dir, 'sid-1'));
-    writeFileSync(join(dir, 'sid-1', 'custom-title.json'), JSON.stringify({ customTitle: opts.sidecar }));
+    mkdirSync(join(dir, '5d7c100a-7597-483c-bc8c-88a81970184d'));
+    writeFileSync(
+      join(dir, '5d7c100a-7597-483c-bc8c-88a81970184d', 'custom-title.json'),
+      JSON.stringify({ customTitle: opts.sidecar }),
+    );
   }
   return path;
 }
@@ -83,8 +86,11 @@ describe('claude native names at hook boundaries (W2)', () => {
     const t = transcriptFile();
     await h.call('hook.event', ev('SessionStart', { transcript_path: t }));
     expect(getSession(broker.db, a.welcome.session_id)?.native_ref).toBe(t);
-    mkdirSync(join(t, '..', 'sid-1'));
-    writeFileSync(join(t, '..', 'sid-1', 'custom-title.json'), JSON.stringify({ customTitle: 'Side Title' }));
+    mkdirSync(join(t, '..', '5d7c100a-7597-483c-bc8c-88a81970184d'));
+    writeFileSync(
+      join(t, '..', '5d7c100a-7597-483c-bc8c-88a81970184d', 'custom-title.json'),
+      JSON.stringify({ customTitle: 'Side Title' }),
+    );
     await h.call('hook.event', ev('PostToolUse'));
     expect(getSession(broker.db, a.welcome.session_id)?.name).toBe('side-title');
   });

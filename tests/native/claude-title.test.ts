@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import {
   readTranscriptTitle,
   resolveClaudeTitle,
   SIDECAR_MAX_BYTES,
+  sidecarPath,
   validTranscriptPath,
 } from '../../src/native/claude-title.js';
 
@@ -28,6 +30,31 @@ describe('claude title sources', () => {
     expect(validTranscriptPath(`p/${SID}.jsonl`, SID)).toBe(false);
     expect(validTranscriptPath('/p/other.jsonl', SID)).toBe(false);
     expect(validTranscriptPath(undefined, SID)).toBe(false);
+  });
+
+  it.each(['..', '.', '../escape', 'not-a-uuid', 'a'.repeat(500)])(
+    'rejects unsafe native session ID %s before path construction',
+    (sid) => {
+      const dir = project();
+      const path = join(dir, `${sid}.jsonl`);
+      expect(validTranscriptPath(path, sid)).toBe(false);
+      expect(() => sidecarPath(path, sid)).toThrow();
+      expect(readSidecarTitle(path, sid)).toBeNull();
+      expect(readTranscriptTitle(path, sid)).toBeNull();
+    },
+  );
+
+  it.each(['sidecar', 'tail'])('rejects a FIFO without blocking the %s reader', (kind) => {
+    const dir = project();
+    const t = join(dir, `${SID}.jsonl`);
+    const fifo = kind === 'sidecar' ? join(dir, SID, 'custom-title.json') : t;
+    mkdirSync(join(dir, SID));
+    execFileSync('mkfifo', [fifo]);
+    const out = execFileSync(process.execPath, ['tests/fixtures/read-native-child.mjs', kind, t, SID], {
+      timeout: 3000,
+      encoding: 'utf8',
+    });
+    expect(JSON.parse(out)).toBeNull();
   });
 
   it('reads the sidecar title; ignores invalid, empty and oversized sidecars', () => {

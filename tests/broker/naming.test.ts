@@ -92,6 +92,26 @@ describe('native name adoption', () => {
     });
   });
 
+  it.each([false, true])(
+    'stores a bounded native display title without control characters (custom: %s)',
+    async (custom) => {
+      const { home, broker } = await boot();
+      const a = await mcp(home);
+      if (custom) await a.client.call('session.register', { name: 'custom-role' });
+      broker.naming.adoptNative(
+        a.welcome.session_id,
+        `Plan\nnext\tstep\u001b[31m\u0000\u202e ${'z'.repeat(250)}`,
+        'claude-hook',
+      );
+      const me = await a.client.call<{ name: string; native_name: string }>('session.whoami');
+      expect(me.native_name).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+      expect(me.native_name).toHaveLength(200);
+      expect(me.native_name).toMatch(/^Plan next step/);
+      if (custom) expect(me.name).toBe('custom-role');
+      else expect(me.name).toBe(sanitizeNativeName(me.native_name, 'claude'));
+    },
+  );
+
   it('adopts a sanitized native name for a provisional session and audits it', async () => {
     const { home, broker } = await boot();
     const a = await mcp(home);

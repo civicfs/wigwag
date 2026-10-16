@@ -100,12 +100,12 @@ describe('claude hook command', () => {
     const r = await claude.run(
       [process.execPath, DIST_MAIN, 'hook', 'claude', 'SessionStart'],
       JSON.stringify({
-        session_id: 'cs-t',
+        session_id: '5d7c100a-7597-483c-bc8c-88a81970184d',
         cwd: '/w/myproject',
         hook_event_name: 'SessionStart',
         source: 'resume',
         session_title: '  Node refactor  ',
-        transcript_path: '/tmp/ww-none/cs-t.jsonl',
+        transcript_path: join(started.home, '5d7c100a-7597-483c-bc8c-88a81970184d.jsonl'),
       }),
       { WIGWAG_HOME: started.home },
     );
@@ -114,7 +114,7 @@ describe('claude hook command', () => {
       name: 'node-refactor',
       name_source: 'native',
       native_name: 'Node refactor',
-      native_ref: '/tmp/ww-none/cs-t.jsonl',
+      native_ref: join(started.home, '5d7c100a-7597-483c-bc8c-88a81970184d.jsonl'),
     });
     a.client.close();
   });

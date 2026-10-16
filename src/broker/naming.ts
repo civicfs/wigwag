@@ -72,9 +72,14 @@ export function installNaming(broker: Broker): NameService {
   const adoptNative: NameService['adoptNative'] = (sessionId, raw, origin) => {
     const s = getSession(db, sessionId);
     if (!s || s.state === 'offline' || s.retired_at) return { changed: false, name: s?.name ?? null };
-    const base = sanitizeNativeName(raw, s.agent);
-    if (!base || typeof raw !== 'string') return { changed: false, name: s.name };
-    const display = raw.trim().slice(0, 200);
+    if (typeof raw !== 'string') return { changed: false, name: s.name };
+    const display = raw
+      .replace(/[\p{Cc}\p{Cf}]/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .slice(0, 200);
+    const base = sanitizeNativeName(display, s.agent);
+    if (!base) return { changed: false, name: s.name };
     if (display !== s.native_name) setNativeName(db, s.id, display);
     if (s.name_source === 'custom') return { changed: false, name: s.name };
     if (
