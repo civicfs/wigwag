@@ -263,7 +263,17 @@ vitest, linted with biome.
   refuses until reconnect allows the split; it never overwrites the old slot's native binding.
   Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
   thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the
-  binding and pass metadata root verification. Untrusted binds preserve offline canonical bindings and record
+  binding and pass metadata root verification. A narrow MCP reattachment exception requires both old/new
+  hook-verified concrete identities for the same root, both host versions currently trusted, exactly one matching
+  same-workspace unretired non-offline/link-disconnected slot, and fresh metadata confirming the root is loaded.
+  Generation, identity, host trust, workspace, retirement and switch-away lineage are rechecked after I/O; the existing
+  adoption transaction keeps name/mail/assignment/forward ownership. This never revives a retired or switched-away
+  slot and does not enable general Codex resume recovery. This verified MCP handover preserves pending/answered
+  synchronous Codex relays, then replaces the question subscription and requires fresh pending-request replay for
+  the exact thread, native invocation, question payload and known request ID before submitting. Already-sent answers
+  are never resent; native resolutions or ended turns cancel stale relays. Unavailable/mismatched replay retains the
+  relay with a visible waiting reason and submits nothing. General adoption still cancels synchronous relays.
+  Untrusted binds preserve offline canonical bindings and record
   `codex-thread-id-untrusted`; non-offline holders refuse. Codex queue pushes require metadata evidence that the presented ID is a loaded root and no other loaded thread
   shares its sessionId, plus a current connected MCP link and non-offline slot, all revalidated after I/O. The
   metadata-only reader checks bind, probes and each queue push (fresh before dispatch),
@@ -313,6 +323,12 @@ vitest, linted with biome.
   error, legacy row at broker start) goes offline after 3 consecutive unknown probes and 60 s. A new MCP process under
   the same verified Claude parent re-attaches to a disconnected slot. Replacing an older connected MCP additionally
   requires its own recorded process identity to be verified gone; a live or unverifiable older MCP keeps its slot.
+- **Known 0.3.0 limitation; 0.4.0 follow-up.** A historical/unverified Codex slot can block a new verified MCP from
+  rebinding its still-loaded native ID. `wigwag recovery --json` inspects the slot, mail counts and assignment.
+  Its held mail and active assignment remain on that old slot; no existing command safely releases or rehomes
+  that work. `wigwag recovery retire <id>` accepts only an offline slot and refuses retained work without `--force`;
+  forced retirement excludes the slot from recovery but does not deliver its mail or transfer/release its assignment.
+  Do not treat retirement as work recovery. Add an explicit owner-reviewed resolution operation in 0.4.0.
 - **Binding the MCP connection to the agent session:**
   - Codex: the plugin declares `SessionStart` / `Stop` / `Interrupt` hooks of `type: "mcp_tool"` calling the
     plugin's own server (`session_bind`, `turn_ended`) with `${session_id}` — same pattern the bundled `browser`

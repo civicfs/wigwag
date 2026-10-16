@@ -240,6 +240,24 @@ describe('adoptCanonical', () => {
     },
   );
 
+  it('general Codex adoption still cancels synchronous relays outside verified MCP reattachment', () => {
+    const lead = mk({ name: 'lead-one', native: 'lead-native' });
+    const canonical = mk({ agent: 'codex', name: 'worker-one', native: 'sid-1', detached: true });
+    assign(canonical, lead);
+    db.prepare("UPDATE question_relays SET kind='codex' WHERE id='req-q1'").run();
+    const fresh = mk({ agent: 'codex' });
+    expect(
+      adoptCanonical(db, {
+        provisionalId: fresh.id,
+        canonicalId: canonical.id,
+        native: 'sid-1',
+        state: 'online-idle',
+        evidence: {},
+      }),
+    ).toMatchObject({ ok: true, cancelledRelays: ['req-q1'] });
+    expect(db.prepare("SELECT state FROM question_relays WHERE id='req-q1'").get()).toEqual({ state: 'cancelled' });
+  });
+
   it('moves the live connection onto the canonical slot and retires the provisional one', () => {
     const lead = mk({ name: 'lead-one', native: 'lead-native', ppid: 100 });
     const c = mk({ name: 'worker-one', native: 'sid-1' });

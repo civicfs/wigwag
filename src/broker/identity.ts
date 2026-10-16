@@ -4,7 +4,7 @@ import { WigwagError } from '../errors.js';
 import { RESERVED_NAMES } from '../ids.js';
 import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.js';
 import { captureIdentity, sameProcess } from '../proc/identity.js';
-import { trustedCodexHost, validateHookOrigin } from '../protocol/codex-hook.js';
+import { type HookOrigin, trustedCodexHost, validateHookOrigin } from '../protocol/codex-hook.js';
 import type { Hello } from '../protocol/rpc.js';
 import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
 import { bindingOrigin, provenUntrustedBinding, recordBindingOrigin } from '../store/binding-origin.js';
@@ -243,7 +243,7 @@ export function installIdentity(broker: Broker): void {
     self: SessionRow,
     native: string,
     evidence: Record<string, unknown>,
-    gate: { verified: boolean; reason: string; legacyUpgrade?: boolean },
+    gate: { verified: boolean; reason: string; legacyUpgrade?: boolean; reattach?: { id: string; generation: number } },
   ): { adopted: SessionRow } | { refused: string } | null => {
     if (isLegacySession(db, self.id)) return null;
     const base = { agent: self.agent, native_id: native, workspace: self.workspace, session_id: self.id };
@@ -257,13 +257,18 @@ export function installIdentity(broker: Broker): void {
       });
       return null;
     }
-    const candidates = recoveryCandidates(db, {
-      agent: self.agent,
-      native,
-      workspace: self.workspace,
-      exceptId: self.id,
-      includeLegacy: self.agent === 'claude' && gate.verified && gate.legacyUpgrade === true,
-    });
+    const reattachCandidate = gate.reattach ? getSession(db, gate.reattach.id) : undefined;
+    const candidates = gate.reattach
+      ? reattachCandidate
+        ? [reattachCandidate]
+        : []
+      : recoveryCandidates(db, {
+          agent: self.agent,
+          native,
+          workspace: self.workspace,
+          exceptId: self.id,
+          includeLegacy: self.agent === 'claude' && gate.verified && gate.legacyUpgrade === true,
+        });
     if (!candidates.length) return null;
     const flag = (reason: string): { refused: string } => {
       recordLineage(db, {
@@ -290,6 +295,14 @@ export function installIdentity(broker: Broker): void {
         native,
         state: self.state,
         evidence,
+        ...(gate.reattach
+          ? {
+              codexReattach: {
+                canonicalGeneration: gate.reattach.generation,
+                provisionalGeneration: self.conn_generation,
+              },
+            }
+          : {}),
         ...(gate.legacyUpgrade && self.agent === 'claude' ? { legacyUpgradeHello: conn.hello ?? undefined } : {}),
       });
       if (adopted.ok && adopted.fromName && adopted.canonical.name)
@@ -316,6 +329,7 @@ export function installIdentity(broker: Broker): void {
     }
     if (r.fromName && r.fromName !== canonical.name)
       afterRename(broker, canonical.id, r.fromName, r.fromSource, 'recovery');
+    if (gate.reattach) broker.questions.revalidateCodexMcp?.(canonical);
     if (r.cancelledRelays.length) broker.questions.emit('changed');
     broker.questions.emit('assignments');
     broker.log(
@@ -323,6 +337,146 @@ export function installIdentity(broker: Broker): void {
     );
     broker.broadcastOwner('session', publicSession(db, getSession(db, self.id) as SessionRow));
     return { adopted: getSession(db, r.canonical.id) as SessionRow };
+  };
+
+  const codexMcpReattach = async (
+    conn: Connection,
+    self: SessionRow,
+    native: string,
+    origin: HookOrigin | null,
+  ): Promise<void> => {
+    if (
+      self.agent !== 'codex' ||
+      conn.legacy ||
+      isLegacySession(db, self.id) ||
+      self.agent_session_id ||
+      !origin ||
+      !trustedCodexHost(origin, broker.config.codex.trusted_host_versions)
+    )
+      return;
+    const matches = listSessions(db).filter(
+      (s) =>
+        s.id !== self.id &&
+        s.agent === 'codex' &&
+        s.agent_session_id === native &&
+        s.workspace === self.workspace &&
+        !s.retired_at,
+    );
+    if (matches.length !== 1) return;
+    const old = matches[0];
+    if (old.state === 'offline' || old.link !== 'disconnected') return;
+    if (provenUntrustedBinding(db, old)) return; // the existing positive-squatter detachment path owns this case
+    const switched = () =>
+      !!db
+        .prepare(`SELECT 1 FROM session_lineage WHERE session_id=? AND cause='switch'
+      AND previous_native_id=? LIMIT 1`)
+        .get(old.id, native);
+    const verified = (s: SessionRow) =>
+      s.bind_origin === 'hook-verified' &&
+      !isLegacySession(db, s.id) &&
+      !provenUntrustedBinding(db, s) &&
+      trustedCodexHost(
+        { name: s.host_client_name ?? '', version: s.host_client_version ?? '' },
+        broker.config.codex.trusted_host_versions,
+      );
+    if (!verified(old) || old.retired_into || switched()) {
+      const remediation =
+        'Inspect wigwag recovery --json; held mail and active assignment remain on the old slot. No existing command safely rehomes this work; see the 0.4.0 follow-up in docs/spec.md.';
+      recordLineage(db, {
+        agent: 'codex',
+        native_id: native,
+        workspace: self.workspace,
+        session_id: self.id,
+        canonical_session_id: old.id,
+        cause: 'resume',
+        outcome: 'flagged',
+        reason: 'codex-reattach-unverified',
+        evidence: { remediation },
+      });
+      throw new WigwagError('conflict', remediation);
+    }
+    // A replaced MCP has no remembered Wigwag ID, while its Codex thread may remain loaded (0.162.1).
+    // https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/session/mcp.rs#L688
+    // Both concrete hook identities must match; shared-root IDs alone never authorize this handover.
+    const loaded = await broker.codexNames?.loadedThreads();
+    const root = loaded?.has(native) ? await broker.codexNames?.read(native) : null;
+    const stillLoaded = root?.available && root.meta?.root ? await broker.codexNames?.loadedThreads() : null;
+    if (conn.closed || conn.failed || conn.sessionId !== self.id)
+      throw new WigwagError('transport', 'connection changed during Codex MCP reattach');
+    if (!stillLoaded?.has(native)) {
+      recordLineage(db, {
+        agent: 'codex',
+        native_id: native,
+        workspace: self.workspace,
+        session_id: self.id,
+        canonical_session_id: old.id,
+        cause: 'resume',
+        outcome: 'flagged',
+        reason: 'unverified-root',
+        evidence: {
+          hook: 'session.bind',
+          mcp_reattach: true,
+          root_verified: root?.available === true && root.meta?.root === true,
+          loaded: stillLoaded?.has(native) ?? null,
+        },
+      });
+      throw new WigwagError(
+        'conflict',
+        'Codex MCP reattach root is not verified loaded; inspect wigwag recovery --json and retry',
+      );
+    }
+    const current = getSession(db, old.id),
+      incoming = getSession(db, self.id);
+    if (
+      !current ||
+      !incoming ||
+      current.conn_generation !== old.conn_generation ||
+      incoming.conn_generation !== self.conn_generation ||
+      current.state === 'offline' ||
+      current.link !== 'disconnected' ||
+      current.retired_at ||
+      current.retired_into ||
+      current.agent_session_id !== native ||
+      current.workspace !== self.workspace ||
+      incoming.workspace !== self.workspace ||
+      incoming.agent_session_id !== self.agent_session_id ||
+      incoming.link !== 'connected' ||
+      incoming.state === 'offline' ||
+      incoming.retired_at ||
+      isLegacySession(db, incoming.id) ||
+      conn.generation !== self.conn_generation ||
+      conn.hello?.host_client?.name !== origin.name ||
+      conn.hello?.host_client?.version !== origin.version ||
+      !verified(current) ||
+      !trustedCodexHost(origin, broker.config.codex.trusted_host_versions) ||
+      switched() ||
+      !stillLoaded?.has(native) ||
+      listSessions(db).some(
+        (s) =>
+          s.id !== self.id &&
+          s.id !== old.id &&
+          s.agent === 'codex' &&
+          s.agent_session_id === native &&
+          s.workspace === self.workspace &&
+          !s.retired_at,
+      )
+    )
+      throw new WigwagError(
+        'conflict',
+        'Codex MCP reattach changed or could not be verified; inspect wigwag recovery --json and retry',
+      );
+    const recovered = recoverOnBind(
+      incoming,
+      native,
+      { hook: 'session.bind', mcp_reattach: true, root_verified: true },
+      {
+        verified: true,
+        reason: 'codex-verified-mcp-reattach',
+        reattach: { id: old.id, generation: old.conn_generation },
+      },
+    );
+    if (!recovered || 'refused' in recovered)
+      throw new WigwagError('conflict', 'Codex MCP reattach refused; inspect wigwag recovery --json');
   };
 
   broker.onHello = async (conn, hello: Hello) => {
@@ -604,11 +758,17 @@ export function installIdentity(broker: Broker): void {
   };
 
   broker.handle('session.bind', async ({ conn }, { agent_session_id, question_relay_version, hook_origin }) => {
-    const first = me(conn.sessionId);
+    let first = me(conn.sessionId);
     const origin =
       first.agent === 'codex' && !conn.legacy ? validateHookOrigin(hook_origin, conn.hello?.host_client) : null;
     if (origin && origin.thread_id !== agent_session_id)
       throw new WigwagError('bad_request', 'Codex hook identity does not match the concrete host threadId; not bound');
+    if (origin) {
+      await codexMcpReattach(conn, first, agent_session_id, origin);
+      if (conn.closed || conn.failed || !conn.sessionId)
+        throw new WigwagError('transport', 'connection closed during bind');
+      first = me(conn.sessionId);
+    }
     // W7 (S-E): a Codex hook's session_id is the tree-root id, shared by descendants. Automatic recovery is limited to
     // an app-server-verified root thread. That check is I/O, so it runs first; everything after it is revalidated.
     const trustedThreadId =

@@ -140,6 +140,15 @@ function inspectState(
           'binding-origin-unknown',
           'Historical binding protected: run a trusted hook in the original Claude session, or inspect wigwag recovery before retiring the offline duplicate.',
         );
+      if (
+        count(
+          "SELECT count(*) AS n FROM session_lineage WHERE outcome='flagged' AND reason='codex-reattach-unverified' AND resolved_at IS NULL",
+        )
+      )
+        warn(
+          'codex-reattach-unverified',
+          'Inspect wigwag recovery --json; held mail and active assignment remain on the old slot. No existing command safely rehomes this work; see the 0.4.0 follow-up in docs/spec.md.',
+        );
     }
     const groups = db
       .prepare(

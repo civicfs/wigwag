@@ -154,6 +154,17 @@ unavailable or ambiguous evidence
 holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
 (<reason>)`. This push check does not enable automatic slot recovery.
 
+A restarted Codex MCP can reattach without its remembered Wigwag slot ID only when
+both bindings have verified host-origin identity for the same concrete root thread,
+both host versions are currently trusted, exactly one matching slot is disconnected,
+and fresh metadata confirms the root is still loaded. Its name, mail and assignment
+stay with that slot. Pending native questions require fresh request replay before
+any answer is submitted; unavailable evidence keeps the relay visible and waiting.
+Connected, retired, switched-away or ambiguous slots refuse.
+Historical unverified slots remain protected; inspect `wigwag recovery --json`.
+Their held mail and active assignment remain on the old slot. No existing command
+safely rehomes that work; explicit owner resolution is a 0.4.0 follow-up.
+
 Codex pushes also require a verified hook-origin bind. Internal hook tools are
 hidden from the model; host-generated `threadId` must match the hook's session ID,
 and calls with model `callId` metadata or argument-supplied origin are refused.
@@ -167,6 +178,8 @@ reload the plugin to bind again. `whoami`, `who` and doctor expose `bind_origin`
 
 Legacy and pre-guard Codex bindings deliberately lose push until reloaded:
 `reload the Wigwag plugin / restart this Codex session to enable push`.
+Reload cannot automatically reclaim an unverified historical slot holding work;
+the diagnostic above applies when that slot blocks binding.
 Messaging remains available. This guard relies on the host's metadata contract,
 not cryptographic attestation. Hook-origin `threadId` behavior is **unverified in
 a live throwaway Codex session** until acceptance testing confirms it. Using it

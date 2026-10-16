@@ -13,6 +13,7 @@ export interface AppConnection {
   on(event: string, listener: (f: AppFrame) => void): unknown;
 }
 type Pending = { relay: Relay; requestId?: string | number; sent: boolean };
+type Revalidation = Map<string, { requestId?: string | number; sent: boolean }>;
 type Attached = {
   app: AppConnection;
   native: string;
@@ -25,6 +26,7 @@ type Attached = {
   activeTurn?: string;
   subscribed?: boolean;
   idleTimer?: NodeJS.Timeout;
+  revalidation?: Revalidation;
 };
 export const CODEX_QUESTION_IDLE_GRACE_MS = 2000;
 const object = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
@@ -33,6 +35,7 @@ const object = (x: unknown): x is Record<string, unknown> => !!x && typeof x ===
 export class CodexQuestions {
   private readonly attached = new Map<string, Attached>();
   private readonly pushing = new Map<string, number>();
+  private readonly revalidations = new Map<string, Revalidation>();
   private stopped = false;
   private readonly retry: NodeJS.Timeout;
   private readonly closing = new Set<Promise<void>>();
@@ -54,6 +57,28 @@ export class CodexQuestions {
   };
   private readonly assignments = () => {
     this.reconcile().catch((e) => this.log(e));
+  };
+  private readonly revalidateMcp = (session: SessionRow): void => {
+    const existing = this.attached.get(session.id);
+    const checks: Revalidation = new Map();
+    for (const q of this.service.list(null).questions) {
+      const assignment = this.service.assignment(q.assignment_id);
+      if (
+        q.kind !== 'codex' ||
+        !['pending', 'answered'].includes(q.state) ||
+        q.native_session_id !== session.agent_session_id ||
+        assignment?.worker_session_id !== session.id ||
+        assignment.ended_at
+      )
+        continue;
+      const pending = existing?.pending.get(q.id);
+      checks.set(q.id, { requestId: pending?.requestId, sent: pending?.sent ?? false });
+    }
+    if (checks.size) {
+      this.revalidations.set(session.id, checks);
+      this.service.codexWaiting.set(session.id, 'native-request-unverified');
+    }
+    if (existing) this.detach(existing); // old pending evidence must never authorize an answer after handover
   };
   /**
    * Pin only this queue attempt; turn notifications/hooks and the existing idle grace take over afterwards.
@@ -119,6 +144,7 @@ export class CodexQuestions {
       opts.idleGraceMs ?? service.broker.config.questions.codex_idle_grace_ms ?? CODEX_QUESTION_IDLE_GRACE_MS;
     service.turnCodex = this.turnHook;
     service.reserveCodexPush = this.reservePush;
+    service.revalidateCodexMcp = this.revalidateMcp;
     service.on('changed', this.changed);
     service.on('assignments', this.assignments);
     service.broker.bus.on('session.available', this.assignments);
@@ -151,6 +177,7 @@ export class CodexQuestions {
       closed: false,
       recovering: true,
       buffered: [],
+      revalidation: this.revalidations.get(session.id),
     };
     this.attached.set(session.id, entry);
     app.on('message', (f) => {
@@ -185,7 +212,8 @@ export class CodexQuestions {
         await app.call('thread/resume', { threadId: entry.native, excludeTurns: true });
         entry.subscribed = true;
         if (entry.closed || this.stopped) throw new Error('Codex question attach cancelled');
-        if (this.service.codexWaiting.delete(entry.session)) this.service.broker.announce(entry.session);
+        if (!entry.revalidation && this.service.codexWaiting.delete(entry.session))
+          this.service.broker.announce(entry.session);
         // Recover async questions after a broker reconnect. Read only this assigned thread;
         // large responses are bounded by the transport and fail visibly rather than truncate.
         const outstanding = this.service
@@ -196,7 +224,7 @@ export class CodexQuestions {
               q.kind === 'codex_async' &&
               ['pending', 'answered'].includes(q.state),
           );
-        if (outstanding.length) {
+        if (outstanding.length || entry.revalidation?.size) {
           const history = (await app.call('thread/read', { threadId: entry.native, includeTurns: true })) as {
             thread?: { turns?: Array<{ id: string; status: string; items: unknown[] }> };
           };
@@ -207,20 +235,44 @@ export class CodexQuestions {
                 method: 'item/completed',
                 params: { threadId: entry.native, turnId: turn.id, item },
               });
-            if (['interrupted', 'failed'].includes(turn.status))
+            if (
+              ['interrupted', 'failed'].includes(turn.status) ||
+              (entry.revalidation?.size && turn.status === 'completed')
+            )
               this.receive(entry, { method: 'turn/completed', params: { threadId: entry.native, turn } });
           }
         }
         if (entry.closed || this.stopped) throw new Error('Codex question recovery cancelled');
         for (const frame of entry.buffered.splice(0)) this.receive(entry, frame);
         entry.recovering = false;
+        this.revalidationStatus(entry);
         this.flush();
       } catch (e) {
         this.detach(entry);
+        if (!this.stopped && entry.revalidation?.size) {
+          this.waiting(entry.session, 'question-revalidation-unavailable');
+        }
         throw e;
       }
     })();
     return entry.starting;
+  }
+  private waiting(session: string, reason: 'native-request-unverified' | 'question-revalidation-unavailable'): void {
+    if (this.service.codexWaiting.get(session) === reason) return;
+    this.service.codexWaiting.set(session, reason);
+    this.service.broker.log(`Codex question relay waiting: ${session}: ${reason}; relay retained, no answer submitted`);
+    this.service.broker.announce(session);
+  }
+  private revalidationStatus(e: Attached): void {
+    if (!e.revalidation) return;
+    for (const id of e.revalidation.keys()) {
+      const q = this.service.get(id);
+      if (!q || !['pending', 'answered'].includes(q.state)) e.revalidation.delete(id);
+    }
+    if (!e.revalidation.size) this.revalidations.delete(e.session);
+    if ([...e.revalidation.keys()].some((id) => !e.pending.has(id)))
+      this.waiting(e.session, 'native-request-unverified');
+    else if (this.service.codexWaiting.delete(e.session)) this.service.broker.announce(e.session);
   }
   private clearIdle(e: Attached): void {
     if (e.idleTimer) clearTimeout(e.idleTimer);
@@ -358,6 +410,11 @@ export class CodexQuestions {
       }
     }
     if (f.method === 'serverRequest/resolved') {
+      for (const [id, check] of e.revalidation ?? [])
+        if (!e.pending.has(id) && check.requestId !== undefined && check.requestId === p.requestId) {
+          if (check.sent) this.service.applied(id);
+          else this.service.cancel(id, 'Native question resolved outside Wigwag');
+        }
       for (const [id, pending] of e.pending)
         if (pending.requestId === p.requestId && pending.relay.kind === 'codex') {
           e.pending.delete(id);
@@ -370,8 +427,15 @@ export class CodexQuestions {
       if (!q) return; // Connector prompts use this method too; never infer a native tool from it alone.
       const native = normalizeNative('codex', 'request_user_input', { questions: p.questions });
       if (JSON.stringify(native?.questions) !== JSON.stringify(q.questions)) return;
+      const expected = e.revalidation?.get(q.id);
+      if (expected?.requestId !== undefined && expected.requestId !== f.id) {
+        this.waiting(e.session, 'native-request-unverified');
+        return;
+      }
       e.activeTurn = q.turn_id;
-      e.pending.set(q.id, { relay: q, requestId: f.id, sent: false });
+      // Pending replay preserves the exact server request ID (0.162.1 outgoing_message.rs:446,582).
+      // https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server/src/outgoing_message.rs#L446
+      e.pending.set(q.id, { relay: q, requestId: f.id, sent: expected?.sent ?? false });
     }
     if (f.method === 'item/completed' && object(p.item)) {
       const item = p.item;
@@ -433,6 +497,7 @@ export class CodexQuestions {
           }
       }
     }
+    this.revalidationStatus(e);
     this.flush();
     this.assignments();
   }
@@ -446,6 +511,8 @@ export class CodexQuestions {
         const pair = a && this.service.participants(a);
         if (!q?.answers || !pair) continue;
         pending.sent = true;
+        const revalidation = e.revalidation?.get(id);
+        if (revalidation) revalidation.sent = true;
         try {
           if (q.kind === 'codex')
             e.app.send({ id: pending.requestId, result: codexAnswer(q.answers, pair.leader.name as string) });
@@ -472,6 +539,7 @@ export class CodexQuestions {
           }
         } catch (err) {
           pending.sent = false;
+          if (revalidation) revalidation.sent = false;
           this.log(err);
         }
       }
@@ -485,7 +553,9 @@ export class CodexQuestions {
     this.service.broker.bus.off('session.available', this.assignments);
     if (this.service.turnCodex === this.turnHook) this.service.turnCodex = null;
     if (this.service.reserveCodexPush === this.reservePush) this.service.reserveCodexPush = null;
+    if (this.service.revalidateCodexMcp === this.revalidateMcp) this.service.revalidateCodexMcp = null;
     this.pushing.clear();
+    this.revalidations.clear();
     this.service.codexWaiting.clear();
     for (const e of this.attached.values()) this.detach(e);
     this.stopPromise = Promise.all([...this.closing]).then(() => {});

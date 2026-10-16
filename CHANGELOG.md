@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Reattach a restarted Codex MCP to one verified disconnected slot after fresh
+  loaded-root metadata and current trust/generation checks, retaining its name,
+  mail and assignment. General Codex resume recovery remains unavailable.
+  Preserve native questions through that handover and revalidate pending request
+  replay before answering; unavailable or mismatched evidence submits nothing.
+  Protect historical unverified slots with doctor/recovery diagnostics; retained
+  work stays on the old slot pending a future explicit owner resolution operation.
+
 - Document the upgrade boundary: never open upgraded v3/v4 state with the 0.2
   CLI/broker, which lacks newer-schema checks. Crash-left migration snapshots
   block another migration until operator inspection/removal; completed-upgrade

@@ -171,6 +171,7 @@ export function adoptCanonical(
     state: SessionState;
     evidence: Record<string, unknown>;
     legacyUpgradeHello?: Hello;
+    codexReattach?: { canonicalGeneration: number; provisionalGeneration: number };
   },
 ): AdoptResult {
   return tx(db, (): AdoptResult => {
@@ -192,6 +193,11 @@ export function adoptCanonical(
     );
     if (
       !c ||
+      (x.codexReattach &&
+        (c.agent !== 'codex' ||
+          c.state === 'offline' ||
+          c.link !== 'disconnected' ||
+          c.conn_generation !== x.codexReattach.canonicalGeneration)) ||
       provenUntrustedBinding(db, c) ||
       (isLegacySession(db, c.id) && !legacyUpgrade) ||
       (c.state !== 'offline' && c.link !== 'disconnected') ||
@@ -202,6 +208,7 @@ export function adoptCanonical(
       return { ok: false, reason: 'canonical-changed' };
     if (
       !p ||
+      (x.codexReattach && p.conn_generation !== x.codexReattach.provisionalGeneration) ||
       isLegacySession(db, p.id) ||
       p.state === 'offline' ||
       p.link !== 'connected' ||
@@ -269,7 +276,15 @@ export function adoptCanonical(
         )
         .all(c.id, x.native) as Array<{ id: string }>
     ).map((r) => r.id);
-    const stale = sameLiveClaudeParent || legacyUpgrade ? [] : outstanding;
+    const stale =
+      sameLiveClaudeParent || legacyUpgrade
+        ? []
+        : outstanding.filter(
+            (id) =>
+              !x.codexReattach ||
+              c.agent !== 'codex' ||
+              (db.prepare('SELECT kind FROM question_relays WHERE id=?').get(id) as { kind: string }).kind !== 'codex',
+          );
     const cancel = db.prepare(
       "UPDATE question_relays SET state = 'cancelled', error = ?, updated_at = ? WHERE id = ? AND state IN ('pending', 'answered')",
     );

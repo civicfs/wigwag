@@ -51,6 +51,30 @@ const doctor = (home: string, path: string) =>
   });
 
 describe('read-only doctor state diagnostics', () => {
+  it('explains a historical Codex reattach refusal and retained work', async () => {
+    const home = tmpHome(),
+      path = fixturePath(home),
+      db = openDb(join(home, 'state.db'));
+    const s = createSession(db, { agent: 'codex', cwd: home, pid_chain: [], mcp_ppid: null });
+    recordLineage(db, {
+      agent: 'codex',
+      native_id: 'T',
+      workspace: s.workspace,
+      session_id: s.id,
+      cause: 'resume',
+      outcome: 'flagged',
+      reason: 'codex-reattach-unverified',
+      evidence: {},
+    });
+    db.close();
+    const before = snapshot(home),
+      result = await doctor(home, path);
+    expect(result.stdout).toContain('codex-reattach-unverified');
+    expect(result.stdout).toContain('held mail and active assignment remain');
+    expect(result.stdout).toContain('wigwag recovery --json');
+    expect(result.stdout).toContain('No existing command safely rehomes');
+    expect(snapshot(home)).toEqual(before);
+  });
   it('explains a protected historical binding conflict without modifying state', async () => {
     const home = tmpHome(),
       path = fixturePath(home),

@@ -43,7 +43,11 @@ const relay = (r: unknown): Relay | undefined => {
 
 export class QuestionService extends EventEmitter {
   /** Adapter preflight: assigned Codex threads must attach before delegation commits. */
-  readonly codexWaiting = new Map<string, 'thread-not-loaded' | 'app-server-unavailable'>();
+  readonly codexWaiting = new Map<
+    string,
+    'thread-not-loaded' | 'app-server-unavailable' | 'native-request-unverified' | 'question-revalidation-unavailable'
+  >();
+  revalidateCodexMcp: ((session: SessionRow) => void) | null = null;
   turnCodex: ((session: SessionRow, phase: 'started' | 'ended') => Promise<void>) | null = null;
   prepareCodex: ((session: SessionRow) => Promise<void>) | null = null;
   reserveCodexPush: ((session: SessionRow) => Promise<() => void>) | null = null;
