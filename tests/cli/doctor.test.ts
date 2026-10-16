@@ -51,6 +51,33 @@ const doctor = (home: string, path: string) =>
   });
 
 describe('read-only doctor state diagnostics', () => {
+  it('explains a protected historical binding conflict without modifying state', async () => {
+    const home = tmpHome(),
+      path = fixturePath(home),
+      db = openDb(join(home, 'state.db'));
+    const s = createSession(db, { agent: 'claude', cwd: home, pid_chain: [], mcp_ppid: null });
+    bindAgentSession(db, s.id, 'N');
+    recordLineage(db, {
+      agent: 'claude',
+      native_id: 'N',
+      workspace: s.workspace,
+      session_id: s.id,
+      cause: 'resume',
+      outcome: 'flagged',
+      reason: 'binding-origin-unknown',
+      evidence: {
+        remediation:
+          'Run a trusted hook in the original Claude session, or inspect wigwag recovery before retiring the offline duplicate.',
+      },
+    });
+    db.close();
+    const before = snapshot(home),
+      result = await doctor(home, path);
+    expect(result.stdout).toContain('binding-origin-unknown');
+    expect(result.stdout).toContain('original Claude session');
+    expect(result.stdout).toContain('wigwag recovery');
+    expect(snapshot(home)).toEqual(before);
+  });
   it.each(['wal', 'shm', 'both'])(
     'warns about SQLite bookkeeping with existing %s sidecars without changing database bytes',
     async (sidecars) => {

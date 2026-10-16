@@ -1,5 +1,6 @@
 import type { ProcessIdentity } from '../proc/identity.js';
 import { HANDSHAKE_VERSIONS, type Hello } from '../protocol/rpc.js';
+import { provenUntrustedBinding } from './binding-origin.js';
 import { isLegacySession, recordClientCompatibility } from './compatibility.js';
 import { type Db, nowIso, tx } from './db.js';
 import { type Agent, getSession, type NameSource, type SessionRow, type SessionState } from './sessions.js';
@@ -139,7 +140,7 @@ export const recoveryCandidates = (
          ORDER BY s.last_seen_at DESC`,
       )
       .all(q.agent, q.native, q.workspace, q.exceptId),
-  ).filter((s) => q.includeLegacy || !isLegacySession(db, s.id));
+  ).filter((s) => !provenUntrustedBinding(db, s) && (q.includeLegacy || !isLegacySession(db, s.id)));
 
 export type AdoptResult =
   | {
@@ -191,6 +192,7 @@ export function adoptCanonical(
     );
     if (
       !c ||
+      provenUntrustedBinding(db, c) ||
       (isLegacySession(db, c.id) && !legacyUpgrade) ||
       (c.state !== 'offline' && c.link !== 'disconnected') ||
       c.retired_at ||

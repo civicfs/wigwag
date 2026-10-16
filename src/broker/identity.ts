@@ -7,6 +7,7 @@ import { captureIdentity, sameProcess } from '../proc/identity.js';
 import { trustedCodexHost, validateHookOrigin } from '../protocol/codex-hook.js';
 import type { Hello } from '../protocol/rpc.js';
 import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
+import { bindingOrigin, provenUntrustedBinding, recordBindingOrigin } from '../store/binding-origin.js';
 import { isLegacySession, recordClientCompatibility } from '../store/compatibility.js';
 import { nowIso, tx } from '../store/db.js';
 import { scopeOf } from '../store/links.js';
@@ -150,6 +151,76 @@ export function installIdentity(broker: Broker): void {
         return;
       }
     }
+  };
+
+  /** A trusted native hook may free an ID positively stamped raw/legacy; it never inherits that holder's work. */
+  const detachUntrusted = (holder: SessionRow, caller: SessionRow): void => {
+    if (holder.workspace !== caller.workspace || !provenUntrustedBinding(db, holder)) return;
+    const mcp = broker.connectionFor(holder.id);
+    const origin = bindingOrigin(db, holder);
+    const replacement = tx(db, () => {
+      const current = getSession(db, holder.id);
+      if (!current || current.agent_session_id !== holder.agent_session_id || !provenUntrustedBinding(db, current))
+        return null;
+      db.prepare(`UPDATE sessions SET agent_session_id=NULL,state='offline',link='disconnected',
+        conn_generation=conn_generation+1,bind_origin='unverified' WHERE id=?`).run(holder.id);
+      let fresh: SessionRow | null = null;
+      if (mcp && !mcp.closed && !mcp.failed && mcp.generation === holder.conn_generation) {
+        fresh = createSession(db, {
+          agent: holder.agent,
+          cwd: holder.cwd,
+          workspace: holder.workspace,
+          pid_chain: holder.pid_chain,
+          mcp_ppid: holder.mcp_ppid,
+        });
+        claimProvisional(fresh);
+        attachConnection(db, fresh.id);
+        fresh = getSession(db, fresh.id) as SessionRow;
+        if (mcp.hello) recordClientCompatibility(db, fresh, mcp.hello, mcp.legacy);
+      }
+      recordLineage(db, {
+        agent: holder.agent,
+        native_id: holder.agent_session_id as string,
+        workspace: holder.workspace,
+        session_id: holder.id,
+        canonical_session_id: fresh?.id,
+        cause: 'continuation',
+        outcome: 'flagged',
+        reason: 'untrusted-binding-detached',
+        evidence: {
+          origin,
+          trusted_caller: caller.id,
+          remediation: 'Retained work stays on the old offline slot; inspect wigwag recovery before retiring it.',
+        },
+      });
+      return fresh;
+    });
+    if (replacement && mcp) {
+      mcp.sessionId = replacement.id;
+      mcp.generation = replacement.conn_generation;
+      mcp.event('session.identity', { session_id: replacement.id });
+      announce(replacement.id);
+    }
+    announce(holder.id);
+  };
+
+  const flagUnknownBinding = (holder: SessionRow, caller: SessionRow, hook: string): void => {
+    if (bindingOrigin(db, holder) !== null) return;
+    recordLineage(db, {
+      agent: holder.agent,
+      native_id: holder.agent_session_id as string,
+      workspace: caller.workspace,
+      session_id: caller.id,
+      canonical_session_id: holder.id,
+      cause: 'resume',
+      outcome: 'flagged',
+      reason: 'binding-origin-unknown',
+      evidence: {
+        hook,
+        remediation:
+          'Run a trusted hook in the original Claude session, or inspect wigwag recovery before retiring the offline duplicate.',
+      },
+    });
   };
 
   /**
@@ -556,6 +627,19 @@ export function installIdentity(broker: Broker): void {
     if (conn.closed || conn.failed || !conn.sessionId)
       throw new WigwagError('transport', 'connection closed during bind');
     let self = me(conn.sessionId);
+    if (self.agent === 'claude') {
+      if (self.agent_session_id && self.agent_session_id !== agent_session_id)
+        throw new WigwagError('conflict', 'Claude native identity changes require a trusted hook; raw rebind refused');
+      if (
+        listSessions(db).some(
+          (s) => s.id !== self.id && s.agent === 'claude' && !s.retired_at && s.agent_session_id === agent_session_id,
+        )
+      )
+        throw new WigwagError(
+          'conflict',
+          'Claude native identity is already held by a canonical slot; use a trusted hook to recover it',
+        );
+    }
     const codexThreadTrusted =
       self.agent === 'codex' &&
       trustedThreadId === agent_session_id &&
@@ -571,6 +655,16 @@ export function installIdentity(broker: Broker): void {
         `this ${self.agent} session id is already bound to another live session${visible ? ` (${holder.name})` : ''}; not bound`,
       );
     };
+    if (origin && trustedCodexHost(origin, broker.config.codex.trusted_host_versions) && !isLegacySession(db, self.id))
+      for (const holder of listSessions(db).filter(
+        (s) =>
+          s.id !== self.id &&
+          s.agent === 'codex' &&
+          s.agent_session_id === agent_session_id &&
+          s.state !== 'offline' &&
+          !s.retired_at,
+      ))
+        detachUntrusted(holder, self);
     const live = liveNativeHolders(db, self.agent, agent_session_id, self.id);
     if (live.length) {
       recordLineage(db, {
@@ -626,8 +720,14 @@ export function installIdentity(broker: Broker): void {
         origin?.version ?? null,
         conn.sessionId,
       );
+      recordBindingOrigin(
+        db,
+        me(conn.sessionId),
+        conn.legacy ? 'legacy-unverified' : verified ? 'hook-verified' : 'hook-unverified',
+      );
       await broker.checkCodexPush(me(conn.sessionId), true, false);
-    }
+    } else if (bindingOrigin(db, me(conn.sessionId)) !== 'hook-verified')
+      recordBindingOrigin(db, me(conn.sessionId), 'raw-bind');
     applyLaunchIntent(me(conn.sessionId));
     announce(conn.sessionId as string);
     broker.bus.emit('session.bound', me(conn.sessionId));
@@ -737,7 +837,7 @@ export function installIdentity(broker: Broker): void {
   broker.handle('hook.event', async ({ conn }, p) => {
     // The only await: resolved first, so the selection and binding below run in one tick.
     const hookWorkspace = await broker.workspaces.resolve(p.cwd);
-    const bound = listSessions(db).filter(
+    let bound = listSessions(db).filter(
       (x) =>
         x.agent === 'claude' &&
         x.state !== 'offline' &&
@@ -774,6 +874,11 @@ export function installIdentity(broker: Broker): void {
     // Without its MCP connection there is nothing to rewire: refuse until reconnect instead of overwriting A.
     const split = changing && !wrongWorkspace(source) ? splitConversation(source, p.agent_session_id, p.event) : null;
     if (changing && !split) return { bound: false, additional_context: null };
+    const own = split?.slot ?? source;
+    if (!conn.legacy && own && own.link === 'connected' && !isLegacySession(db, own.id) && !wrongWorkspace(own)) {
+      for (const holder of bound.filter((s) => s.id !== own.id)) detachUntrusted(holder, own);
+      bound = bound.filter((s) => getSession(db, s.id)?.agent_session_id === p.agent_session_id);
+    }
     let s: SessionRow | undefined = split?.slot ?? bound[0];
     const switchTarget =
       split?.slot ??
@@ -785,6 +890,8 @@ export function installIdentity(broker: Broker): void {
         ? source
         : undefined);
     if (switchTarget && bound.some((x) => x.id !== switchTarget.id)) {
+      for (const holder of bound.filter((x) => x.id !== switchTarget.id))
+        flagUnknownBinding(holder, switchTarget, p.event);
       recordLineage(db, {
         agent: 'claude',
         native_id: p.agent_session_id,
@@ -803,13 +910,14 @@ export function installIdentity(broker: Broker): void {
     }
     let capturedParent = false;
     if (s && s.mcp_ppid !== agentPid) {
+      if (own) flagUnknownBinding(s, own, p.event);
       broker.log(
         `hook.event ${p.event}: ${p.agent_session_id} is bound to session ${s.id} of agent pid ${s.mcp_ppid}, the hook's agent is pid ${agentPid}; not bound`,
       );
       return { bound: false, additional_context: null };
     }
     if (s && wrongWorkspace(s)) return { bound: false, additional_context: null };
-    if (!s || s.agent_session_id !== p.agent_session_id) {
+    if (!s || s.agent_session_id !== p.agent_session_id || provenUntrustedBinding(db, s)) {
       if (!split && candidates.length !== 1) {
         // Only the cold start (the MCP server not registered yet) owes the context later; ambiguity stays unbound.
         if (candidates.length === 0 && p.event === 'SessionStart') startContextOwed.add(p.agent_session_id);
@@ -843,6 +951,13 @@ export function installIdentity(broker: Broker): void {
       if (split) db.prepare('UPDATE session_lineage SET canonical_session_id=? WHERE id=?').run(s.id, split.lineageId);
       broker.bus.emit('session.bound', getSession(db, s.id));
     }
+    recordBindingOrigin(db, getSession(db, s.id) as SessionRow, 'hook-verified');
+    db.prepare(`UPDATE session_lineage SET resolved_at=? WHERE reason='binding-origin-unknown'
+      AND outcome='flagged' AND resolved_at IS NULL AND canonical_session_id=? AND native_id=?`).run(
+      nowIso(),
+      s.id,
+      p.agent_session_id,
+    );
     // W8: the Claude parent's process identity, captured when its pid is new or retried while its start identity is missing.
     if (!conn.legacy && !isLegacySession(db, s.id) && !capturedParent && (s.agent_pid !== agentPid || !s.agent_start)) {
       const ident = captureIdentity(agentPid, broker.processProbe);

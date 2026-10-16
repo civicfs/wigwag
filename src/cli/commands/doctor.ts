@@ -131,6 +131,15 @@ function inspectState(
       const flags = count("SELECT count(*) AS n FROM session_lineage WHERE outcome='flagged' AND resolved_at IS NULL");
       if (flags) warn('unresolved recovery', `${flags} flag(s); inspect wigwag recovery`);
       else add(true, 'unresolved recovery', '0 flags');
+      if (
+        count(
+          "SELECT count(*) AS n FROM session_lineage WHERE outcome='flagged' AND reason='binding-origin-unknown' AND resolved_at IS NULL",
+        )
+      )
+        warn(
+          'binding-origin-unknown',
+          'Historical binding protected: run a trusted hook in the original Claude session, or inspect wigwag recovery before retiring the offline duplicate.',
+        );
     }
     const groups = db
       .prepare(

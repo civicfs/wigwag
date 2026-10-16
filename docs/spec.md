@@ -226,8 +226,16 @@ vitest, linted with biome.
   Confirmed rollback removes only this attempt's redundant backup; unknown outcomes preserve it. Completed
   migrations skip their old snapshots at startup; a retained successful backup alone does not block startup.
 - **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
-  `session.bind` tool path for Claude. A raw Claude internal bind may bind only its own slot without recovery or clearing another slot's native ID;
-  any other non-offline holder, including a disconnected live slot, refuses that bind.
+  `session.bind` tool path for Claude. A raw Claude internal bind cannot change a non-null native ID or target any
+  other unretired canonical slot, including an offline one; it must use a trusted hook instead.
+  Positive untrusted-binding proof is the latest `session_lineage` row with reason `binding-origin` for the exact
+  slot/native pair, whose `evidence_json.origin` is `raw-bind` or `legacy-unverified`. The V4 default
+  `sessions.bind_origin='unverified'` alone is never proof. Such bindings are never adopted by recovery. A trusted
+  Claude hook or verified Codex hook may detach a positively stamped live squatter in the same workspace: its old
+  offline slot keeps its name, mail, assignments and relays, clears its untrusted native ID, and its connection gets
+  a fresh provisional unbound slot. No retained work moves to the trusted caller. Historical unstamped holders
+  remain protected; a conflicting hook refuses and records `binding-origin-unknown` with guidance in doctor/recovery.
+  Only that historical holder's own matching trusted hook upgrades it to `hook-verified`.
   Exactly one eligible offline or MCP-disconnected, unretired slot of the same
   agent, native ID and workspace is canonical. An empty provisional/unnamed slot is excluded unless it retains an
   active assignment, pending/held/failed/stuck mail, or active subscriptions/mutes. A refused-resume shell needs that

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Broker } from '../../src/broker/server.js';
 import type { Capture } from '../../src/questions/schema.js';
 import type { Assignment } from '../../src/questions/service.js';
+import { bindAgentSession } from '../../src/store/sessions.js';
 import { addThrottle } from '../../src/store/subs.js';
 import { mcpClient, ownerClient, startTestBroker, until } from '../helpers.js';
 
@@ -305,7 +306,8 @@ describe('native question orchestration', () => {
       kind: 'claude',
       questions: qs,
     });
-    await w.client.call('session.bind', { agent_session_id: 'replacement-native-id' });
+    // Fault injection: raw Claude rebinding is now refused; still exercise defensive stale-row checks.
+    bindAgentSession(broker.db, w.welcome.session_id, 'replacement-native-id');
     await expect(
       lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['Blue'] } }),
     ).rejects.toMatchObject({ code: 'conflict' });

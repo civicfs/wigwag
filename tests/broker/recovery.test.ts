@@ -144,7 +144,9 @@ describe('claude resume recovery (W7)', () => {
     old.client.close();
     await settle();
     const fresh = await mcp(home, 600);
-    await fresh.client.call('session.bind', { agent_session_id: 'sid-1' });
+    await expect(fresh.client.call('session.bind', { agent_session_id: 'sid-1' })).rejects.toMatchObject({
+      code: 'conflict',
+    });
     expect(await fresh.client.call('session.whoami')).toMatchObject({ id: fresh.welcome.session_id });
     expect(getSession(broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
     expect(getSession(broker.db, old.welcome.session_id)?.name).toBe('worker-one');
