@@ -117,7 +117,7 @@ export const recoveryCandidates = (
                  AND l.cause = 'resume' AND l.outcome = 'flagged'))
              OR EXISTS (SELECT 1 FROM assignments a WHERE a.ended_at IS NULL
                 AND (a.worker_session_id = s.id OR a.orchestrator_session_id = s.id))
-             OR EXISTS (SELECT 1 FROM deliveries d WHERE d.recipient = s.name AND d.state IN ('pending','held','failed','stuck'))
+             OR EXISTS (SELECT 1 FROM deliveries d WHERE (d.forward_to = s.id OR (d.forward_to IS NULL AND d.recipient = s.name)) AND d.state IN ('pending','held','failed','stuck'))
              OR EXISTS (SELECT 1 FROM subscriptions sub WHERE sub.session_name = s.name AND sub.removed_at IS NULL)
              OR EXISTS (SELECT 1 FROM mutes m WHERE m.session_name = s.name AND m.removed_at IS NULL)
            )
@@ -195,6 +195,8 @@ export function adoptCanonical(
     if (liveNativeHolders(db, p.agent, x.native, p.id).length) return { ok: false, reason: 'live-holder' };
     const at = nowIso();
     db.prepare('UPDATE name_claims SET released_at = ? WHERE released_at IS NULL AND session_id = ?').run(at, p.id);
+    // Durable delivery ownership must move in the adoption transaction, before the provisional name is retired.
+    db.prepare('UPDATE deliveries SET forward_to=? WHERE forward_to=?').run(c.id, p.id);
     db.prepare(
       `UPDATE sessions SET name = NULL, agent_session_id = NULL, state = 'offline', retired_at = ?, retired_into = ?,
          last_seen_at = ? WHERE id = ?`,
@@ -305,8 +307,8 @@ export function recoverySlot(db: Db, id: string): RecoverySlot | null {
   const mail = db
     .prepare(`SELECT count(*) AS undelivered,
     coalesce(sum(CASE WHEN state IN ('pending','held') THEN 1 ELSE 0 END),0) AS held_pending
-    FROM deliveries WHERE recipient=? AND state IN ('pending','held','failed','stuck')`)
-    .get(s.name) as { undelivered: number; held_pending: number };
+    FROM deliveries WHERE (forward_to=? OR (forward_to IS NULL AND recipient=?)) AND state IN ('pending','held','failed','stuck')`)
+    .get(s.id, s.name) as { undelivered: number; held_pending: number };
   return {
     session_id: s.id,
     name: s.name,

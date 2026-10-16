@@ -131,7 +131,13 @@ export const assignedNames = (db: Db): string[] =>
  */
 export type ClaimResult = { ok: true } | { ok: false; holder: SessionRow; reason: 'live' | 'scope' };
 
-export function claimName(db: Db, sessionId: string, name: string, source?: NameSource): ClaimResult {
+export function claimName(
+  db: Db,
+  sessionId: string,
+  name: string,
+  source?: NameSource,
+  beforeCommit?: (from: string | null) => void,
+): ClaimResult {
   return tx(db, (): ClaimResult => {
     const live = liveHolder(db, name);
     if (live && live.id !== sessionId) return { ok: false, holder: live, reason: 'live' };
@@ -155,6 +161,7 @@ export function claimName(db: Db, sessionId: string, name: string, source?: Name
       sessionId,
       at,
     );
+    beforeCommit?.(claimant?.name ?? null);
     return { ok: true as const };
   });
 }

@@ -1,10 +1,16 @@
 import { type Db, nowIso, tx } from '../store/db.js';
 import { scopeOf } from '../store/links.js';
-import { getSession, listSessions, type NameSource } from '../store/sessions.js';
+import { claimName, getSession, listSessions, type NameSource } from '../store/sessions.js';
 import { publicSession } from './registry.js';
 import type { Broker } from './server.js';
 
 export type RenameCause = 'register' | 'native' | 'launch' | 'recovery';
+
+/** Record exact delivery ownership before the name claim commits; event/transport work stays after commit. */
+export const claimSessionName = (broker: Broker, sessionId: string, name: string, source?: NameSource) =>
+  claimName(broker.db, sessionId, name, source, (from) => {
+    if (from && from !== name) broker.engine?.prepareForward(from, name, sessionId);
+  });
 
 const hasHistory = (db: Db, name: string): boolean =>
   !!db

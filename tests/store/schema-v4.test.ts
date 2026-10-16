@@ -40,6 +40,9 @@ describe('schema v4 Codex push holds', () => {
           db.prepare('UPDATE sessions SET codex_push_reason=?').run(reason);
         expect(() => db.exec("UPDATE sessions SET codex_push_reason='invented'")).toThrow(/CHECK/);
         expect(db.prepare('SELECT forward_to FROM deliveries').get()).toEqual({ forward_to: null });
+        db.exec("UPDATE deliveries SET forward_to='codex-old'");
+        expect(() => db.exec("UPDATE deliveries SET forward_to='missing-slot'")).toThrow(/FOREIGN KEY/);
+        expect(db.prepare('SELECT forward_to FROM deliveries').get()).toEqual({ forward_to: 'codex-old' });
         expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
         for (const v of version === 2 ? [3, 4] : [4]) {
           const bak = `${file}.pre-v${v}.bak`;

@@ -37,6 +37,8 @@ export interface DeliveryRow {
   transport: string | null;
   next_attempt_at: string | null;
   updated_at: string;
+  /** Stable destination owner while an in-flight rename cannot yet change the physical recipient key. */
+  forward_to: string | null;
 }
 export type DeliveryWithMessage = DeliveryRow & { message: MessageRow };
 
@@ -175,13 +177,47 @@ export function transitionIf(
 
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(', ');
 
+/** Bind both placeholders to the requested name. A reclaimed source name never gains its former owner's rows. */
+export const deliveryForNameSql = `(d.forward_to IS NULL AND d.recipient = ? OR
+  d.forward_to = (SELECT id FROM sessions WHERE name = ? ORDER BY last_seen_at DESC LIMIT 1))`;
+
+export function deliveryRecipient(db: Db, d: DeliveryRow): string | null {
+  if (!d.forward_to) return d.recipient;
+  return (
+    (db.prepare('SELECT name FROM sessions WHERE id=?').get(d.forward_to) as { name: string | null } | undefined)
+      ?.name ?? null
+  );
+}
+
+export const deliveryForRecipient = (db: Db, messageId: string, name: string): DeliveryRow | undefined =>
+  db
+    .prepare(`SELECT d.* FROM deliveries d WHERE d.message_id=? AND ${deliveryForNameSql} ORDER BY d.recipient LIMIT 1`)
+    .get(messageId, name, name) as DeliveryRow | undefined;
+
+/** Complete exactly one durable handoff, including a push that already became read. Collisions keep ownership. */
+export function settleForward(db: Db, d: DeliveryRow, to: string): DeliveryRow | null {
+  if (!d.forward_to) return null;
+  return tx(db, () => {
+    const result = db
+      .prepare(
+        'UPDATE OR IGNORE deliveries SET recipient=?,forward_to=NULL WHERE message_id=? AND recipient=? AND forward_to=?',
+      )
+      .run(to, d.message_id, d.recipient, d.forward_to);
+    if (!result.changes) return null;
+    db.prepare(
+      'INSERT INTO delivery_events(message_id,recipient,from_state,to_state,detail,at) VALUES(?,?,?,?,?,?)',
+    ).run(d.message_id, to, d.state, d.state, `forwarded from ${d.recipient}`, nowIso());
+    return getDelivery(db, d.message_id, to) as DeliveryRow;
+  });
+}
+
 export function deliveriesFor(db: Db, recipient: string, states: DeliveryState[]): DeliveryWithMessage[] {
   const rows = db
     .prepare(
       `SELECT d.*, m.id AS m_id FROM deliveries d JOIN messages m ON m.id = d.message_id
-       WHERE d.recipient = ? AND d.state IN (${placeholders(states.length)}) ORDER BY m.id`,
+       WHERE ${deliveryForNameSql} AND d.state IN (${placeholders(states.length)}) ORDER BY m.id`,
     )
-    .all(recipient, ...states) as unknown as Array<DeliveryRow & { m_id: string }>;
+    .all(recipient, recipient, ...states) as unknown as Array<DeliveryRow & { m_id: string }>;
   return rows.map(({ m_id, ...d }) => ({ ...d, message: getMessage(db, m_id) as MessageRow }));
 }
 
@@ -251,7 +287,9 @@ export const findResponse = (db: Db, requestId: string) =>
 
 export const unreadCount = (db: Db, name: string): number =>
   (
-    db.prepare(`SELECT count(*) AS n FROM deliveries WHERE recipient = ? AND state <> 'read'`).get(name) as {
+    db
+      .prepare(`SELECT count(*) AS n FROM deliveries d WHERE ${deliveryForNameSql} AND state <> 'read'`)
+      .get(name, name) as {
       n: number;
     }
   ).n;

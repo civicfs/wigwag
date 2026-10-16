@@ -38,6 +38,8 @@ Codex bind diagnostics also retain the MCP host client name/version and whether
 the bind supplied verified hook-origin metadata. These are local metadata, not
 provider credentials or cryptographic attestations. Legacy/pre-guard bindings
 keep messaging while queue pushes wait for a verified reload.
+In-flight rename forwarding stores a destination session ID with the exact
+delivery rows, so reusing the source name does not expose that deferred mail.
 Tools process the snippets, data, and file paths supplied to them; a blob upload reads the specified file.
 
 Do not send passwords, API keys, authentication tokens, protected health information, or payment-card data through

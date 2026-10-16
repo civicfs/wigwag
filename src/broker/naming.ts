@@ -2,7 +2,6 @@ import { randomInt } from 'node:crypto';
 import { NAME_RE, RESERVED_NAMES } from '../ids.js';
 import {
   type Agent,
-  claimName,
   getSession,
   holderOf,
   type NameSource,
@@ -10,7 +9,7 @@ import {
   setNameSource,
   setNativeName,
 } from '../store/sessions.js';
-import { afterRename } from './rename.js';
+import { afterRename, claimSessionName } from './rename.js';
 import type { Broker } from './server.js';
 
 /** Leaves room for a collision suffix ("-9" or "-abcd") inside NAME_RE's 48 characters. */
@@ -92,7 +91,7 @@ export function installNaming(broker: Broker): NameService {
     for (const candidate of nameCandidates(base)) {
       const holder = holderOf(db, candidate);
       if (holder && holder.id !== s.id) continue;
-      if (!claimName(db, s.id, candidate, 'native').ok) continue;
+      if (!claimSessionName(broker, s.id, candidate, 'native').ok) continue;
       afterRename(broker, s.id, s.name, s.name_source, 'native');
       broker.log(`native name (${origin}) for ${s.id}: ${s.name ?? '(none)'} -> ${candidate}`);
       broker.announce(s.id);

@@ -161,6 +161,11 @@ counts. Retiring an offline slot with an active assignment or undelivered mail
 requires `--force`; resolved flags disappear from the report while historical
 records remain. A resolved empty refused shell remains excluded from candidates.
 
+Mail already in flight during a rename keeps its owning session ID in the
+database. Reclaiming the old name cannot read that mail; it follows the owner's
+current name when the push settles or the broker next starts, including after
+resume adoption. The original message address remains in history.
+
 A plugin reload, MCP crash or broker restart keeps a session's name while its
 parent remains open. `who` shows "parent open, MCP disconnected"; Claude messages
 wait for the next prompt or tool call. Codex pushes also wait for the MCP link;

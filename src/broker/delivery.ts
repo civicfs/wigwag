@@ -8,14 +8,16 @@ import {
   deliveriesByState,
   deliveriesFor,
   deliveriesOfMessage,
+  deliveryRecipient,
   getMessage,
   insertMessage,
   moveDeliveries,
   type Priority,
+  settleForward,
   type TransitionPatch,
   transitionIf,
 } from '../store/messages.js';
-import { holderOf, type SessionRow } from '../store/sessions.js';
+import { getSession, holderOf, type SessionRow } from '../store/sessions.js';
 import { activeThrottles, addThrottle, isMuted, isThrottled, releaseThrottle } from '../store/subs.js';
 import type { TransportRegistry } from '../transports/types.js';
 import { codexPushHold, codexPushLabel } from './codex-push.js';
@@ -55,11 +57,6 @@ export class DeliveryEngine {
   private readonly now: () => number;
   /** Deliveries whose transport call is running. Keyed `message_id\0recipient`. */
   private readonly inflight = new Set<string>();
-  /** Only the owning session's exact skipped rows may follow a settled push (W2a). */
-  private readonly deferredForwards = new Map<
-    string,
-    { sessionId: string; from: string; to: string; messageIds: Set<string> }
-  >();
   /** Running transport pushes; a graceful stop waits for them (final review I-10). */
   private readonly running = new Set<Promise<void>>();
   private readonly recipientQueues = new Map<string, Promise<void>>();
@@ -123,7 +120,10 @@ export class DeliveryEngine {
   /** Conditional move (R46-N1): null, with no feed event, when the delivery is no longer in `onlyFrom`. */
   private moveIf(k: Key, onlyFrom: DeliveryState[] | null, to: DeliveryState, patch: TransitionPatch = {}) {
     const row = transitionIf(this.d.db, k.message_id, k.recipient, onlyFrom, to, patch);
-    if (row) this.d.emitFeed('delivery', { ...row, recipient_unread: visibleUnreadCount(this.d.db, k.recipient) });
+    if (row) {
+      const recipient = deliveryRecipient(this.d.db, row) ?? row.forward_to ?? row.recipient;
+      this.d.emitFeed('delivery', { ...row, recipient, recipient_unread: visibleUnreadCount(this.d.db, recipient) });
+    }
     return row;
   }
 
@@ -159,11 +159,14 @@ export class DeliveryEngine {
    */
   private allowed(k: Key): boolean {
     const msg = getMessage(this.d.db, k.message_id);
-    if (msg && !nativeRecipientMatches(this.d.db, k.recipient, msg)) {
+    const delivery = deliveriesOfMessage(this.d.db, k.message_id).find((d) => d.recipient === k.recipient);
+    const recipient = delivery ? deliveryRecipient(this.d.db, delivery) : k.recipient;
+    if (!recipient) return false;
+    if (msg && !nativeRecipientMatches(this.d.db, recipient, msg)) {
       this.move(k, 'stuck', { last_error: 'Native assignment recipient binding changed', next_attempt_at: null });
       return false;
     }
-    const reason = msg ? scopeViolation(this.d.db, msg.from_workspace, k.recipient) : null;
+    const reason = msg ? scopeViolation(this.d.db, msg.from_workspace, recipient) : null;
     if (!msg || reason === null) return true;
     this.move(k, 'stuck', { last_error: reason, next_attempt_at: null });
     if (SYSTEM_SENDERS.has(msg.from_name)) return false;
@@ -192,63 +195,91 @@ export class DeliveryEngine {
    * (spec §17). Pending and failed deliveries are dispatched again under the new name (their timers and queued
    * dispatches were keyed by the old one); held ones are picked up by the `session.available` sweep that follows.
    */
-  /** A new holder of a source name invalidates the previous holder's deferred forwarding. */
-  nameClaimed(sessionId: string, name: string): void {
-    for (const [key, deferred] of this.deferredForwards) {
-      if (deferred.from === name && deferred.sessionId !== sessionId) this.deferredForwards.delete(key);
+  /** Name reuse cannot erase stable ownership. Complete any already-settled handoffs before publishing it. */
+  nameClaimed(_sessionId: string, _name: string): void {
+    this.settleForwards();
+  }
+
+  /** Recovery keeps exact row ownership even if it interrupted a previous rename. */
+  transferForwards(provisionalId: string, canonicalId: string, _to: string): void {
+    this.d.db.prepare('UPDATE deliveries SET forward_to=? WHERE forward_to=?').run(canonicalId, provisionalId);
+  }
+
+  private forwarded(rows: DeliveryRow[]): void {
+    for (const row of rows) {
+      this.d.emitFeed('delivery', { ...row, recipient_unread: visibleUnreadCount(this.d.db, row.recipient) });
+      if (row.state === 'pending' || row.state === 'failed')
+        this.dispatch(row.message_id, row.recipient).catch((e) =>
+          this.d.log(`dispatch after forward failed: ${(e as Error).message}`),
+        );
     }
   }
 
-  /** Recovery changes the owning slot; exact skipped rows follow its canonical inbox. */
-  transferForwards(provisionalId: string, canonicalId: string, to: string): void {
-    for (const [key, deferred] of [...this.deferredForwards]) {
-      if (deferred.sessionId !== provisionalId) continue;
-      this.deferredForwards.delete(key);
-      const holder = holderOf(this.d.db, deferred.from);
-      if (holder && holder.id !== provisionalId && holder.id !== canonicalId) continue;
-      const nextKey = `${canonicalId}\u0000${deferred.from}`;
-      const existing = this.deferredForwards.get(nextKey);
-      this.deferredForwards.set(nextKey, {
-        ...deferred,
-        sessionId: canonicalId,
-        to,
-        messageIds: new Set([...deferred.messageIds, ...(existing?.messageIds ?? [])]),
-      });
+  /** In-flight keys remain physical until settled; their durable owner determines the current destination. */
+  private settleForwards(sessionId?: string): number {
+    const rows = this.d.db
+      .prepare(`SELECT * FROM deliveries WHERE forward_to IS NOT NULL${sessionId ? ' AND forward_to=?' : ''}`)
+      .all(...(sessionId ? [sessionId] : [])) as unknown as DeliveryRow[];
+    const moved: DeliveryRow[] = [];
+    for (const row of rows) {
+      if (this.busy(row)) continue;
+      const owner = row.forward_to ? getSession(this.d.db, row.forward_to) : undefined;
+      const message = getMessage(this.d.db, row.message_id);
+      if (!owner?.name || !message || scopeViolation(this.d.db, message.from_workspace, owner.name) !== null) continue;
+      const next = settleForward(this.d.db, row, owner.name);
+      if (next) moved.push(next);
+    }
+    this.forwarded(moved);
+    return moved.length;
+  }
+
+  /** Pure data writes, safe inside the claim/adoption transaction. No events, dispatch or transport before commit. */
+  prepareForward(from: string, to: string, sessionId: string, onlyMessageIds?: Set<string>): void {
+    const holder = holderOf(this.d.db, from);
+    if (from === to || (holder && holder.id !== sessionId)) return;
+    const rows = deliveriesFor(this.d.db, from, ['pending', 'held', 'failed', 'stuck']);
+    // Inspect only active chunks, not the name's potentially large delivered history.
+    for (const key of this.inflight) {
+      const separator = key.indexOf('\u0000');
+      if (key.slice(separator + 1) !== from) continue;
+      const id = key.slice(0, separator);
+      const chunk = deliveriesOfMessage(this.d.db, id).find(
+        (d) => d.recipient === from && (d.state === 'pushed' || d.state === 'read'),
+      );
+      const message = chunk ? getMessage(this.d.db, id) : undefined;
+      if (chunk && message) rows.push({ ...chunk, message });
+    }
+    // Include already-pushed/read chunks whose transport is still running. Neither inbox history nor a new
+    // source-name claimant may gain them while the physical key is needed by the old push callback.
+    for (const row of rows) {
+      if (onlyMessageIds && !onlyMessageIds.has(row.message_id)) continue;
+      if (!['pending', 'held', 'failed', 'stuck'].includes(row.state) && !this.busy(row)) continue;
+      // Ownership survives even when scope currently prevents completing the move. Never donate a skipped row
+      // to a later source-name holder; settleForwards/allowed enforce the destination's current scope.
+      this.d.db
+        .prepare(`UPDATE deliveries SET forward_to=? WHERE message_id=? AND recipient=?
+        AND (forward_to IS NULL OR forward_to=?)`)
+        .run(sessionId, row.message_id, row.recipient, sessionId);
     }
   }
 
   forward(from: string, to: string, sessionId: string, onlyMessageIds?: Set<string>): number {
-    const key = `${sessionId}\u0000${from}`;
     const holder = holderOf(this.d.db, from);
-    if (from === to || (holder && holder.id !== sessionId)) {
-      this.deferredForwards.delete(key);
-      return 0;
-    }
-    const skipped = new Set<string>();
-    const moved = moveDeliveries(this.d.db, from, to, (x) => {
-      if (onlyMessageIds && !onlyMessageIds.has(x.message_id)) return false;
-      if (this.busy({ message_id: x.message_id, recipient: from })) {
-        skipped.add(x.message_id);
-        return false;
-      }
-      return scopeViolation(this.d.db, x.message.from_workspace, to) === null;
-    });
-    // A later rename carries only this session's deferred rows to its newest name.
-    for (const deferred of this.deferredForwards.values()) {
-      if (deferred.sessionId === sessionId && deferred.to === from) deferred.to = to;
-    }
-    if (skipped.size) this.deferredForwards.set(key, { sessionId, from, to, messageIds: skipped });
-    else this.deferredForwards.delete(key);
-    for (const row of moved) {
-      this.d.emitFeed('delivery', { ...row, recipient_unread: visibleUnreadCount(this.d.db, to) });
-      if (row.state === 'pending' || row.state === 'failed') {
-        this.dispatch(row.message_id, to).catch((e) =>
-          this.d.log(`dispatch after forward failed: ${(e as Error).message}`),
-        );
-      }
-    }
+    if (from === to || (holder && holder.id !== sessionId)) return 0;
+    this.prepareForward(from, to, sessionId, onlyMessageIds);
+    const settled = this.settleForwards(sessionId);
+    const moved = moveDeliveries(
+      this.d.db,
+      from,
+      to,
+      (row) =>
+        (!onlyMessageIds || onlyMessageIds.has(row.message_id)) &&
+        !this.busy(row) &&
+        scopeViolation(this.d.db, row.message.from_workspace, to) === null,
+    );
+    this.forwarded(moved);
     if (moved.length) this.d.log(`forwarded ${moved.length} undelivered message(s) from ${from} to ${to}`);
-    return moved.length;
+    return moved.length + settled;
   }
 
   /** Recipients are dispatched in parallel: one slow transport (a hung `codex queue`) does not delay the others. */
@@ -273,6 +304,10 @@ export class DeliveryEngine {
     if (this.busy(k)) return;
     const cur = deliveriesOfMessage(this.d.db, messageId).find((x) => x.recipient === recipient);
     if (!cur || (cur.state !== 'pending' && cur.state !== 'failed' && cur.state !== 'held')) return;
+    if (cur.forward_to) {
+      this.settleForwards();
+      return; // never dispatch a durable handoff under its reclaimed physical source name
+    }
     if (!this.allowed(k)) return;
     if (recipient === OWNER) {
       // The owner is not a session: there is nothing to wake and no live/offline state. The message is committed and
@@ -415,12 +450,7 @@ export class DeliveryEngine {
     } finally {
       for (const k of keys) this.inflight.delete(DeliveryEngine.id(k));
       if (!this.drained) {
-        for (const recipient of new Set(keys.map((k) => k.recipient))) {
-          for (const deferred of [...this.deferredForwards.values()]) {
-            if (deferred.from === recipient)
-              this.forward(deferred.from, deferred.to, deferred.sessionId, deferred.messageIds);
-          }
-        }
+        this.settleForwards();
       }
     }
   }
@@ -626,6 +656,7 @@ export class DeliveryEngine {
 
   /** Broker start: every session is offline, so pending become held(offline); failed are rescheduled. */
   async resumeAll(): Promise<void> {
+    this.settleForwards();
     for (const t of activeThrottles(this.d.db)) this.scheduleThrottle(t.from_name, t.to_name);
     for (const x of deliveriesByState(this.d.db, ['pending'])) await this.dispatch(x.message_id, x.recipient);
     for (const x of deliveriesByState(this.d.db, ['failed'])) {

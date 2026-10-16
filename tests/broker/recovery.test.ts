@@ -128,6 +128,7 @@ describe('claude resume recovery (W7)', () => {
       id: old.welcome.session_id,
       name: 'temporary-two',
     });
+    expect(deliveriesOfMessage(broker.db, message.id)[0]?.forward_to).toBe(old.welcome.session_id);
     release();
     await until(() => deliveriesOfMessage(broker.db, message.id)[0]?.state === 'held');
     expect(deliveriesOfMessage(broker.db, message.id)).toMatchObject([{ recipient: 'temporary-two' }]);

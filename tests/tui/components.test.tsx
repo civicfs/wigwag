@@ -192,6 +192,7 @@ describe('tui components', () => {
             {
               message_id: 'msg-9',
               recipient: 'codex-merger',
+              forward_to: null,
               state: 'stuck',
               hold_reason: null,
               attempts: 8,

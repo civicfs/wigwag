@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Preserve in-flight rename ownership durably, including already-pushed chunks.
+  Reclaiming the old name cannot expose those deliveries; settlement or broker
+  restart forwards them to the owning slot's current inbox. Adoption transfers
+  durable ownership in the same transaction; counts and reads honor that owner.
+
 - Hide internal Codex hook tools from the model and require host-origin metadata
   matching the bound thread. Only verified host versions enable queue pushes;
   unsupported versions keep messaging with a visible hold and owner-configurable

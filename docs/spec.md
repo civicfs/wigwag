@@ -143,12 +143,16 @@ vitest, linted with biome.
   connection closing already marks the thread's end (a hook would add nothing the broker does not see).
 - **Messages follow a rename (W2a, 0.3.0).** Whenever a session's name changes (`register`, an applied launch intent, a
   handed-over launcher name, native-name adoption, or resume recovery), its `pending`, `held`, `stuck` and `failed`
-  deliveries addressed to the old name move to the new name in one transaction, because inbox and unread look up only
-  the current name. Messages stay append-only (`to_target` keeps the old name); each moved delivery gets a delivery
+  deliveries addressed to the old name move to the new name in one transaction. Messages stay append-only
+  (`to_target` keeps the old name); each moved delivery gets a delivery
   event `forwarded from <old>`. A delivery is not moved when the new name could not receive it under §17, or when the
   message already has a delivery to the new name (an `all` broadcast that reached both). A delivery whose push is in
-  flight moves when that push settles, unless another session has since claimed the old name; deferred forwarding
-  then stops and the old name's backlog remains there. Only the renamed session's own active subscriptions and mutes
+  flight records its destination session ID durably in `deliveries.forward_to`, including a chunk already pushed
+  while its transport is still running. Inbox, reads, acknowledgements, attachment access, unread and recovery
+  counts resolve that stable owner; a new holder of the source name cannot read or take those exact rows. The
+  physical key moves to the owner's current name when the push settles or at next broker start. Recovery transfers
+  that ownership in its adoption transaction. Primary-key collisions retain the owner until they can settle.
+  Only the renamed session's own active subscriptions and mutes
   move with its name. Other sessions' subscriptions or mutes targeting the old name stay at that name, as do existing
   throttle pairs involving it; these rules do not follow the renamed session in 0.3.0. The rename is recorded in
   `session_renames`, live sessions in scope get a low-priority `session renamed: <old> → <new>` notice (not sent when
@@ -233,7 +237,7 @@ vitest, linted with biome.
   point to README. Legacy/pre-guard bindings migrate unverified and require plugin reload/session restart
   for push. who/whoami/doctor expose bind_origin and host_client_name/version. This is a pinned host contract,
   not cryptographic origin proof; real hook metadata remains unverified until throwaway-session acceptance.
-  A future use of concrete hook metadata for recovery is explicitly deferred. V4 also reserves nullable
+  A future use of concrete hook metadata for recovery is explicitly deferred. V4 includes nullable
   deliveries.forward_to (destination session ID) for durable in-flight rename ownership.
   `whoami.capabilities` reports recovery unavailable with that reason. `wigwag recovery` reports duplicate slot
   names, name sources, times, state/link, active assignment IDs/roles, held/pending counts and total undelivered counts.

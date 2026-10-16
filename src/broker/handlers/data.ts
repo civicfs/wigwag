@@ -6,7 +6,7 @@ import { isTextual } from '../../mime.js';
 import { addBlobScope, blobInScope, getBlobMeta, putBlob, readBlob } from '../../store/blobs.js';
 import { kvCas, kvGet, kvHistory, kvScan } from '../../store/kv.js';
 import { inScope, type Scope } from '../../store/links.js';
-import { getMessage } from '../../store/messages.js';
+import { deliveryForNameSql, getMessage } from '../../store/messages.js';
 import { getSession, holderOf, type SessionRow } from '../../store/sessions.js';
 import { appendRecord, createStream, getStream, listStreams, scanRecords } from '../../store/streams.js';
 import { addSubscription, subscribersFor } from '../../store/subs.js';
@@ -54,9 +54,9 @@ export function installData(broker: Broker): void {
       db
         .prepare(
           `SELECT DISTINCT m.id FROM deliveries d JOIN messages m ON m.id = d.message_id, json_each(m.attachments) j
-           WHERE d.recipient = ? AND d.state <> 'stuck' AND j.value = ?`,
+           WHERE ${deliveryForNameSql} AND d.state <> 'stuck' AND j.value = ?`,
         )
-        .all(name, ref) as Array<{ id: string }>
+        .all(name, name, ref) as Array<{ id: string }>
     ).some(({ id }) => {
       const m = getMessage(db, id);
       return m !== undefined && canSee(db, workspace, m);

@@ -8,13 +8,13 @@ import { trustedCodexHost, validateHookOrigin } from '../protocol/codex-hook.js'
 import type { Hello } from '../protocol/rpc.js';
 import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
 import { isLegacySession, recordClientCompatibility } from '../store/compatibility.js';
+import { tx } from '../store/db.js';
 import { scopeOf } from '../store/links.js';
 import { adoptCanonical, liveNativeHolders, recordLineage, recoveryCandidates } from '../store/recovery.js';
 import {
   attachConnection,
   bindAgentSession,
   bindAgentSessionExclusive,
-  claimName,
   createSession,
   getSession,
   holderOf,
@@ -33,7 +33,7 @@ import { capabilitiesFor } from './capabilities.js';
 import type { Connection } from './connection.js';
 import { parentOnDisconnect, verifyAtStart } from './liveness.js';
 import { isReachable, publicSession } from './registry.js';
-import { afterRename, type RenameCause } from './rename.js';
+import { afterRename, claimSessionName, type RenameCause } from './rename.js';
 import { takeoverText, visibleUnreadCount } from './scope.js';
 import type { Broker } from './server.js';
 
@@ -139,7 +139,7 @@ export function installIdentity(broker: Broker): void {
 
   const claimProvisional = (s: SessionRow) => {
     for (;;) {
-      if (claimName(db, s.id, provisionalName(s.agent, s.cwd, rand4()), 'provisional').ok) {
+      if (claimSessionName(broker, s.id, provisionalName(s.agent, s.cwd, rand4()), 'provisional').ok) {
         provisional.set(s.id, ++tick);
         return;
       }
@@ -206,13 +206,18 @@ export function installIdentity(broker: Broker): void {
     if (!gate.verified) return flag(gate.reason);
     const conn = broker.connectionFor(self.id);
     if (!conn) return flag('no-connection');
-    const r = adoptCanonical(db, {
-      provisionalId: self.id,
-      canonicalId: candidates[0].id,
-      native,
-      state: self.state,
-      evidence,
-      ...(gate.legacyUpgrade && self.agent === 'claude' ? { legacyUpgradeHello: conn.hello ?? undefined } : {}),
+    const r = tx(db, () => {
+      const adopted = adoptCanonical(db, {
+        provisionalId: self.id,
+        canonicalId: candidates[0].id,
+        native,
+        state: self.state,
+        evidence,
+        ...(gate.legacyUpgrade && self.agent === 'claude' ? { legacyUpgradeHello: conn.hello ?? undefined } : {}),
+      });
+      if (adopted.ok && adopted.fromName && adopted.canonical.name)
+        broker.engine?.prepareForward(adopted.fromName, adopted.canonical.name, adopted.canonical.id);
+      return adopted;
     });
     if (!r.ok) return flag(r.reason);
     if (r.canonical.name) broker.engine?.transferForwards(self.id, r.canonical.id, r.canonical.name);
@@ -221,7 +226,7 @@ export function installIdentity(broker: Broker): void {
     conn.generation = r.generation;
     let canonical = r.canonical;
     if (r.fromSource === 'custom' && r.fromName) {
-      const choice = claimName(db, canonical.id, r.fromName, 'custom');
+      const choice = claimSessionName(broker, canonical.id, r.fromName, 'custom');
       const explicitName = choice.ok
         ? { requested: r.fromName, applied: true }
         : { requested: r.fromName, applied: false, reason: choice.reason, holder_session_id: choice.holder.id };
@@ -327,7 +332,7 @@ export function installIdentity(broker: Broker): void {
       let ok = false;
       if (want && RESERVED_NAMES.has(want)) warning = `requested name "${want}" is reserved; using a provisional name`;
       else if (want) {
-        const r = claimName(db, s.id, want, 'custom');
+        const r = claimSessionName(broker, s.id, want, 'custom');
         ok = r.ok;
         if (!r.ok)
           warning =
@@ -354,7 +359,7 @@ export function installIdentity(broker: Broker): void {
         continue;
       }
       const previous = holderOf(db, w.intent.name);
-      const r = claimName(db, s.id, w.intent.name, 'custom');
+      const r = claimSessionName(broker, s.id, w.intent.name, 'custom');
       if (!r.ok && r.reason === 'live') continue; // still held: keep waiting
       dropWaiting(w);
       if (!r.ok) {
@@ -411,7 +416,7 @@ export function installIdentity(broker: Broker): void {
     const name = p.name as string;
     if (RESERVED_NAMES.has(name)) throw new WigwagError('bad_request', `"${name}" is reserved`);
     const before = me(conn.sessionId);
-    const r = claimName(db, before.id, name, 'custom');
+    const r = claimSessionName(broker, before.id, name, 'custom');
     // final m-5: a refusal names the holder's session and cwd only when the holder is in the caller's scope.
     if (!r.ok && r.reason === 'scope') throw new WigwagError('name_taken', takeoverText(name, r.holder.workspace));
     if (!r.ok) {
@@ -486,7 +491,7 @@ export function installIdentity(broker: Broker): void {
     }
     const intent = matching[0];
     intents.delete(intent);
-    const r = claimName(db, s.id, intent.name, 'custom');
+    const r = claimSessionName(broker, s.id, intent.name, 'custom');
     if (!r.ok) {
       const wait = broker.config.codex.name_wait_ms;
       if (r.reason === 'live') {
