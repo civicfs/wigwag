@@ -51,6 +51,23 @@ const doctor = (home: string, path: string) =>
   });
 
 describe('read-only doctor state diagnostics', () => {
+  it.each(['wal', 'shm', 'both'])(
+    'warns about SQLite bookkeeping with existing %s sidecars without changing database bytes',
+    async (sidecars) => {
+      const home = tmpHome(),
+        path = fixturePath(home),
+        file = join(home, 'state.db');
+      openDb(file).close();
+      if (sidecars !== 'shm') writeFileSync(`${file}-wal`, Buffer.alloc(0));
+      if (sidecars !== 'wal') writeFileSync(`${file}-shm`, Buffer.alloc(32768));
+      const before = readFileSync(file);
+      const result = await doctor(home, path);
+      expect(result.stdout).toContain('SQLite read-only bookkeeping');
+      expect(result.stdout).toContain('may update -shm or create missing -wal/-shm');
+      expect(result.stdout).toContain('database content is not changed');
+      expect(readFileSync(file)).toEqual(before);
+    },
+  );
   it.each(['too-many-loaded', 'unreadable-loaded'])(
     'reports persisted %s after the broker is stopped',
     async (reason) => {

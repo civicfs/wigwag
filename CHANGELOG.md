@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Warn on every doctor inspection that requires ordinary read-only SQLite access,
+  including existing WAL/SHM paths: bookkeeping files may change, database content does not.
+
 - Distinguish overloaded and unreadable Codex metadata from unavailable listings.
   Reuse a fresh engine verdict only within the same push for less than one second,
   with current slot checks on every chunk. Apply Claude liveness before Codex I/O.

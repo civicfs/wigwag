@@ -37,8 +37,9 @@ export const CLAUDE_LAUNCH = 'claude --dangerously-load-development-channels plu
 export function openDoctorDb(
   file: string,
   opener: (path: string) => DatabaseSync = (path) => new DatabaseSync(path, { readOnly: true }),
-): { db: DatabaseSync; fallback: boolean } {
-  if (existsSync(`${file}-wal`) || existsSync(`${file}-shm`)) return { db: opener(file), fallback: false };
+): { db: DatabaseSync; fallback: boolean; bookkeeping: boolean } {
+  if (existsSync(`${file}-wal`) || existsSync(`${file}-shm`))
+    return { db: opener(file), fallback: false, bookkeeping: true };
   const uri = pathToFileURL(file);
   uri.searchParams.set('mode', 'ro');
   uri.searchParams.set('immutable', '1');
@@ -48,11 +49,11 @@ export function openDoctorDb(
       db.close();
       throw new Error('database became active during immutable inspection; state unknown, retry doctor');
     }
-    return { db, fallback: false };
+    return { db, fallback: false, bookkeeping: false };
   } catch (e) {
     const error = e as NodeJS.ErrnoException & { errcode?: number };
     if (!['ERR_INVALID_ARG_VALUE', 'ERR_INVALID_ARG_TYPE'].includes(error.code ?? '') && error.errcode !== 14) throw e;
-    return { db: opener(file), fallback: true };
+    return { db: opener(file), fallback: true, bookkeeping: true };
   }
 }
 
@@ -87,10 +88,12 @@ function inspectState(
     if (!lstatSync(file).isFile()) throw new Error('state.db is not a regular file; not opened');
     const opened = openDoctorDb(file);
     db = opened.db;
-    if (opened.fallback)
+    if (opened.bookkeeping)
       warn(
         'SQLite read-only bookkeeping',
-        'immutable URI unavailable; SQLite may create empty -wal/-shm files; database content is not changed',
+        opened.fallback
+          ? 'immutable URI unavailable; SQLite may create empty -wal/-shm files; database content is not changed'
+          : 'existing sidecars: SQLite may update -shm or create missing -wal/-shm bookkeeping files; database content is not changed',
       );
     const version = (db.prepare('SELECT max(version) AS v FROM schema_version').get() as { v: number }).v;
     add(

@@ -199,7 +199,8 @@ vitest, linted with biome.
   New clients still reject unstamped old brokers with restart advice. The question-hook fail-open/deny distinction remains.
   Doctor probes without autospawn and opens an existing database read-only without migrations. Clean closed databases use immutable URI mode; existing WAL/shm uses ordinary read-only
   access so committed WAL content is visible. Unsupported URI support falls back to ordinary read-only access with
-  a diagnostic. SQLite bookkeeping sidecars may be created, but database content is never changed or copied. It reports schema,
+  a diagnostic. Every ordinary read-only path warns that SQLite may update `-shm` or create missing bookkeeping
+  sidecars; database content is never changed or copied. It reports schema,
   pre-v3/v4 backup presence/modes, disconnected/unknown live slots, missing Claude process identities, unresolved
   recovery flags, duplicate group/slot counts and Codex push-untrusted reasons. State findings and recent rejected-peer
   history are warnings; an actual incompatible broker/client handshake is an error. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
