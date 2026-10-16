@@ -10,11 +10,11 @@ import {
   type SessionRow,
 } from '../store/sessions.js';
 import { workspaceLabel } from '../workspace.js';
-import { codexPushLabel } from './codex-push.js';
+import { type CodexPushBlockReason, codexPushBlock, codexPushLabel } from './codex-push.js';
 import { visibleUnreadCount } from './scope.js';
 
 /** `no-channel`: a live Claude session whose MCP client cannot take channel pushes (E-3). */
-/** `disconnected`: a live Claude session whose MCP link dropped while its parent stays open (W8). */
+/** `disconnected`: a live session whose MCP link dropped while its parent stays open (W8). */
 export type RecipientState = 'offline' | 'unbound' | 'disconnected' | 'no-channel' | 'idle' | 'busy';
 
 export function recipientState(
@@ -25,7 +25,7 @@ export function recipientState(
   const s = liveHolder(db, name);
   if (!s) return { state: 'offline' };
   if (s.agent === 'codex' && !s.agent_session_id) return { state: 'unbound', session: s };
-  if (s.agent === 'claude' && s.link === 'disconnected') return { state: 'disconnected', session: s };
+  if (s.link === 'disconnected') return { state: 'disconnected', session: s };
   if (s.agent === 'claude' && !hasChannel(s)) return { state: 'no-channel', session: s };
   return { state: s.state === 'online-busy' ? 'busy' : 'idle', session: s };
 }
@@ -56,7 +56,7 @@ export interface PublicSession {
   parent_state?: ParentState;
   liveness?: string | null;
   codex_push?: string | null;
-  codex_push_reason?: SessionRow['codex_push_reason'];
+  codex_push_reason?: CodexPushBlockReason | null;
   orchestration?: { assignment_id: string; orchestrator_session_id: string; orchestrator_name: string | null };
   role?: 'peer' | 'worker' | 'orchestrator' | 'orchestrator-worker';
   workers?: Array<{ assignment_id: string; session_id: string; name: string | null; state: SessionRow['state'] }>;
@@ -81,8 +81,8 @@ export const publicSession = (db: Db, s: SessionRow): PublicSession => ({
   liveness: livenessLabel(s),
   ...(s.agent === 'codex'
     ? {
-        codex_push: s.codex_push_reason ? codexPushLabel(s.codex_push_reason) : null,
-        codex_push_reason: s.codex_push_reason,
+        codex_push: codexPushBlock(s) ? codexPushLabel(codexPushBlock(s) as CodexPushBlockReason) : null,
+        codex_push_reason: codexPushBlock(s),
       }
     : {}),
   ...orchestration(db, s),

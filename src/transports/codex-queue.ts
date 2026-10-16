@@ -1,4 +1,5 @@
 import { type ExecFileException, execFile } from 'node:child_process';
+import { codexPushHold, codexPushLabel } from '../broker/codex-push.js';
 import { type RenderItem, renderCodex } from '../broker/render.js';
 import { WigwagError } from '../errors.js';
 import type { SessionRow } from '../store/sessions.js';
@@ -51,8 +52,8 @@ export class CodexQueueTransport implements Transport {
       if (options.signal?.aborted) throw new WigwagError('transport', 'codex queue cancelled during shutdown');
       const reason = await this.verify(session);
       if (reason)
-        throw new WigwagError('unbound', `Codex push held: thread identity unverified (${reason})`, {
-          hold_reason: 'codex-untrusted',
+        throw new WigwagError('unbound', codexPushLabel(reason), {
+          hold_reason: codexPushHold(reason),
         });
       await this.queue(thread, renderCodex(part), options.signal);
       options.onPushed?.(part);

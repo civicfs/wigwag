@@ -76,7 +76,7 @@ export class Broker {
     s: SessionRow,
     fresh?: boolean,
     announce?: boolean,
-  ) => Promise<import('../store/sessions.js').CodexPushReason | null> = async () => 'app-server-unavailable';
+  ) => Promise<import('./codex-push.js').CodexPushBlockReason | null> = async () => 'app-server-unavailable';
   processProbe: ProcessProbe = systemProbe;
   /** No trusted concrete Codex thread ID is available from the shipped hooks yet. */
   trustedThreadId: (session: SessionRow) => string | null = () => null;

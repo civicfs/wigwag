@@ -1,9 +1,21 @@
-import type { CodexPushReason } from '../store/sessions.js';
+import type { HoldReason } from '../store/messages.js';
+import type { CodexPushReason, SessionRow } from '../store/sessions.js';
 import { getSession } from '../store/sessions.js';
 import type { Broker } from './server.js';
 
-export const codexPushLabel = (reason: CodexPushReason): string =>
-  `Codex push held: thread identity unverified (${reason})`;
+export type CodexPushBlockReason = CodexPushReason | 'mcp-disconnected' | 'offline';
+export const codexPushBlock = (
+  s: Pick<SessionRow, 'state' | 'link' | 'codex_push_reason'>,
+): CodexPushBlockReason | null =>
+  s.state === 'offline' ? 'offline' : s.link === 'disconnected' ? 'mcp-disconnected' : s.codex_push_reason;
+export const codexPushHold = (reason: string): HoldReason =>
+  reason === 'mcp-disconnected' ? 'disconnected' : reason === 'offline' ? 'offline' : 'codex-untrusted';
+export const codexPushLabel = (reason: string): string =>
+  reason === 'mcp-disconnected'
+    ? 'Codex push held: MCP disconnected'
+    : reason === 'offline'
+      ? 'Codex push held: session offline'
+      : `Codex push held: thread identity unverified (${reason})`;
 
 /** Revalidate slot ownership after metadata I/O; never apply evidence to a different binding or a closed DB. */
 export function installCodexPushTrust(broker: Broker): void {
@@ -28,6 +40,6 @@ export function installCodexPushTrust(broker: Broker): void {
       // Announce through the usual path so restored trust can release held deliveries.
       broker.announce(s.id);
     }
-    return reason;
+    return codexPushBlock({ ...current, codex_push_reason: reason });
   };
 }

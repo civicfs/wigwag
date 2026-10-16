@@ -18,6 +18,7 @@ import {
 import { holderOf, type SessionRow } from '../store/sessions.js';
 import { activeThrottles, addThrottle, isMuted, isThrottled, releaseThrottle } from '../store/subs.js';
 import type { TransportRegistry } from '../transports/types.js';
+import { codexPushHold, codexPushLabel } from './codex-push.js';
 import { decide } from './policy.js';
 import { WakeLimiter } from './ratelimit.js';
 import { type RecipientState, recipientState } from './registry.js';
@@ -324,8 +325,8 @@ export class DeliveryEngine {
       if (reason) {
         for (const k of wake)
           this.moveIf(k, ['pending', 'held', 'failed'], 'held', {
-            hold_reason: 'codex-untrusted',
-            last_error: `Codex push held: thread identity unverified (${reason})`,
+            hold_reason: codexPushHold(reason),
+            last_error: codexPushLabel(reason),
           });
         return;
       }
@@ -395,8 +396,9 @@ export class DeliveryEngine {
           if (!due.has(DeliveryEngine.id(k))) continue;
           try {
             if (this.stateOf(k) !== from) continue; // changed during the push (swept, read): not ours to fail
-            if ((err as { data?: { hold_reason?: string } }).data?.hold_reason === 'codex-untrusted') {
-              this.moveIf(k, [from], 'held', { hold_reason: 'codex-untrusted', last_error: err.message });
+            const blocked = (err as { data?: { hold_reason?: string } }).data?.hold_reason;
+            if (blocked === 'codex-untrusted' || blocked === 'disconnected' || blocked === 'offline') {
+              this.moveIf(k, [from], 'held', { hold_reason: blocked, last_error: err.message });
             } else if (session.agent === 'claude') {
               // No live channel is an offline hold, not a retryable failure.
               this.moveIf(k, [from], 'held', { hold_reason: 'offline', last_error: (err as Error).message });

@@ -43,8 +43,9 @@ turn start, stays through outstanding questions, then unsubscribes after a short
 grace (`questions.codex_idle_grace_ms`, optional, default 2000 ms). It never resumes
 an unloaded or unknown thread merely to maintain an assignment. Active native
 turns, pending questions and the daemon's unload delay still prevent instant
-TUI-close detection. Pushes to a disconnected Codex session still
-use `codex queue`, independently of the MCP link, and may resume a closed thread.
+TUI-close detection. Codex pushes require both a connected MCP link and fresh
+loaded-root evidence; disconnected or unloaded sessions hold mail for reattachment,
+a hook boundary or inbox. A TUI may close before those native signals change.
 On macOS, parent identity uses `ps lstart` in UTC plus uid, with one-second
 resolution; PID reuse within the same second by the same uid cannot be distinguished.
 
@@ -130,8 +131,9 @@ names do not replace the canonical name.
 Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
 a shared tree-root ID. `whoami` reports `unavailable` with reason
 `codex-thread-id-untrusted`. A future trusted concrete thread ID must also pass
-root verification. Codex queue pushes require a loaded root with no other loaded thread sharing its
-root ID. Metadata is rechecked before each push; unavailable or ambiguous evidence
+root verification. Codex queue pushes require a connected MCP link and a loaded root with no other
+loaded thread sharing its root ID. Metadata is rechecked before each push;
+unavailable or ambiguous evidence
 holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
 (<reason>)`. This push check does not enable automatic slot recovery.
 
@@ -143,7 +145,8 @@ records remain. A resolved empty refused shell remains excluded from candidates.
 
 A plugin reload, MCP crash or broker restart keeps a session's name while its
 parent remains open. `who` shows "parent open, MCP disconnected"; Claude messages
-wait for the next prompt or tool call, while Codex pushes use `codex queue`.
+wait for the next prompt or tool call. Codex pushes also wait for the MCP link;
+reattachment releases the backlog only after fresh thread-identity verification.
 
 Hello checks the client and broker protocol, schema and package versions before
 registering a session. A stale broker reports `wigwag broker stop` then retry; a
@@ -434,7 +437,8 @@ human answers before applying a saved relay answer.
   `--as` matching ambiguous. Use `register` if the provisional name remains.
   Launch from the intended directory; `codex -C <dir>` can miss the name handoff.
 - Closing a Codex TUI can leave its thread live for roughly a minute, or longer
-  during an active turn. Messages in that interval can reach the closed thread.
+  during an active turn or outstanding question. If its MCP link and loaded-root
+  evidence remain valid, messages can still reach that thread before native unload.
   A fresh launcher waits for the previous name holder; it never takes a live name.
 - Codex API failures can leave a session shown as busy until the daemon unloads
   it. The global plugin also registers Codex threads not launched by Wigwag.

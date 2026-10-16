@@ -161,8 +161,10 @@ vitest, linted with biome.
   demand, after metadata proves the thread is loaded; unloaded/unknown demand waits and appears in whoami/recovery.
   Shutdown cancels timers and awaits bounded unsubscribe cleanup. Active turns, pending questions and the daemon's
   native unload delay still prevent instant TUI-close detection.
-  Pushes to disconnected Codex sessions still use `codex queue`, independently of the MCP link, and may resume a closed
-  thread. macOS identities use UTC `ps lstart` plus uid with one-second resolution, so same-uid PID reuse within a
+  Codex pushes now require a connected MCP link plus fresh loaded-root evidence. Disconnected links hold as
+  disconnected, unloaded/unknown identities hold as codex-untrusted, and non-live slots hold offline. Reattachment
+  or a hook boundary can deliver the backlog. Native loaded/link evidence may outlast the TUI itself. macOS identities
+  use UTC `ps lstart` plus uid with one-second resolution, so same-uid PID reuse within a
   second cannot be distinguished.
 - **Rename**: `register(name)` tool. Rejected if a *live* session holds it. If the holder is offline, the new
   session takes the name and inherits its undelivered backlog (delivered as one digest on first wake).
@@ -206,7 +208,8 @@ vitest, linted with biome.
   thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the
   binding and pass metadata root verification. Untrusted binds preserve offline canonical bindings and record
   `codex-thread-id-untrusted`; non-offline holders refuse. Codex queue pushes require metadata evidence that the presented ID is a loaded root and no other loaded thread
-  shares its sessionId. The metadata-only reader checks bind, probes and each queue push (fresh before dispatch),
+  shares its sessionId, plus a current connected MCP link and non-offline slot, all revalidated after I/O. The
+  metadata-only reader checks bind, probes and each queue push (fresh before dispatch),
   reads at most 256 loaded threads in batches of eight, and caches non-push checks for 2 s. Unavailable/malformed
   evidence fails closed. Reasons are shared-root, root-not-loaded, descendant-loaded or app-server-unavailable;
   deliveries hold as codex-untrusted and remain accessible through hooks/inbox. Public session/capability/TUI/recovery
@@ -221,9 +224,10 @@ vitest, linted with biome.
   (`live | gone | unknown`). A Claude hook bind records the agent pid and its start identity (Linux: boot id, start
   ticks, uid; macOS: UTC `ps lstart` to the second, uid). On MCP disconnect and at broker start the parent is verified:
   Claude by pid plus start identity, Codex by `thread/loaded/list` on the metadata-only app-server connection. A live
-  parent keeps the session `online-*` with `link: disconnected`, its name claim and its assignments; Claude pushes are
-  held as `disconnected` and delivered at the next hook boundary or MCP re-attach; Codex pushes continue through
-  `codex queue`. An immediate probe and an extra check about 2 s after disconnect catch exits promptly; a 10 s probe loop
+  parent keeps the session `online-*` with `link: disconnected`, its name claim and its assignments; pushes for both agents are
+  held as `disconnected` and delivered at the next hook boundary or MCP re-attach. Codex queue pushes additionally
+  require fresh loaded-root trust; active throttles keep their throttled hold reason ahead of disconnected holds.
+  An immediate probe and an extra check about 2 s after disconnect catch exits promptly; a 10 s probe loop
   continues checking and marks the session offline once the parent is gone. No recorded evidence at
   disconnect (Claude without identity, Codex without app-server) keeps the 0.2 behavior; an unverifiable parent (probe
   error, legacy row at broker start) goes offline after 3 consecutive unknown probes and 60 s. A new MCP process under

@@ -3,7 +3,7 @@ import { existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
-import { codexPushLabel } from '../../broker/codex-push.js';
+import { codexPushBlock, codexPushLabel } from '../../broker/codex-push.js';
 import { sockPath } from '../../client/autospawn.js';
 import { Client } from '../../client/client.js';
 import { type Config, configPath, loadConfig, resolveHome } from '../../config.js';
@@ -135,17 +135,19 @@ function inspectState(
     if (version >= 4) {
       const untrusted = db
         .prepare(
-          "SELECT id,name,codex_push_reason FROM sessions WHERE agent='codex' AND retired_at IS NULL AND agent_session_id IS NOT NULL AND codex_push_reason IS NOT NULL",
+          "SELECT id,name,state,link,codex_push_reason FROM sessions WHERE agent='codex' AND retired_at IS NULL AND agent_session_id IS NOT NULL AND (codex_push_reason IS NOT NULL OR link='disconnected')",
         )
         .all() as Array<{
         id: string;
         name: string | null;
-        codex_push_reason: import('../../store/sessions.js').CodexPushReason;
+        state: import('../../store/sessions.js').SessionState;
+        link: import('../../store/sessions.js').Link;
+        codex_push_reason: import('../../store/sessions.js').CodexPushReason | null;
       }>;
       if (untrusted.length)
         warn(
           'Codex push untrusted',
-          `${untrusted.length} session(s); ${untrusted.map((s) => `${s.name ?? s.id}: ${codexPushLabel(s.codex_push_reason)}`).join('; ')}`,
+          `${untrusted.length} session(s); ${untrusted.map((s) => `${s.name ?? s.id}: ${codexPushLabel(codexPushBlock(s) ?? 'app-server-unavailable')}`).join('; ')}`,
         );
       else add(true, 'Codex push untrusted', '0 sessions');
     }

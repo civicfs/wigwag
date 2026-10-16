@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Hold Codex pushes while its MCP link is disconnected, including a disconnect
+  during metadata I/O. Reuse disconnected holds, retain throttle precedence and
+  release on reattach or hook delivery; fresh loaded-root trust remains required.
+
 - Stop idle Codex assignments from pinning threads: attach on turn-start/question
   demand, retain outstanding questions, then unsubscribe after a configurable
   grace. Never resume unloaded/unknown threads to maintain the relay; show waiting

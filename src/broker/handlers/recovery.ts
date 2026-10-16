@@ -2,6 +2,7 @@ import { WigwagError } from '../../errors.js';
 import { tx } from '../../store/db.js';
 import { duplicateNativeSlots, listLineage, recoverySlot, resolveLineage } from '../../store/recovery.js';
 import { getSession, listSessions, retireSlot, type SessionRow } from '../../store/sessions.js';
+import { codexPushBlock } from '../codex-push.js';
 import { publicSession } from '../registry.js';
 import type { Broker } from '../server.js';
 
@@ -19,8 +20,8 @@ export function installRecovery(broker: Broker): void {
     flags: listLineage(db, { outcome: 'flagged', unresolved: true, limit }),
     duplicates: duplicateNativeSlots(db),
     codex_push_untrusted: listSessions(db)
-      .filter((s) => s.agent === 'codex' && !s.retired_at && s.codex_push_reason)
-      .map((s) => ({ ...publicSession(db, s), session_id: s.id, reason: s.codex_push_reason })),
+      .filter((s) => s.agent === 'codex' && !s.retired_at && codexPushBlock(s))
+      .map((s) => ({ ...publicSession(db, s), session_id: s.id, reason: codexPushBlock(s) })),
   }));
   broker.handle('owner.retire_slot', (_c, { session_id, force }) => {
     tx(db, () => {
