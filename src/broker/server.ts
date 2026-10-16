@@ -23,6 +23,7 @@ import { type Db, openDb } from '../store/db.js';
 import { WorkspaceResolver } from '../workspace.js';
 import { Connection } from './connection.js';
 import type { DeliveryEngine } from './delivery.js';
+import type { Liveness } from './liveness.js';
 import { BrokerLock } from './lock.js';
 import type { NameService } from './naming.js';
 
@@ -67,6 +68,7 @@ export class Broker {
   naming!: NameService;
   codexNames: CodexNames | null = null;
   processProbe: ProcessProbe = systemProbe;
+  liveness: Liveness | null = null;
   digestProvider: ((name: string) => string | null) | null = null;
   /** Identity's announce (sweep the name's backlog, owner broadcast, session.available); set by installIdentity. */
   announce: (sessionId: string) => void = () => {};

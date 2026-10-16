@@ -245,7 +245,11 @@ export function installIdentity(broker: Broker): void {
     markDisconnectedIfCurrent(db, s.id, conn.generation, verdict);
     broker.log(`${s.id} (${s.name ?? 'unnamed'}) MCP disconnected; parent ${verdict}; session kept`);
     announce(s.id);
+    broker.liveness?.kick();
   });
+
+  // W8: a probe-confirmed offline frees a name a launcher may be waiting for.
+  broker.bus.on('session.offline', () => settleWaiting());
 
   const me = (sessionId: string | null) => getSession(db, sessionId as string) as SessionRow;
 

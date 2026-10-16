@@ -16,6 +16,7 @@ import { installMessages } from './handlers/messages.js';
 import { installOwner } from './handlers/owner.js';
 import { installRequests } from './handlers/requests.js';
 import { installIdentity } from './identity.js';
+import { installLiveness, type LivenessOptions } from './liveness.js';
 import { installNaming } from './naming.js';
 import { Broker } from './server.js';
 
@@ -50,6 +51,7 @@ export async function startBroker(
     codexNames?: CodexNames;
     codexNameRefreshMs?: number;
     processProbe?: ProcessProbe;
+    liveness?: LivenessOptions;
   } = {},
 ): Promise<Broker> {
   const config = loadConfig(home);
@@ -79,6 +81,7 @@ export async function startBroker(
       }),
     opts.codexNameRefreshMs,
   );
+  installLiveness(broker, opts.liveness);
   const codexQuestions = new CodexQuestions(questions);
   questions.prepareCodex = (session) => codexQuestions.attach(session);
   broker.onStop.push(() => codexQuestions.stop());
