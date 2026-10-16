@@ -148,8 +148,24 @@ describe('claude resume recovery (W7)', () => {
     expect(await fresh.client.call('session.whoami')).toMatchObject({ id: fresh.welcome.session_id });
     expect(getSession(broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
     expect(getSession(broker.db, old.welcome.session_id)?.name).toBe('worker-one');
+    expect(getSession(broker.db, old.welcome.session_id)?.agent_session_id).toBe('sid-1');
     expect(listLineage(broker.db, { outcome: 'adopted', limit: 10 })).toEqual([]);
   });
+
+  it.each(['connected', 'disconnected'])(
+    'a raw Claude bind refuses another %s live holder without clearing its binding',
+    async (link) => {
+      const { home, broker } = await boot();
+      const { old } = await oldSession(home);
+      broker.db.prepare("UPDATE sessions SET link=?,parent_state='live' WHERE id=?").run(link, old.welcome.session_id);
+      const fresh = await mcp(home, 600);
+      await expect(fresh.client.call('session.bind', { agent_session_id: 'sid-1' })).rejects.toMatchObject({
+        code: 'conflict',
+      });
+      expect(getSession(broker.db, old.welcome.session_id)?.agent_session_id).toBe('sid-1');
+      expect(getSession(broker.db, fresh.welcome.session_id)?.agent_session_id).toBeNull();
+    },
+  );
 
   it.each(['launch', 'register'])(
     'preserves an explicit %s name through canonical adoption and forwards both inboxes',

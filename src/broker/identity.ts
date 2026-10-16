@@ -596,18 +596,18 @@ export function installIdentity(broker: Broker): void {
           );
     if (recovered && 'adopted' in recovered) self = recovered.adopted;
     else {
-      // Today's behavior, now after any lineage flag: bind this slot and clear an offline holder's stale binding.
-      if (self.agent === 'codex' && !codexThreadTrusted) {
+      // An unverified internal bind grants no right to erase another slot's native identity.
+      if (self.agent === 'claude' || !codexThreadTrusted) {
         const holder = listSessions(db).find(
           (s) =>
-            s.agent === 'codex' &&
+            s.agent === self.agent &&
             s.id !== self.id &&
             s.agent_session_id === agent_session_id &&
             s.state !== 'offline' &&
             !s.retired_at,
         );
         if (holder) refuse(holder);
-        // Preserve offline evidence when the root ID cannot identify this concrete conversation.
+        // Claude recovery belongs to trusted hooks; untrusted Codex roots cannot identify a concrete conversation.
         bindAgentSession(db, self.id, agent_session_id);
       } else {
         const r = bindAgentSessionExclusive(db, self.id, agent_session_id);

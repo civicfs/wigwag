@@ -205,7 +205,9 @@ vitest, linted with biome.
   history are warnings; an actual incompatible broker/client handshake is an error. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
   verification; that path exposes no general RPC client.
 - **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
-  `session.bind` tool path for Claude. Exactly one eligible offline or MCP-disconnected, unretired slot of the same
+  `session.bind` tool path for Claude. A raw Claude internal bind may bind only its own slot without recovery or clearing another slot's native ID;
+  any other non-offline holder, including a disconnected live slot, refuses that bind.
+  Exactly one eligible offline or MCP-disconnected, unretired slot of the same
   agent, native ID and workspace is canonical. An empty provisional/unnamed slot is excluded unless it retains an
   active assignment, pending/held/failed/stuck mail, or active subscriptions/mutes. A refused-resume shell needs that
   retained work even if it has a native/custom name; historical refusal keeps an empty shell excluded after its
