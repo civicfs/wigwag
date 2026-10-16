@@ -4,6 +4,7 @@ import { Client } from '../../src/client/client.js';
 import { loadConfig } from '../../src/config.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
+import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { listLineage } from '../../src/store/recovery.js';
 import {
   bindAgentSession,
@@ -13,7 +14,8 @@ import {
   listSessions,
   setState,
 } from '../../src/store/sessions.js';
-import { ownerClient, startTestBroker } from '../helpers.js';
+import type { Transport } from '../../src/transports/types.js';
+import { ownerClient, startBroker, startTestBroker, tmpHome, until } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {
@@ -82,6 +84,54 @@ describe('claude resume recovery (W7)', () => {
       link: 'disconnected',
       parent_state: 'live',
     });
+  });
+
+  it('carries an earlier deferred rename into canonical adoption when the push settles', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const pushes: string[] = [];
+    const transport: Transport = {
+      kind: 'claude-channel',
+      push: async (s) => {
+        pushes.push(s.id);
+        await gate;
+        throw new Error('fixture failed push');
+      },
+    };
+    const home = tmpHome();
+    const broker = await startBroker(home, {
+      transports: { claude: transport, codex: { ...transport, kind: 'codex-queue' } },
+    });
+    cleanup.push(
+      () => broker.stop(),
+      () => release(),
+    );
+    const { old, h } = await oldSession(home);
+    old.client.close();
+    await settle();
+    const fresh = await mcp(home, 600, { requested_name: 'temporary-one' });
+    const owner = await ownerClient(home);
+    cleanup.push(() => owner.close());
+    const message = await owner.call<{ id: string }>('owner.send', {
+      to: 'temporary-one',
+      subject: 'in-flight',
+      body: 'b',
+      priority: 'urgent',
+      attach_paths: [],
+    });
+    await until(() => pushes.includes(fresh.welcome.session_id));
+    await fresh.client.call('session.register', { name: 'temporary-two' });
+    await h.call('hook.event', ev('SessionStart', 600));
+    expect(await fresh.client.call('session.whoami')).toMatchObject({ id: old.welcome.session_id, name: 'worker-one' });
+    release();
+    await until(() => deliveriesOfMessage(broker.db, message.id)[0]?.state === 'held');
+    expect(deliveriesOfMessage(broker.db, message.id)).toMatchObject([{ recipient: 'worker-one' }]);
+    const inbox = JSON.stringify(await fresh.client.call('msg.inbox'));
+    expect(inbox).toContain(message.id);
+    for (const name of ['temporary-one', 'temporary-two'])
+      expect(broker.db.prepare('SELECT message_id FROM deliveries WHERE recipient = ?').all(name)).toEqual([]);
   });
 
   it('a fresh MCP process after a resume takes the canonical slot, name and mail', async () => {

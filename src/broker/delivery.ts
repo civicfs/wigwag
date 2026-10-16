@@ -197,6 +197,24 @@ export class DeliveryEngine {
     }
   }
 
+  /** Recovery changes the owning slot; exact skipped rows follow its canonical inbox. */
+  transferForwards(provisionalId: string, canonicalId: string, to: string): void {
+    for (const [key, deferred] of [...this.deferredForwards]) {
+      if (deferred.sessionId !== provisionalId) continue;
+      this.deferredForwards.delete(key);
+      const holder = holderOf(this.d.db, deferred.from);
+      if (holder && holder.id !== provisionalId && holder.id !== canonicalId) continue;
+      const nextKey = `${canonicalId}\u0000${deferred.from}`;
+      const existing = this.deferredForwards.get(nextKey);
+      this.deferredForwards.set(nextKey, {
+        ...deferred,
+        sessionId: canonicalId,
+        to,
+        messageIds: new Set([...deferred.messageIds, ...(existing?.messageIds ?? [])]),
+      });
+    }
+  }
+
   forward(from: string, to: string, sessionId: string, onlyMessageIds?: Set<string>): number {
     const key = `${sessionId}\u0000${from}`;
     const holder = holderOf(this.d.db, from);

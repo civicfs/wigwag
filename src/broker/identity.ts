@@ -199,6 +199,7 @@ export function installIdentity(broker: Broker): void {
       evidence,
     });
     if (!r.ok) return flag(r.reason);
+    if (r.canonical.name) broker.engine?.transferForwards(self.id, r.canonical.id, r.canonical.name);
     provisional.delete(self.id);
     conn.sessionId = r.canonical.id;
     conn.generation = r.generation;
