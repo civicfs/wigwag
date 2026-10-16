@@ -13,7 +13,7 @@ import {
   setNativeRef,
   setState,
 } from '../../src/store/sessions.js';
-import { fixtureCodexNames, mcpClient, ownerClient, startBroker, tmpHome } from '../helpers.js';
+import { fixtureCodexNames, mcpClient, ownerClient, startBroker, tmpHome, until } from '../helpers.js';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -113,6 +113,31 @@ async function fixture(choice = 'launch') {
 type Who = { id: string; name: string; bound: boolean; name_source: string };
 
 describe('Claude in-process conversation switches', () => {
+  it('refuses a changed conversation while MCP is disconnected, preserving the old mailbox', async () => {
+    const f = await fixture();
+    const oldId = f.worker.welcome.session_id;
+    await f.send('launch-worker', 'A-private-body');
+    f.worker.client.destroy();
+    await until(() => getSession(f.broker.db, oldId)?.link === 'disconnected');
+    expect(getSession(f.broker.db, oldId)?.parent_state).toBe('live');
+    const reply = await f.h.call('hook.event', f.event(B));
+    expect(reply).toMatchObject({ bound: false, additional_context: null });
+    expect(getSession(f.broker.db, oldId)).toMatchObject({
+      agent_session_id: A,
+      name: 'launch-worker',
+      link: 'disconnected',
+      parent_state: 'live',
+    });
+    const back = await f.connect();
+    const bound = await f.h.call('hook.event', f.event(B));
+    expect(bound).toMatchObject({ bound: true });
+    expect(JSON.stringify(bound)).not.toContain('A-private-body');
+    expect(await back.client.call('session.whoami')).toMatchObject({ bound: true });
+    expect((await back.client.call<Who>('session.whoami')).id).not.toBe(oldId);
+    expect(getSession(f.broker.db, oldId)?.agent_session_id).toBe(A);
+    expect(JSON.stringify(await back.client.call('msg.inbox'))).not.toContain('A-private-body');
+  });
+
   it.each(['launch', 'register'])(
     'leaves A with its %s name and mail, gives B a fresh identity, then safely switches back',
     async (choice) => {

@@ -765,11 +765,9 @@ export function installIdentity(broker: Broker): void {
     const connectedParents = matchingParents.filter((x) => x.link === 'connected');
     const candidates = connectedParents.length ? connectedParents : matchingParents;
     const source = candidates.length === 1 ? candidates[0] : undefined;
-    const changing =
-      source?.link === 'connected' &&
-      source.agent_session_id !== null &&
-      source.agent_session_id !== p.agent_session_id;
+    const changing = source && source.agent_session_id !== null && source.agent_session_id !== p.agent_session_id;
     // Split before checking B's holder: even a refused B must never leave this connection reading A.
+    // Without its MCP connection there is nothing to rewire: refuse until reconnect instead of overwriting A.
     const split = changing && !wrongWorkspace(source) ? splitConversation(source, p.agent_session_id, p.event) : null;
     if (changing && !split) return { bound: false, additional_context: null };
     let s: SessionRow | undefined = split?.slot ?? bound[0];
