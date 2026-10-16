@@ -67,7 +67,7 @@ export class Broker {
   };
   onDisconnect: Array<(conn: Connection) => void> = [];
   onStart: Array<() => void> = [];
-  onStop: Array<() => void> = [];
+  onStop: Array<() => unknown> = [];
   engine: DeliveryEngine | null = null;
   questions!: QuestionService;
   naming!: NameService;
@@ -173,7 +173,15 @@ export class Broker {
     if (!this.stopPromise) {
       const starting = this.startPromise;
       this.stopPromise = (async () => {
-        for (const f of this.onStop) this.attempt('onStop hook', f);
+        await Promise.all(
+          this.onStop.map(async (f) => {
+            try {
+              await f();
+            } catch (e) {
+              this.log(`onStop hook failed: ${(e as Error).message}`);
+            }
+          }),
+        );
         if (starting) await starting.catch(() => {});
         // Final review I-10: in-flight pushes record their outcome before the db closes (bounded).
         await this.engine?.drain(this.config.codex.queue_timeout_ms).catch(() => {});

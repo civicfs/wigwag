@@ -154,8 +154,13 @@ vitest, linted with biome.
   `session_renames`, live sessions in scope get a low-priority `session renamed: <old> → <new>` notice (not sent when
   the old name was an unused provisional name), and owners get the session. Pending and failed deliveries are
   dispatched again, and the session is announced so held backlog is swept and delivered.
-- **Parent liveness limits (0.3.0).** A Codex worker with an active assignment is kept loaded by Wigwag's own question
-  relay, which re-attaches with `thread/resume`; liveness cannot detect its TUI closing until the assignment is released.
+- **Parent liveness limits (0.3.0).** A Codex assignment alone no longer holds a relay subscription. The turn-start hook
+  awaits attachment before returning. Busy turns and pending/answered native questions keep it attached; after idle
+  with no outstanding questions, a configurable grace (`questions.codex_idle_grace_ms`, optional, default 2000 ms,
+  range 0–30000) ends with thread/unsubscribe and connection close. Retry reconciliation attaches only for active
+  demand, after metadata proves the thread is loaded; unloaded/unknown demand waits and appears in whoami/recovery.
+  Shutdown cancels timers and awaits bounded unsubscribe cleanup. Active turns, pending questions and the daemon's
+  native unload delay still prevent instant TUI-close detection.
   Pushes to disconnected Codex sessions still use `codex queue`, independently of the MCP link, and may resume a closed
   thread. macOS identities use UTC `ps lstart` plus uid with one-second resolution, so same-uid PID reuse within a
   second cannot be distinguished.

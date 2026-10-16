@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Stop idle Codex assignments from pinning threads: attach on turn-start/question
+  demand, retain outstanding questions, then unsubscribe after a configurable
+  grace. Never resume unloaded/unknown threads to maintain the relay; show waiting
+  demand and await unsubscribe cleanup on broker stop.
+
 - Make doctor read-only: report schema/backup permissions, liveness/identity gaps,
   recovery flags/duplicates, Codex push holds and compatibility without starting
   a broker or migrating local state.

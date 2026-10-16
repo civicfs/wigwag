@@ -4,7 +4,7 @@ import { CodexNames, codexIndexPath, installCodexNames } from '../native/codex-n
 import type { ProcessProbe } from '../proc/identity.js';
 import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
 import { AppServer } from '../questions/app-server.js';
-import { CodexQuestions } from '../questions/codex.js';
+import { type AppConnection, CodexQuestions } from '../questions/codex.js';
 import { installQuestionHooks } from '../questions/hook-handlers.js';
 import { installQuestions } from '../questions/service.js';
 import { ClaudeChannelTransport } from '../transports/claude-channel.js';
@@ -58,6 +58,8 @@ export async function startBroker(
     transports?: TransportRegistry;
     codexNames?: CodexNames;
     codexNameRefreshMs?: number;
+    codexQuestionFactory?: () => AppConnection;
+    codexQuestionIdleGraceMs?: number;
     processProbe?: ProcessProbe;
     trustedThreadId?: Broker['trustedThreadId'];
     liveness?: LivenessOptions;
@@ -96,7 +98,9 @@ export async function startBroker(
   );
   installCodexPushTrust(broker);
   installLiveness(broker, opts.liveness);
-  const codexQuestions = new CodexQuestions(questions);
+  const codexQuestions = new CodexQuestions(questions, opts.codexQuestionFactory, {
+    idleGraceMs: opts.codexQuestionIdleGraceMs,
+  });
   questions.prepareCodex = (session) => codexQuestions.attach(session);
   broker.onStop.push(() => codexQuestions.stop());
   const claudeTitles = new ClaudeTitleWatcher(broker);

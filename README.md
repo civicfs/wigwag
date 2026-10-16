@@ -38,9 +38,12 @@ currently spawn replacement agents or transfer tasks after a worker fails.
 
 ## Parent liveness limits in 0.3.0
 
-A Codex worker with an active assignment remains loaded because Wigwag's question
-relay re-attaches with `thread/resume`. Liveness cannot detect that its TUI closed
-until the assignment is released. Pushes to a disconnected Codex session still
+An idle Codex assignment no longer pins its thread. The question relay attaches at
+turn start, stays through outstanding questions, then unsubscribes after a short
+grace (`questions.codex_idle_grace_ms`, optional, default 2000 ms). It never resumes
+an unloaded or unknown thread merely to maintain an assignment. Active native
+turns, pending questions and the daemon's unload delay still prevent instant
+TUI-close detection. Pushes to a disconnected Codex session still
 use `codex queue`, independently of the MCP link, and may resume a closed thread.
 On macOS, parent identity uses `ps lstart` in UTC plus uid, with one-second
 resolution; PID reuse within the same second by the same uid cannot be distinguished.

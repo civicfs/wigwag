@@ -393,6 +393,7 @@ export function installIdentity(broker: Broker): void {
       capabilities: capabilitiesFor(broker, s),
       broker: HANDSHAKE_VERSIONS,
       version_warnings: broker.versionWarnings,
+      ...(s.agent === 'codex' ? { codex_question_wait: broker.questions.codexWaiting.get(s.id) ?? null } : {}),
     };
   });
   // Spec §17: an agent sees the sessions in its scope; the owner sees every workspace.
@@ -556,8 +557,13 @@ export function installIdentity(broker: Broker): void {
     return {};
   });
 
-  broker.handle('session.turn', ({ conn }, { phase }) => {
+  broker.handle('session.turn', async ({ conn }, { phase }) => {
     setState(db, conn.sessionId as string, phase === 'started' ? 'online-busy' : 'online-idle');
+    const s = me(conn.sessionId);
+    if (s.agent === 'codex')
+      await broker.questions
+        .turnCodex?.(s, phase)
+        .catch((e) => broker.log(`Codex question turn hook: ${(e as Error).message}`));
     announce(conn.sessionId as string);
     return {};
   });

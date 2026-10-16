@@ -33,6 +33,7 @@ export const ConfigSchema = z
         wait_ms: pos.max(590000),
         poll_ms: pos,
         app_server_timeout_ms: pos,
+        codex_idle_grace_ms: z.number().int().nonnegative().max(30000).optional(),
         app_server_socket: z.string().startsWith('/'),
       })
       .strict(),
@@ -64,6 +65,7 @@ export const INIT_VALUES: Omit<Config, 'codex'> & { codex: Omit<Config['codex'],
     wait_ms: 300000,
     poll_ms: 250,
     app_server_timeout_ms: 10000,
+    codex_idle_grace_ms: 2000,
     app_server_socket: join(
       process.env.CODEX_HOME ?? join(homedir(), '.codex'),
       'app-server-control',

@@ -1,5 +1,6 @@
+import { WigwagError } from '../errors.js';
 import type { SessionRow } from '../store/sessions.js';
-import { getSession } from '../store/sessions.js';
+import { getSession, setState } from '../store/sessions.js';
 import { type AppFrame, AppServer } from './app-server.js';
 import { asyncReply, codexAnswer, normalizeNative } from './native.js';
 import type { QuestionService, Relay } from './service.js';
@@ -22,7 +23,10 @@ type Attached = {
   recovering: boolean;
   buffered: AppFrame[];
   activeTurn?: string;
+  subscribed?: boolean;
+  idleTimer?: NodeJS.Timeout;
 };
+export const CODEX_QUESTION_IDLE_GRACE_MS = 2000;
 const object = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x);
 
 /** Native requests are answered only after a matching allowlisted PreToolUse capture. */
@@ -30,7 +34,23 @@ export class CodexQuestions {
   private readonly attached = new Map<string, Attached>();
   private stopped = false;
   private readonly retry: NodeJS.Timeout;
-  private readonly changed = () => this.flush();
+  private readonly closing = new Set<Promise<void>>();
+  private stopPromise: Promise<void> | null = null;
+  private readonly idleGraceMs: number;
+  private readonly changed = () => {
+    this.flush();
+    this.assignments();
+  };
+  private readonly turnHook = async (s: SessionRow, phase: 'started' | 'ended') => {
+    const a = this.service.activeAssignment(s.id);
+    if (!a || !this.service.participants(a)) return;
+    if (phase === 'started') await this.attach(s);
+    else {
+      const e = this.attached.get(s.id);
+      if (e) e.activeTurn = undefined;
+      await this.reconcile();
+    }
+  };
   private readonly assignments = () => {
     this.reconcile().catch((e) => this.log(e));
   };
@@ -41,7 +61,11 @@ export class CodexQuestions {
         service.broker.config.questions.app_server_socket,
         service.broker.config.questions.app_server_timeout_ms,
       ),
+    opts: { idleGraceMs?: number } = {},
   ) {
+    this.idleGraceMs =
+      opts.idleGraceMs ?? service.broker.config.questions.codex_idle_grace_ms ?? CODEX_QUESTION_IDLE_GRACE_MS;
+    service.turnCodex = this.turnHook;
     service.on('changed', this.changed);
     service.on('assignments', this.assignments);
     service.broker.bus.on('session.available', this.assignments);
@@ -52,13 +76,17 @@ export class CodexQuestions {
     this.retry.unref();
   }
   private log(e: unknown): void {
+    if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'question-wait') return;
     this.service.broker.log(`native Codex question adapter: ${e instanceof Error ? e.message : String(e)}`);
   }
   async attach(session: SessionRow): Promise<void> {
     if (this.stopped || !session.agent_session_id)
       throw new Error('Codex question adapter cannot attach an unbound session');
     const existing = this.attached.get(session.id);
-    if (existing?.native === session.agent_session_id) return existing.starting;
+    if (existing?.native === session.agent_session_id) {
+      this.clearIdle(existing);
+      return existing.starting;
+    }
     if (existing) this.detach(existing);
     const app = this.factory();
     const entry: Attached = {
@@ -91,14 +119,20 @@ export class CodexQuestions {
     app.on('disconnected', () => {
       if (!entry.closed) {
         entry.closed = true;
-        this.attached.delete(entry.session);
+        this.clearIdle(entry);
+        if (this.attached.get(entry.session) === entry) this.attached.delete(entry.session);
       }
     });
     entry.starting = (async () => {
       try {
+        await this.requireLoaded(entry);
         await app.connect();
         if (entry.closed || this.stopped) throw new Error('Codex question attach cancelled');
+        await this.requireLoaded(entry);
         await app.call('thread/resume', { threadId: entry.native, excludeTurns: true });
+        entry.subscribed = true;
+        if (entry.closed || this.stopped) throw new Error('Codex question attach cancelled');
+        if (this.service.codexWaiting.delete(entry.session)) this.service.broker.announce(entry.session);
         // Recover async questions after a broker reconnect. Read only this assigned thread;
         // large responses are bounded by the transport and fail visibly rather than truncate.
         const outstanding = this.service
@@ -135,22 +169,104 @@ export class CodexQuestions {
     })();
     return entry.starting;
   }
+  private clearIdle(e: Attached): void {
+    if (e.idleTimer) clearTimeout(e.idleTimer);
+    e.idleTimer = undefined;
+  }
+  private async requireLoaded(e: Attached): Promise<void> {
+    const loaded = await this.service.broker.codexNames?.loadedThreads();
+    if (e.closed || this.stopped) throw new Error('Codex question attach cancelled');
+    const fresh = getSession(this.service.broker.db, e.session);
+    if (!fresh || fresh.retired_at || fresh.state === 'offline' || fresh.agent_session_id !== e.native)
+      throw new Error('Codex question binding changed during attach');
+    const reason = loaded == null ? 'app-server-unavailable' : !loaded.has(e.native) ? 'thread-not-loaded' : null;
+    if (!reason) return;
+    if (this.service.codexWaiting.get(e.session) !== reason) {
+      this.service.codexWaiting.set(e.session, reason);
+      this.service.broker.log(`Codex question relay waiting: ${e.session}: ${reason}`);
+      this.service.broker.announce(e.session);
+    }
+    throw new WigwagError('unbound', `Codex question relay waiting: ${reason}; no thread/resume was sent`, {
+      kind: 'question-wait',
+    });
+  }
   private detach(e: Attached): void {
+    if (e.closed) return;
     e.closed = true;
-    e.app.close();
+    this.clearIdle(e);
     if (this.attached.get(e.session) === e) this.attached.delete(e.session);
+    if (!e.subscribed) {
+      e.app.close();
+      return;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('Codex question unsubscribe timed out')),
+        this.service.broker.config.questions.app_server_timeout_ms,
+      );
+      timer.unref();
+    });
+    const closing = Promise.race([
+      Promise.resolve().then(() => e.app.call('thread/unsubscribe', { threadId: e.native })),
+      timeout,
+    ])
+      .then(
+        () => {},
+        (err) => this.log(err),
+      )
+      .finally(() => {
+        clearTimeout(timer);
+        e.app.close();
+        this.closing.delete(closing);
+      });
+    this.closing.add(closing);
   }
   private async reconcile(): Promise<void> {
     if (this.stopped) return;
-    const active = this.service.list(null).assignments.filter((a) => !a.ended_at);
+    const all = this.service.list(null),
+      active = all.assignments.filter((a) => !a.ended_at);
+    const need = (s: SessionRow, e?: Attached) =>
+      s.state === 'online-busy' ||
+      !!e?.activeTurn ||
+      all.questions.some(
+        (q) =>
+          q.native_session_id === s.agent_session_id &&
+          ['pending', 'answered'].includes(q.state) &&
+          active.some((a) => a.id === q.assignment_id && a.worker_session_id === s.id),
+      );
     for (const e of this.attached.values()) {
-      if (e.recovering) continue; // Delegation preflight attaches before the assignment commits.
-      const a = active.find((a) => a.worker_session_id === e.session);
-      if (!a || !this.service.participants(a)) this.detach(e);
+      if (e.recovering) continue;
+      const a = active.find((a) => a.worker_session_id === e.session),
+        s = getSession(this.service.broker.db, e.session);
+      if (!a || !s || !this.service.participants(a) || s.agent_session_id !== e.native) {
+        this.service.codexWaiting.delete(e.session);
+        this.detach(e);
+        continue;
+      }
+      if (need(s, e)) this.clearIdle(e);
+      else if (!e.idleTimer) {
+        e.idleTimer = setTimeout(() => {
+          e.idleTimer = undefined;
+          this.detach(e);
+        }, this.idleGraceMs);
+        e.idleTimer.unref();
+      }
+    }
+    for (const id of this.service.codexWaiting.keys()) {
+      const s = getSession(this.service.broker.db, id);
+      if (!s || !active.some((a) => a.worker_session_id === id && this.service.participants(a)) || !need(s))
+        this.service.codexWaiting.delete(id);
     }
     for (const a of active) {
       const s = getSession(this.service.broker.db, a.worker_session_id);
-      if (s?.agent === 'codex' && s.state !== 'offline' && this.service.participants(a)) await this.attach(s);
+      if (
+        s?.agent === 'codex' &&
+        s.state !== 'offline' &&
+        this.service.participants(a) &&
+        need(s, this.attached.get(s.id))
+      )
+        await this.attach(s).catch((e) => this.log(e));
     }
   }
   private nativeRelay(e: Attached, itemId: unknown, turn: unknown, kind: Relay['kind']): Relay | undefined {
@@ -173,7 +289,12 @@ export class CodexQuestions {
     if (!p || p.threadId !== e.native) return;
     if (f.method === 'turn/started' && object(p.turn) && typeof p.turn.id === 'string') e.activeTurn = p.turn.id;
     if (f.method === 'turn/completed' && object(p.turn)) {
-      if (e.activeTurn === p.turn.id) e.activeTurn = undefined;
+      if (e.activeTurn === p.turn.id) {
+        e.activeTurn = undefined;
+        const s = getSession(this.service.broker.db, e.session);
+        if (s?.agent_session_id === e.native && s.state !== 'offline')
+          setState(this.service.broker.db, s.id, 'online-idle');
+      }
       for (const q of this.service.list(null).questions) {
         if (q.native_session_id !== e.native || q.turn_id !== p.turn.id) continue;
         if (q.kind === 'codex' || ['interrupted', 'failed'].includes(String(p.turn.status))) {
@@ -259,6 +380,7 @@ export class CodexQuestions {
       }
     }
     this.flush();
+    this.assignments();
   }
   private flush(): void {
     if (this.stopped) return;
@@ -300,12 +422,17 @@ export class CodexQuestions {
         }
       }
   }
-  stop(): void {
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
     clearInterval(this.retry);
     this.service.off('changed', this.changed);
     this.service.off('assignments', this.assignments);
     this.service.broker.bus.off('session.available', this.assignments);
+    if (this.service.turnCodex === this.turnHook) this.service.turnCodex = null;
+    this.service.codexWaiting.clear();
     for (const e of this.attached.values()) this.detach(e);
+    this.stopPromise = Promise.all([...this.closing]).then(() => {});
+    return this.stopPromise;
   }
 }

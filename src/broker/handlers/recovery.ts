@@ -15,6 +15,7 @@ export function installRecovery(broker: Broker): void {
       );
   });
   broker.handle('owner.recovery', (_c, { limit }) => ({
+    codex_question_waiting: [...broker.questions.codexWaiting].map(([session_id, reason]) => ({ session_id, reason })),
     flags: listLineage(db, { outcome: 'flagged', unresolved: true, limit }),
     duplicates: duplicateNativeSlots(db),
     codex_push_untrusted: listSessions(db)
