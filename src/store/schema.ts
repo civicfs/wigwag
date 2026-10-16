@@ -259,7 +259,7 @@ CREATE INDEX deliveries_recipient_state ON deliveries (recipient, state);
 CREATE INDEX deliveries_state ON deliveries (state);
 UPDATE sessions SET name_source = 'custom'
   WHERE name IS NOT NULL AND NOT (
-    (name GLOB 'claude-*' OR name GLOB 'codex-*')
+    (name GLOB 'claude-?*-????' OR name GLOB 'codex-?*-????')
     AND substr(name, -5, 1) = '-'
     AND substr(name, -4) GLOB '[a-z2-7][a-z2-7][a-z2-7][a-z2-7]'
   );

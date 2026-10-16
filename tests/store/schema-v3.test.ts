@@ -72,6 +72,26 @@ describe('schema v3', () => {
     expect(tables).toEqual(expect.arrayContaining(['session_lineage', 'session_renames']));
   });
 
+  it('keeps two-part role names custom and recognizes only full provisional shapes', () => {
+    const file = v2File();
+    const raw = new DatabaseSync(file);
+    const names = ['codex-main', 'claude-docs', 'codex-test', 'claude-bot2', 'codex-project-ab2c'];
+    const insert = raw.prepare(`INSERT INTO sessions
+      (id, name, agent, cwd, workspace, pid_chain, state, transport, created_at, last_seen_at)
+      VALUES (?, ?, 'codex', '/w', '/w', '[]', 'offline', 'codex-queue', 't', 't')`);
+    for (const name of names) insert.run(name, name);
+    raw.close();
+    const db = openDb(file);
+    expect(names.map((name) => getSession(db, name)?.name_source)).toEqual([
+      'custom',
+      'custom',
+      'custom',
+      'custom',
+      'provisional',
+    ]);
+    db.close();
+  });
+
   it('reopening a v3 database is a no-op and a fresh database starts at v3', () => {
     const file = v2File();
     openDb(file).close();
