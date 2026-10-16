@@ -32,6 +32,7 @@ const object = (x: unknown): x is Record<string, unknown> => !!x && typeof x ===
 /** Native requests are answered only after a matching allowlisted PreToolUse capture. */
 export class CodexQuestions {
   private readonly attached = new Map<string, Attached>();
+  private readonly pushing = new Map<string, number>();
   private stopped = false;
   private readonly retry: NodeJS.Timeout;
   private readonly closing = new Set<Promise<void>>();
@@ -54,6 +55,57 @@ export class CodexQuestions {
   private readonly assignments = () => {
     this.reconcile().catch((e) => this.log(e));
   };
+  /**
+   * Pin only this queue attempt; turn notifications/hooks and the existing idle grace take over afterwards.
+   * Pinned Codex rust-v0.162.1: queued UserInput starts a user turn, runs UserPromptSubmit, then model work:
+   * https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/ext/queue/src/service.rs#L438
+   * https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/session/turn.rs#L366
+   * https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/hook_runtime.rs#L677
+   * thread/resume also replays pending thread requests (excluding owner-only verification requests):
+   * https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server/src/request_processors/thread_lifecycle.rs#L830
+   */
+  private readonly reservePush = async (s: SessionRow): Promise<() => void> => {
+    if (this.stopped) throw new Error('Codex question adapter stopped');
+    const assignment = this.service.activeAssignment(s.id);
+    if (!assignment) return () => {};
+    if (!this.service.participants(assignment)) throw new Error('Codex question assignment is stale');
+    this.pushing.set(s.id, (this.pushing.get(s.id) ?? 0) + 1);
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.pushing.get(s.id) ?? 1) - 1;
+      if (remaining) this.pushing.set(s.id, remaining);
+      else this.pushing.delete(s.id);
+      if (!this.stopped) this.assignments();
+    };
+    try {
+      await this.attach(s);
+      if (this.stopped) throw new Error('Codex question adapter stopped');
+      const current = getSession(this.service.broker.db, s.id);
+      if (current?.state === 'offline' || current?.link === 'disconnected')
+        throw new WigwagError(
+          'unbound',
+          current.state === 'offline'
+            ? 'Codex session offline during question attachment'
+            : 'Codex MCP disconnected during question attachment',
+          { hold_reason: current.state === 'offline' ? 'offline' : 'disconnected' },
+        );
+      if (
+        !current ||
+        current.retired_at ||
+        current.agent_session_id !== s.agent_session_id ||
+        current.conn_generation !== s.conn_generation ||
+        this.service.activeAssignment(s.id)?.id !== assignment.id ||
+        !this.service.participants(assignment)
+      )
+        throw new Error('Codex question binding or assignment changed during queue attachment');
+      return release;
+    } catch (e) {
+      release();
+      throw e;
+    }
+  };
   constructor(
     readonly service: QuestionService,
     private readonly factory: () => AppConnection = () =>
@@ -66,6 +118,7 @@ export class CodexQuestions {
     this.idleGraceMs =
       opts.idleGraceMs ?? service.broker.config.questions.codex_idle_grace_ms ?? CODEX_QUESTION_IDLE_GRACE_MS;
     service.turnCodex = this.turnHook;
+    service.reserveCodexPush = this.reservePush;
     service.on('changed', this.changed);
     service.on('assignments', this.assignments);
     service.broker.bus.on('session.available', this.assignments);
@@ -227,6 +280,7 @@ export class CodexQuestions {
     const all = this.service.list(null),
       active = all.assignments.filter((a) => !a.ended_at);
     const need = (s: SessionRow, e?: Attached) =>
+      (this.pushing.get(s.id) ?? 0) > 0 ||
       s.state === 'online-busy' ||
       !!e?.activeTurn ||
       all.questions.some(
@@ -430,6 +484,8 @@ export class CodexQuestions {
     this.service.off('assignments', this.assignments);
     this.service.broker.bus.off('session.available', this.assignments);
     if (this.service.turnCodex === this.turnHook) this.service.turnCodex = null;
+    if (this.service.reserveCodexPush === this.reservePush) this.service.reserveCodexPush = null;
+    this.pushing.clear();
     this.service.codexWaiting.clear();
     for (const e of this.attached.values()) this.detach(e);
     this.stopPromise = Promise.all([...this.closing]).then(() => {});

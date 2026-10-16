@@ -39,13 +39,18 @@ currently spawn replacement agents or transfer tasks after a worker fails.
 ## Parent liveness limits in 0.3.0
 
 An idle Codex assignment no longer pins its thread. The question relay attaches at
-turn start, stays through outstanding questions, then unsubscribes after a short
+turn start and before queue pushes to an assigned worker, stays through queue
+execution and outstanding questions, then unsubscribes after a short
 grace (`questions.codex_idle_grace_ms`, optional, default 2000 ms). It never resumes
 an unloaded or unknown thread merely to maintain an assignment. Active native
 turns, pending questions and the daemon's unload delay still prevent instant
 TUI-close detection. Codex pushes require both a connected MCP link and fresh
 loaded-root evidence; disconnected or unloaded sessions hold mail for reattachment,
 a hook boundary or inbox. A TUI may close before those native signals change.
+An assigned push waits if relay attachment or the following fresh trust check
+fails; inbox delivery still works. A queued turn starting after idle grace uses
+its trusted prompt hook to reattach before model work. Captured questions remain
+visible through `questions` if the native subscription is unavailable.
 On macOS, parent identity uses `ps lstart` in UTC plus uid, with one-second
 resolution; PID reuse within the same second by the same uid cannot be distinguished.
 

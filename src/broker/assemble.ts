@@ -36,6 +36,11 @@ function installDelivery(broker: Broker, transports: TransportRegistry, now?: ()
     db: broker.db,
     now,
     codexPushTrust: (s) => broker.checkCodexPush(s, true),
+    codexQuestionPush: async (s) => {
+      if (!broker.questions.activeAssignment(s.id)) return () => {};
+      if (!broker.questions.reserveCodexPush) throw new Error('Codex native question relay is unavailable');
+      return broker.questions.reserveCodexPush(s);
+    },
     config: broker.config,
     transports,
     emitFeed: (type, payload) => broker.broadcastOwner(type, payload),

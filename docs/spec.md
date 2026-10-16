@@ -165,6 +165,13 @@ vitest, linted with biome.
   demand, after metadata proves the thread is loaded; unloaded/unknown demand waits and appears in whoami/recovery.
   Shutdown cancels timers and awaits bounded unsubscribe cleanup. Active turns, pending questions and the daemon's
   native unload delay still prevent instant TUI-close detection.
+  Before an assigned Codex queue attempt, reserve and await the question relay attachment, with metadata-loaded
+  preflight, then perform fresh push-trust verification after that I/O. Any failure holds without queuing; inbox
+  remains available. Release the reservation in finally on every path, including failure and shutdown. Busy-turn
+  notifications/hooks and pending relays retain normal demand; otherwise idle grace unsubscribes. In pinned Codex
+  0.162.1, queued user input runs UserPromptSubmit before model work, and thread/resume replays pending ordinary
+  server requests. A queued turn starting after grace reattaches through its trusted prompt hook. Failed native
+  reattachment logs a warning; captured questions stay in the relay store and `questions`.
   Codex pushes now require a connected MCP link plus fresh loaded-root evidence. Disconnected links hold as
   disconnected, unloaded/unknown identities hold as codex-untrusted, and non-live slots hold offline. Reattachment
   or a hook boundary can deliver the backlog. Native loaded/link evidence may outlast the TUI itself. macOS identities

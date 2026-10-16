@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Attach and reserve the native question relay before an assigned Codex queue
+  push, then recheck fresh push trust after attachment. Fail closed into a visible
+  hold while retaining inbox delivery. Release reservations on failure/shutdown;
+  queued turns and questions retain the existing turn and idle-grace lifecycle.
+
 - Warn on every doctor inspection that requires ordinary read-only SQLite access,
   including existing WAL/SHM paths: bookkeeping files may change, database content does not.
 

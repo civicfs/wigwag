@@ -35,6 +35,7 @@ export interface EngineDeps {
   log: (line: string) => void;
   now?: () => number;
   codexPushTrust?: (session: SessionRow) => Promise<string | null>;
+  codexQuestionPush?: (session: SessionRow) => Promise<() => void>;
 }
 
 type Key = { message_id: string; recipient: string };
@@ -353,6 +354,29 @@ export class DeliveryEngine {
   }
 
   private async push(session: SessionRow, wake: Key[]): Promise<void> {
+    if (this.stopped) return;
+    let release: (() => void) | undefined;
+    try {
+      try {
+        if (session.agent === 'codex') release = await this.d.codexQuestionPush?.(session);
+      } catch (e) {
+        if (this.stopped || this.drained) return;
+        const detail = `Codex push held: question relay preflight failed: ${e instanceof Error ? e.message : String(e)}; inbox delivery works`;
+        const reason = (e as { data?: { hold_reason?: string } }).data?.hold_reason;
+        const hold = reason === 'offline' || reason === 'disconnected' ? reason : 'codex-untrusted';
+        this.d.log(detail);
+        for (const k of wake)
+          this.moveIf(k, ['pending', 'held', 'failed'], 'held', { hold_reason: hold, last_error: detail });
+        return;
+      }
+      // This fresh trust check runs after native attachment I/O; its proof belongs only to the ensuing push.
+      await this.pushPrepared(session, wake);
+    } finally {
+      release?.();
+    }
+  }
+
+  private async pushPrepared(session: SessionRow, wake: Key[]): Promise<void> {
     if (this.stopped) return;
     let codexPushProof: CodexPushProof | undefined;
     if (session.agent === 'codex' && this.d.codexPushTrust) {
