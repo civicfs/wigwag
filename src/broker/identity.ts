@@ -165,7 +165,7 @@ export function installIdentity(broker: Broker): void {
     self: SessionRow,
     native: string,
     evidence: Record<string, unknown>,
-    gate: { verified: boolean; reason: string },
+    gate: { verified: boolean; reason: string; legacyUpgrade?: boolean },
   ): SessionRow | null => {
     if (isLegacySession(db, self.id)) return null;
     const base = { agent: self.agent, native_id: native, workspace: self.workspace, session_id: self.id };
@@ -184,6 +184,7 @@ export function installIdentity(broker: Broker): void {
       native,
       workspace: self.workspace,
       exceptId: self.id,
+      includeLegacy: self.agent === 'claude' && gate.verified && gate.legacyUpgrade === true,
     });
     if (!candidates.length) return null;
     const flag = (reason: string): null => {
@@ -210,6 +211,7 @@ export function installIdentity(broker: Broker): void {
       native,
       state: self.state,
       evidence,
+      ...(gate.legacyUpgrade && self.agent === 'claude' ? { legacyUpgradeHello: conn.hello ?? undefined } : {}),
     });
     if (!r.ok) return flag(r.reason);
     if (r.canonical.name) broker.engine?.transferForwards(self.id, r.canonical.id, r.canonical.name);
@@ -222,10 +224,9 @@ export function installIdentity(broker: Broker): void {
       const explicitName = choice.ok
         ? { requested: r.fromName, applied: true }
         : { requested: r.fromName, applied: false, reason: choice.reason, holder_session_id: choice.holder.id };
-      db.prepare('UPDATE session_lineage SET evidence_json=? WHERE id=?').run(
-        JSON.stringify({ ...evidence, explicit_name: explicitName }),
-        r.lineageId,
-      );
+      db.prepare(
+        "UPDATE session_lineage SET evidence_json=json_set(evidence_json,'$.explicit_name',json(?)) WHERE id=?",
+      ).run(JSON.stringify(explicitName), r.lineageId);
       if (choice.ok) renamed(canonical, 'recovery');
       canonical = getSession(db, canonical.id) as SessionRow;
     }
@@ -683,7 +684,7 @@ export function installIdentity(broker: Broker): void {
             s,
             p.agent_session_id,
             { hook: `claude ${p.event}`, source: p.source ?? null },
-            { verified: true, reason: 'unverified' },
+            { verified: true, reason: 'unverified', legacyUpgrade: true },
           );
       if (recovered) s = recovered;
       else bindAgentSession(db, s.id, p.agent_session_id);

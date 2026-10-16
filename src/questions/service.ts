@@ -240,6 +240,7 @@ export class QuestionService extends EventEmitter {
     }
     let m!: MessageRow;
     const q = tx(db, () => {
+      if (input.kind === 'claude') this.cancelPreservedLegacyRelays(workerId, a.id, input);
       const id = newId('req');
       m = this.message(
         pair.worker,
@@ -268,6 +269,35 @@ export class QuestionService extends EventEmitter {
     this.announce(m);
     this.emit('changed');
     return q;
+  }
+  /** A new Claude invocation retires only the exact relays carried across an unverified legacy upgrade. */
+  private cancelPreservedLegacyRelays(workerId: string, assignmentId: string, input: Capture): void {
+    const db = this.broker.db;
+    const rows = db
+      .prepare(`SELECT id,evidence_json FROM session_lineage
+      WHERE canonical_session_id=? AND outcome='adopted'
+        AND json_type(evidence_json,'$.legacy_upgrade_relay_ids')='array'`)
+      .all(workerId) as Array<{ id: number; evidence_json: string }>;
+    const cancel =
+      db.prepare(`UPDATE question_relays SET state='cancelled',error='Legacy-upgrade question superseded by a new native invocation',updated_at=?
+      WHERE id=? AND assignment_id=? AND native_session_id=? AND kind='claude'
+        AND tool_use_id<>? AND state IN ('pending','answered')`);
+    for (const row of rows) {
+      const evidence = JSON.parse(row.evidence_json) as Record<string, unknown>;
+      const preserved = evidence.legacy_upgrade_relay_ids as unknown[];
+      const cancelled = preserved.filter(
+        (id): id is string =>
+          typeof id === 'string' &&
+          Number(cancel.run(nowIso(), id, assignmentId, input.native_session_id, input.tool_use_id).changes) > 0,
+      );
+      if (!cancelled.length) continue;
+      const prior = Array.isArray(evidence.legacy_upgrade_cancellations) ? evidence.legacy_upgrade_cancellations : [];
+      evidence.legacy_upgrade_cancellations = [
+        ...prior,
+        { tool_use_id: input.tool_use_id, count: cancelled.length, relay_ids: cancelled },
+      ];
+      db.prepare('UPDATE session_lineage SET evidence_json=? WHERE id=?').run(JSON.stringify(evidence), row.id);
+    }
   }
   get(id: string): Relay | undefined {
     return relay(this.broker.db.prepare('SELECT * FROM question_relays WHERE id=?').get(id));

@@ -11,7 +11,7 @@ export function isLegacySession(db: Db, id: string): boolean {
   return r?.reason === 'legacy-client';
 }
 
-/** Only hello calls this; a stamped client can clear the marker only after a validated explicit reattach. */
+/** Only a validated hello or stamped Claude hook handoff can upgrade a legacy slot. */
 export function recordClientCompatibility(db: Db, s: SessionRow, hello: Hello, legacy: boolean): void {
   const previous = isLegacySession(db, s.id);
   if (previous !== legacy)

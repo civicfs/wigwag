@@ -1,4 +1,5 @@
-import { isLegacySession } from './compatibility.js';
+import { HANDSHAKE_VERSIONS, type Hello } from '../protocol/rpc.js';
+import { isLegacySession, recordClientCompatibility } from './compatibility.js';
 import { type Db, nowIso, tx } from './db.js';
 import { type Agent, getSession, type NameSource, type SessionRow, type SessionState } from './sessions.js';
 
@@ -101,7 +102,7 @@ export const liveNativeHolders = (db: Db, agent: Agent, native: string, exceptId
  */
 export const recoveryCandidates = (
   db: Db,
-  q: { agent: Agent; native: string; workspace: string; exceptId: string },
+  q: { agent: Agent; native: string; workspace: string; exceptId: string; includeLegacy?: boolean },
 ): SessionRow[] =>
   sessionsByIds(
     db,
@@ -123,7 +124,7 @@ export const recoveryCandidates = (
          ORDER BY s.last_seen_at DESC`,
       )
       .all(q.agent, q.native, q.workspace, q.exceptId),
-  ).filter((s) => !isLegacySession(db, s.id));
+  ).filter((s) => q.includeLegacy || !isLegacySession(db, s.id));
 
 export type AdoptResult =
   | {
@@ -153,14 +154,29 @@ export function adoptCanonical(
     native: string;
     state: SessionState;
     evidence: Record<string, unknown>;
+    legacyUpgradeHello?: Hello;
   },
 ): AdoptResult {
   return tx(db, (): AdoptResult => {
     const p = getSession(db, x.provisionalId);
     const c = getSession(db, x.canonicalId);
+    const hello = x.legacyUpgradeHello;
+    const legacyUpgrade = !!(
+      c &&
+      p &&
+      isLegacySession(db, c.id) &&
+      !isLegacySession(db, p.id) &&
+      c.agent === 'claude' &&
+      p.agent === 'claude' &&
+      hello?.role === 'mcp' &&
+      hello.agent === 'claude' &&
+      hello.protocol === HANDSHAKE_VERSIONS.protocol &&
+      hello.schema_version === HANDSHAKE_VERSIONS.schema_version &&
+      typeof hello.version === 'string'
+    );
     if (
       !c ||
-      isLegacySession(db, c.id) ||
+      (isLegacySession(db, c.id) && !legacyUpgrade) ||
       (c.state !== 'offline' && c.link !== 'disconnected') ||
       c.retired_at ||
       c.agent_session_id !== x.native ||
@@ -225,21 +241,21 @@ export function adoptCanonical(
       c.agent_start === p.agent_start &&
       c.parent_state === 'live' &&
       p.parent_state === 'live';
-    const stale = sameLiveClaudeParent
-      ? []
-      : (
-          db
-            .prepare(
-              `SELECT q.id FROM question_relays q JOIN assignments a ON a.id = q.assignment_id
+    const outstanding = (
+      db
+        .prepare(
+          `SELECT q.id FROM question_relays q JOIN assignments a ON a.id = q.assignment_id
            WHERE a.ended_at IS NULL AND a.worker_session_id = ? AND q.native_session_id = ?
              AND q.kind IN ('claude', 'codex') AND q.state IN ('pending', 'answered') ORDER BY q.id`,
-            )
-            .all(c.id, x.native) as Array<{ id: string }>
-        ).map((r) => r.id);
+        )
+        .all(c.id, x.native) as Array<{ id: string }>
+    ).map((r) => r.id);
+    const stale = sameLiveClaudeParent || legacyUpgrade ? [] : outstanding;
     const cancel = db.prepare(
       "UPDATE question_relays SET state = 'cancelled', error = ?, updated_at = ? WHERE id = ? AND state IN ('pending', 'answered')",
     );
     for (const id of stale) cancel.run('Native session resumed; this question is no longer waiting', at, id);
+    if (legacyUpgrade && hello) recordClientCompatibility(db, getSession(db, c.id) as SessionRow, hello, false);
     resolveLineage(db, [p.id, c.id]);
     const lineageId = recordLineage(db, {
       agent: c.agent,
@@ -249,7 +265,9 @@ export function adoptCanonical(
       canonical_session_id: c.id,
       cause: 'resume',
       outcome: 'adopted',
-      evidence: x.evidence,
+      evidence: legacyUpgrade
+        ? { ...x.evidence, legacy_upgrade_relays_preserved: outstanding.length, legacy_upgrade_relay_ids: outstanding }
+        : x.evidence,
       generation,
     });
     return {
