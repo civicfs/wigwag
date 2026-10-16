@@ -177,7 +177,12 @@ vitest, linted with biome.
   an older broker or update/reload advice for an older client. Missing stamps identify a legacy peer. Compatible
   whoami/doctor calls show the broker's recent rejected-peer warnings. Lifecycle and QuestionReady hooks exit zero
   without context/decisions on skew; supervised question PreToolUse retains its existing denial, including the
-  actionable compatibility error, to prevent silently asking the human directly. Doctor probes without autospawn. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
+  actionable compatibility error, to prevent silently asking the human directly. Doctor probes without autospawn and opens an existing database read-only without migrations. Clean closed databases use immutable URI mode; existing WAL/shm uses ordinary read-only
+  access so committed WAL content is visible. Unsupported URI support falls back to ordinary read-only access with
+  a diagnostic. SQLite bookkeeping sidecars may be created, but database content is never changed or copied. It reports schema,
+  pre-v3/v4 backup presence/modes, disconnected/unknown live slots, missing Claude process identities, unresolved
+  recovery flags, duplicate group/slot counts and Codex push-untrusted reasons. State findings and recent rejected-peer
+  history are warnings; an actual incompatible broker/client handshake is an error. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
   verification; that path exposes no general RPC client.
 - **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
   `session.bind` tool path for Claude. Exactly one eligible offline or MCP-disconnected, unretired slot of the same

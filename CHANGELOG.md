@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make doctor read-only: report schema/backup permissions, liveness/identity gaps,
+  recovery flags/duplicates, Codex push holds and compatibility without starting
+  a broker or migrating local state.
+
 - Reject broker/client protocol, schema and package skew at hello with restart or
   update/reload advice; surface recent warnings in whoami/doctor. Lifecycle hooks
   fail open; supervised native question hooks preserve their explicit denial.

@@ -146,7 +146,11 @@ Hello checks the client and broker protocol, schema and package versions before
 registering a session. A stale broker reports `wigwag broker stop` then retry; a
 stale client reports update/reload advice. Stop/restart retain a read-only
 hello/ping fallback to verify the old broker PID; normal RPCs stay gated. `whoami` and `doctor` expose recent
-compatibility warnings. Lifecycle/QuestionReady hooks exit zero on skew. A
+compatibility warnings. Doctor reads existing state without starting a broker or
+migrating the database; clean closed files use immutable URI reads. Where normal
+read-only SQLite access is required, SQLite may create bookkeeping sidecars while
+database contents remain unchanged; it reports schema/backup modes, disconnected and unknown
+parents, missing Claude identities, recovery counts and Codex push holds. Lifecycle/QuestionReady hooks exit zero on skew. A
 supervised question PreToolUse hook retains its denial with the actionable error,
 so it cannot silently fall back to a direct human prompt.
 
