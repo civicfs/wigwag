@@ -66,6 +66,19 @@ confirmed. A confirmed rollback removes only the backup created by that attempt.
 A pre-existing backup is never overwritten or removed by migration and blocks
 an upgrade until the operator inspects and moves or removes it. Include retained
 migration backups in your storage and deletion procedures.
+If a crash leaves a backup before its migration commits, the next required
+migration/start refuses that pre-existing file until the operator inspects and
+moves or removes it. A retained snapshot of a completed migration does not block
+normal startup. Never use a 0.2 CLI or broker on an upgraded v3/v4 database:
+those binaries do not check for a newer schema. A downgrade needs a separate
+compatible database and separate reconciliation of later messages or assignments.
+
+Running 0.2 MCP sessions keep messaging in degraded mode after a broker upgrade.
+After plugin reload, a stamped Claude MCP and trusted hook may reclaim the unique
+eligible legacy slot for the same native conversation/workspace, keeping its
+name, held mail, assignments and pending/answered relays. The compatibility and
+handoff evidence remains in local lineage history; ambiguous slots keep their
+work for operator inspection rather than silently merging it.
 
 Host-level disk or backup encryption is a separate operator control and does not
 protect against a process already running with your OS-user access.

@@ -200,8 +200,14 @@ vitest, linted with biome.
   clients are accepted in degraded mode, shown in whoami/doctor/TUI as `legacy client 0.2: reload plugin for new features`.
   A legacy MCP reconnect preserves a slot only with its explicit resume_session_id, matching agent/workspace and an
   unretired offline/disconnected slot; it never follows retirement links or takes over by parent identity. Its compatibility
-  observation persists in session_lineage without a schema change; only a genuinely stamped valid reconnect to that same
-  slot clears it. Legacy clients cannot capture parent identity, recover/adopt either side of a slot handoff or establish
+  observation persists in session_lineage without a schema change. A genuinely stamped valid reconnect to that same
+  slot clears it. After plugin reload, a stamped Claude MCP plus a stamped trusted hook may also adopt exactly one
+  eligible legacy slot for the same native ID/workspace through the transactional recovery gates, retaining name,
+  mail, assignments and pending/answered relays and recording stamped-client. Legacy clients themselves never
+  adopt; a still-connected 0.2 MCP stays degraded. Ambiguity preserves the old slots and flags the new one. Relays
+  preserved by this legacy-upgrade exception still follow assignment-release cancellation and are also cancelled
+  by a later captured Claude question with a different tool_use_id; general parallel captures and G5 are unchanged.
+  Legacy clients cannot capture parent identity, recover/adopt either side of a slot handoff or establish
   Codex push trust; liveness stays unverified. A missing package stamp stays degraded even with a matching schema stamp.
   New clients still reject unstamped old brokers with restart advice. The question-hook fail-open/deny distinction remains.
   Doctor probes without autospawn and opens an existing database read-only without migrations. Clean closed databases use immutable URI mode; existing WAL/shm uses ordinary read-only
@@ -212,6 +218,13 @@ vitest, linted with biome.
   recovery flags, duplicate group/slot counts and Codex push-untrusted reasons. State findings and recent rejected-peer
   history are warnings; an actual incompatible broker/client handshake is an error. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
   verification; that path exposes no general RPC client.
+  The old 0.2 CLI/broker has no newer-schema rejection and can open an upgraded v3/v4 file without complaint.
+  Never run those binaries against upgraded state.db; the new protocol checks do not protect old direct file opens.
+  Downgrading requires a separate compatible database, with later state reconciled separately. Successful upgrades
+  retain mode-0600 pre-v3/pre-v4 snapshots. A crash after publishing a backup but before committing that migration
+  leaves a pre-existing file that blocks the next migration/start until the operator inspects and moves/removes it.
+  Confirmed rollback removes only this attempt's redundant backup; unknown outcomes preserve it. Completed
+  migrations skip their old snapshots at startup; a retained successful backup alone does not block startup.
 - **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
   `session.bind` tool path for Claude. A raw Claude internal bind may bind only its own slot without recovery or clearing another slot's native ID;
   any other non-offline holder, including a disconnected live slot, refuses that bind.
@@ -263,12 +276,19 @@ vitest, linted with biome.
   not cryptographic origin proof; real hook metadata remains unverified until throwaway-session acceptance.
   A future use of concrete hook metadata for recovery is explicitly deferred. V4 includes nullable
   deliveries.forward_to (destination session ID) for durable in-flight rename ownership.
+  `unverified-bind` is the push-hold reason for legacy/pre-guard/unsupported-host bindings. who/whoami/doctor show
+  "reload the Wigwag plugin / restart this Codex session to enable push; inbox delivery works". Reload the plugin or
+  restart the session; unsupported hosts additionally require verification under the documented host allow-list.
+  `unverified-root` is a flagged recovery refusal when a trusted concrete-ID provider exists but thread/read does
+  not verify a root; there is no adoption. The operator should inspect wigwag recovery and native thread metadata,
+  retaining inbox delivery. This path does not enable shipped Codex recovery: its production provider still returns
+  null, with capability reason codex-thread-id-untrusted.
   `whoami.capabilities` reports recovery unavailable with that reason. `wigwag recovery` reports duplicate slot
   names, name sources, times, state/link, active assignment IDs/roles, held/pending counts and total undelivered counts.
   `owner.retire_slot` refuses an active assignment or any of the four undelivered mail states unless `force:true`
   (`wigwag recovery retire <id> --force`). Related flags resolve on retirement or adoption; resolving a display flag
-  does not erase its history or revive an empty shell. Changed-native-ID continuation and assignment rebinding remain
-  manual in 0.3.0.
+  does not erase its history or revive an empty shell. Moving work or rebinding an assignment between distinct
+  native IDs remains manual in 0.3.0, including after an in-process Claude conversation switch.
 - **Parent liveness (W8, 0.3.0).** `sessions.link` (`connected | disconnected`) is separate from `parent_state`
   (`live | gone | unknown`). A Claude hook bind records the agent pid and its start identity (Linux: boot id, start
   ticks, uid; macOS: UTC `ps lstart` to the second, uid). On MCP disconnect and at broker start the parent is verified:

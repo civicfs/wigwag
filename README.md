@@ -197,8 +197,12 @@ whoami, doctor and the TUI show `legacy client 0.2: reload plugin for new featur
 Only a valid explicit remembered session ID preserves its name, mail and assignments
 on reconnect. Legacy slots have no parent identity or Codex push trust and cannot
 recover/adopt or take over another slot by parent identity. Their durable degraded
-marker clears only on a stamped reconnect to the same eligible slot, agent and
-workspace. A new client against an unstamped old broker still requires a restart.
+marker clears on a valid stamped reconnect to that slot, or after plugin reload
+when a stamped Claude MCP and trusted hook reclaim the unique eligible legacy
+slot for the same native conversation and workspace. That handoff preserves its
+name, mail, assignments and pending/answered relays. An MCP still running 0.2
+stays degraded; ambiguous candidates are flagged and keep their work. A new
+client against an unstamped old broker still requires a restart.
 Stop/restart retain a read-only
 hello/ping fallback to verify the old broker PID; normal RPCs stay gated. `whoami` and `doctor` expose recent
 compatibility warnings. Doctor reads existing state without starting a broker or
@@ -209,6 +213,30 @@ database contents remain unchanged; it reports schema/backup modes, disconnected
 parents, missing Claude identities, recovery counts and Codex push holds. Lifecycle/QuestionReady hooks exit zero on skew. A
 supervised question PreToolUse hook retains its denial with the actionable error,
 so it cannot silently fall back to a direct human prompt.
+
+After upgrading `state.db` to schema v3/v4, **never run a 0.2 CLI or broker against
+that database**. The 0.2 binaries do not reject newer schemas; the new hello checks
+cannot protect an old program that opens the file directly. Keep the updated CLI
+and broker together. A downgrade requires a separately preserved compatible
+database and loses any later state unless separately reconciled.
+
+Successful migrations retain mode-0600 `state.db.pre-v3.bak` and
+`state.db.pre-v4.bak` snapshots. If a crash leaves a snapshot before its migration
+commits, the next attempt refuses to overwrite it and does not start the broker.
+Use the updated doctor to check schema/backup permissions, inspect the backup
+separately, then have the operator move or remove the exact blocking backup
+before retrying. Migration
+never removes a pre-existing backup automatically. A retained backup from an
+already-completed migration does not block normal startup.
+
+`unverified-bind` holds Codex push and shows "reload the Wigwag plugin / restart
+this Codex session to enable push; inbox delivery works". Reload legacy/pre-guard
+sessions; for an unsupported host version, also check the verified-version
+instructions above. `unverified-root` is a recovery refusal in lineage/recovery
+diagnostics: metadata did not prove a root, so no adoption occurs. Inspect
+`wigwag recovery` and native thread metadata while retaining inbox delivery.
+This latter path requires a trusted concrete-ID provider; shipped 0.3.0 keeps
+automatic Codex recovery unavailable (`codex-thread-id-untrusted`).
 
 ## Delegate work and answer questions
 

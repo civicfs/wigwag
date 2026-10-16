@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Document the upgrade boundary: never open upgraded v3/v4 state with the 0.2
+  CLI/broker, which lacks newer-schema checks. Crash-left migration snapshots
+  block another migration until operator inspection/removal; completed-upgrade
+  snapshots remain safely retained. A stamped Claude plugin reload can reclaim
+  a unique legacy slot with its name, mail, assignments and live relays; still-old
+  MCPs remain degraded. Explain unverified-bind push holds and unverified-root
+  recovery refusals with the corresponding reload/inspection steps.
+
 - Attach and reserve the native question relay before an assigned Codex queue
   push, then recheck fresh push trust after attachment. Fail closed into a visible
   hold while retaining inbox delivery. Release reservations on failure/shutdown;
@@ -39,7 +47,8 @@
   incompatibility rejects a handshake. Preserve unstamped 0.2 clients in degraded
   mode, including explicit remembered-slot reconnects across broker restarts.
   Persist and display legacy status; disable identity, recovery/adoption and
-  Codex push trust until a valid stamped reconnect upgrades that same slot.
+  Codex push trust until a valid stamped reconnect or trusted stamped Claude
+  hook recovery after plugin reload upgrades that same slot.
 
 - Hold Codex pushes while its MCP link is disconnected, including a disconnect
   during metadata I/O. Reuse disconnected holds, retain throttle precedence and
@@ -72,7 +81,7 @@
   an authoritative app-server answer.
 - Forward undelivered mail and the session's own active subscriptions and mutes
   on every rename; notify live sessions in scope and owners. Deferred forwarding
-  stops if another session claims the old name.
+  retains original session ownership if another session claims the old name.
 - Reclaim eligible slots through Claude hook binds, preserving explicit names and
   same-parent polling questions. Codex automatic recovery is unavailable in 0.3.0
   until a trusted concrete thread ID exists; root metadata alone is insufficient.
