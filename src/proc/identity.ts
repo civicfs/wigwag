@@ -11,12 +11,12 @@ export interface ProcessIdentity {
 /** pid → start identity for the pids that exist now. A missing pid is gone; null means the probe itself failed. */
 export type ProcessProbe = (pids: number[]) => Map<number, string> | null;
 
-/** `ps -o pid=,uid=,lstart=` lines (LC_ALL=C) as `darwin:<lstart>:<uid>`. */
+/** `ps -o pid=,uid=,lstart=` lines (TZ=UTC, LC_ALL=C) as `darwin:UTC:<lstart>:<uid>`. */
 export function parseDarwinPs(stdout: string): Map<number, string> {
   const out = new Map<number, string>();
   for (const line of stdout.split('\n')) {
     const m = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line);
-    if (m) out.set(Number(m[1]), `darwin:${m[3].replace(/\s+/g, ' ')}:${m[2]}`);
+    if (m) out.set(Number(m[1]), `darwin:UTC:${m[3].replace(/\s+/g, ' ')}:${m[2]}`);
   }
   return out;
 }
@@ -31,7 +31,7 @@ export const darwinProbe: ProcessProbe = (pids) => {
     return parseDarwinPs(
       execFileSync('ps', ['-o', 'pid=,uid=,lstart=', '-p', pids.join(',')], {
         encoding: 'utf8',
-        env: { ...process.env, LC_ALL: 'C' },
+        env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 5000,
       }),

@@ -25,11 +25,11 @@ const fakeProbe =
   };
 
 describe('process identity (W8)', () => {
-  it('parses macOS ps output into darwin:<lstart>:<uid>', () => {
+  it('parses macOS ps output into darwin:UTC:<lstart>:<uid>', () => {
     expect(parseDarwinPs('  4242   501 Thu Oct 15 08:47:53 2026\n   77     0 Mon Oct  5 01:02:03 2026\n')).toEqual(
       new Map([
-        [4242, 'darwin:Thu Oct 15 08:47:53 2026:501'],
-        [77, 'darwin:Mon Oct 5 01:02:03 2026:0'],
+        [4242, 'darwin:UTC:Thu Oct 15 08:47:53 2026:501'],
+        [77, 'darwin:UTC:Mon Oct 5 01:02:03 2026:0'],
       ]),
     );
   });
