@@ -142,6 +142,32 @@ export class DeliveryEngine {
     return deliveriesOfMessage(this.d.db, k.message_id).find((x) => x.recipient === k.recipient)?.state;
   }
 
+  /** A physical delivery key may still carry its former name while a durable handoff is pending. */
+  private belongsTo(session: SessionRow, k: Key): boolean {
+    const row = deliveriesOfMessage(this.d.db, k.message_id).find((x) => x.recipient === k.recipient);
+    return (
+      !!row && (row.forward_to ? row.forward_to === session.id : holderOf(this.d.db, row.recipient)?.id === session.id)
+    );
+  }
+
+  /** Native I/O cannot preserve a captured name/generation. Re-plan only this slot's original wake items. */
+  private currentPush(session: SessionRow, wake: Key[]): SessionRow | undefined {
+    const current = getSession(this.d.db, session.id);
+    if (!current || current.retired_at || current.agent_session_id !== session.agent_session_id) return;
+    if (current.name === session.name && current.conn_generation === session.conn_generation) return current;
+    if (current.name) {
+      const ids = new Set(wake.map((k) => k.message_id));
+      for (const row of deliveriesFor(this.d.db, current.name, ['pending', 'held', 'failed'])) {
+        if (!ids.has(row.message_id) || this.busy(row) || !this.belongsTo(current, row)) continue;
+        // Do not await a dispatch queued behind this very push under the same name.
+        this.dispatch(row.message_id, row.recipient).catch((e) =>
+          this.d.log(`dispatch after push identity change failed: ${(e as Error).message}`),
+        );
+      }
+    }
+    return;
+  }
+
   private items(keys: Key[]): RenderItem[] {
     return keys.map((k) => {
       const msg = getMessage(this.d.db, k.message_id);
@@ -361,12 +387,14 @@ export class DeliveryEngine {
         if (session.agent === 'codex') release = await this.d.codexQuestionPush?.(session);
       } catch (e) {
         if (this.stopped || this.drained) return;
+        if (!this.currentPush(session, wake)) return;
         const detail = `Codex push held: question relay preflight failed: ${e instanceof Error ? e.message : String(e)}; inbox delivery works`;
         const reason = (e as { data?: { hold_reason?: string } }).data?.hold_reason;
         const hold = reason === 'offline' || reason === 'disconnected' ? reason : 'codex-untrusted';
         this.d.log(detail);
         for (const k of wake)
-          this.moveIf(k, ['pending', 'held', 'failed'], 'held', { hold_reason: hold, last_error: detail });
+          if (this.belongsTo(session, k))
+            this.moveIf(k, ['pending', 'held', 'failed'], 'held', { hold_reason: hold, last_error: detail });
         return;
       }
       // This fresh trust check runs after native attachment I/O; its proof belongs only to the ensuing push.
@@ -378,16 +406,23 @@ export class DeliveryEngine {
 
   private async pushPrepared(session: SessionRow, wake: Key[]): Promise<void> {
     if (this.stopped) return;
+    const before = this.currentPush(session, wake);
+    if (!before) return;
+    session = before;
     let codexPushProof: CodexPushProof | undefined;
     if (session.agent === 'codex' && this.d.codexPushTrust) {
       const reason = await this.d.codexPushTrust(session);
       if (this.stopped) return;
+      const current = this.currentPush(session, wake);
+      if (!current) return;
+      session = current;
       if (reason) {
         for (const k of wake)
-          this.moveIf(k, ['pending', 'held', 'failed'], 'held', {
-            hold_reason: codexPushHold(reason),
-            last_error: codexPushLabel(reason),
-          });
+          if (this.belongsTo(session, k))
+            this.moveIf(k, ['pending', 'held', 'failed'], 'held', {
+              hold_reason: codexPushHold(reason),
+              last_error: codexPushLabel(reason),
+            });
         return;
       }
       codexPushProof = {
@@ -409,7 +444,11 @@ export class DeliveryEngine {
         : [];
     // Spec §17: out-of-scope keys (including Codex ride-along items) become stuck here and are not pushed.
     const allowedKeys = [...wake, ...ride].filter(
-      (k) => ['pending', 'held', 'failed'].includes(this.stateOf(k) ?? '') && this.allowed(k),
+      (k) =>
+        !this.busy(k) &&
+        this.belongsTo(session, k) &&
+        ['pending', 'held', 'failed'].includes(this.stateOf(k) ?? '') &&
+        this.allowed(k),
     );
     // Final review I-11: an item this transport can never carry (over the codex argv budget) is stuck at once, with a
     // notice, instead of being retried max_attempts times; it also never blocks the wake push it would ride along.

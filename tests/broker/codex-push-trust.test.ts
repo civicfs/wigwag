@@ -42,7 +42,8 @@ afterEach(async () => {
 async function boot() {
   const home = tmpHome(),
     app = new FakeApp(),
-    pushes: string[] = [];
+    pushes: string[] = [],
+    pushedMail: Array<{ session: string; messages: string[] }> = [];
   const codexNames = new CodexNames({ factory: () => app, indexPath: join(home, 'missing') });
   const broker = await startBroker(home, {
     codexNames,
@@ -50,8 +51,9 @@ async function boot() {
       claude: { kind: 'claude-channel', async push() {} },
       codex: {
         kind: 'codex-queue',
-        async push(s) {
+        async push(s, items) {
           pushes.push(s.agent_session_id ?? '');
+          pushedMail.push({ session: s.id, messages: items.map((x) => x.msg.id) });
         },
       },
     },
@@ -69,9 +71,75 @@ async function boot() {
       priority: 'urgent',
       attach_paths: [],
     });
-  return { home, app, broker, pushes, o, c, send };
+  return { home, app, broker, pushes, pushedMail, o, c, send };
 }
 describe('Codex push trust at bind, probe and dispatch', () => {
+  it('never collects a replacement holder’s low mail after a rename during metadata preflight', async () => {
+    const { home, app, broker, pushedMail, o, c } = await boot();
+    app.loaded.push('U');
+    app.threads.U = { id: 'U', sessionId: 'U', parentThreadId: null, source: 'cli' };
+    await c.client.call('session.bind', { agent_session_id: 'T' });
+    await c.client.call('session.register', { name: 'alpha' });
+    const other = await mcpClient(home, { agent: 'codex', requested_name: 'other-worker' });
+    cleanup.push(() => other.client.close());
+    await other.client.call('session.bind', { agent_session_id: 'U' });
+    const privateMail = await o.call<{ id: string }>('owner.send', {
+      to: 'other-worker',
+      subject: 'private',
+      body: 'U-only',
+      priority: 'low',
+      attach_paths: [],
+    });
+    await until(() => deliveriesOfMessage(broker.db, privateMail.id)[0]?.state === 'held');
+    expect(deliveriesOfMessage(broker.db, privateMail.id)[0]?.hold_reason).toBe('low');
+    let enter = () => {},
+      release = () => {};
+    const entered = new Promise<void>((r) => {
+      enter = r;
+    });
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    app.pauseList = { entered: enter, release: gate };
+    const wake = await o.call<{ id: string }>('owner.send', {
+      to: 'alpha',
+      subject: 'wake',
+      body: 'T-only',
+      priority: 'urgent',
+      attach_paths: [],
+    });
+    try {
+      await entered;
+      await c.client.call('session.register', { name: 'beta' });
+      await other.client.call('session.register', { name: 'alpha' });
+    } finally {
+      release();
+    }
+    // A ping arrives after the released preflight's continuation, so its final selection has run.
+    await c.client.call('sys.ping');
+    await until(() => deliveriesOfMessage(broker.db, wake.id)[0]?.state === 'read');
+    expect(pushedMail.filter((x) => x.session === c.welcome.session_id).flatMap((x) => x.messages)).not.toContain(
+      privateMail.id,
+    );
+    expect(deliveriesOfMessage(broker.db, privateMail.id)[0]).toMatchObject({
+      recipient: 'alpha',
+      state: 'held',
+      hold_reason: 'low',
+    });
+    expect(JSON.stringify(await c.client.call('msg.inbox'))).not.toContain(privateMail.id);
+    const otherWake = await o.call<{ id: string }>('owner.send', {
+      to: 'alpha',
+      subject: 'own wake',
+      body: 'U',
+      priority: 'urgent',
+      attach_paths: [],
+    });
+    await until(() => deliveriesOfMessage(broker.db, otherWake.id)[0]?.state === 'read');
+    expect(pushedMail.filter((x) => x.session === other.welcome.session_id).flatMap((x) => x.messages)).toContain(
+      privateMail.id,
+    );
+    expect(JSON.stringify(await other.client.call('msg.inbox', { include_read: true }))).toContain(privateMail.id);
+  });
   it.each(['too-many-loaded', 'unreadable-loaded'])('persists and reports the distinct %s hold', async (reason) => {
     const { app, broker, c, send, pushes, o } = await boot();
     app.loaded =
