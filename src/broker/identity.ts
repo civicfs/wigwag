@@ -6,6 +6,7 @@ import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.
 import { captureIdentity, sameProcess } from '../proc/identity.js';
 import type { Hello } from '../protocol/rpc.js';
 import { scopeOf } from '../store/links.js';
+import { adoptCanonical, recordLineage, recoveryCandidates } from '../store/recovery.js';
 import {
   attachConnection,
   bindAgentSession,
@@ -140,6 +141,76 @@ export function installIdentity(broker: Broker): void {
   const renamed = (s: SessionRow, cause: RenameCause) => {
     provisional.delete(s.id);
     afterRename(broker, s.id, s.name, s.name_source, cause);
+  };
+
+  /**
+   * W7: `self` (live) is about to bind `native`. With exactly one proven offline slot for this agent, native id and
+   * workspace (and the gate passing: Codex requires a verified root thread), the live connection takes that canonical
+   * slot in one transaction and `self` is retired into it. Anything else returns null after recording lineage, and the
+   * caller binds `self` as before. A slot already bound to another conversation (Claude in-process /resume) never
+   * adopts: PID equality must not carry a slot to another conversation.
+   */
+  const recoverOnBind = (
+    self: SessionRow,
+    native: string,
+    evidence: Record<string, unknown>,
+    gate: { verified: boolean; reason: string },
+  ): SessionRow | null => {
+    const base = { agent: self.agent, native_id: native, workspace: self.workspace, session_id: self.id };
+    if (self.agent_session_id !== null && self.agent_session_id !== native) {
+      recordLineage(db, {
+        ...base,
+        previous_native_id: self.agent_session_id,
+        cause: 'switch',
+        outcome: 'observed',
+        evidence,
+      });
+      return null;
+    }
+    const candidates = recoveryCandidates(db, {
+      agent: self.agent,
+      native,
+      workspace: self.workspace,
+      exceptId: self.id,
+    });
+    if (!candidates.length) return null;
+    const flag = (reason: string): null => {
+      recordLineage(db, {
+        ...base,
+        cause: 'resume',
+        outcome: 'flagged',
+        reason,
+        evidence: { ...evidence, candidates: candidates.map((c) => c.id) },
+      });
+      broker.log(
+        `resume recovery for ${self.agent} native ${native}: ${reason} (${candidates.map((c) => c.id).join(', ')}); ${self.id} stays a new slot`,
+      );
+      return null;
+    };
+    if (candidates.length > 1) return flag('ambiguous');
+    if (!gate.verified) return flag(gate.reason);
+    const conn = broker.connectionFor(self.id);
+    if (!conn) return flag('no-connection');
+    const r = adoptCanonical(db, {
+      provisionalId: self.id,
+      canonicalId: candidates[0].id,
+      native,
+      state: self.state,
+      evidence,
+    });
+    if (!r.ok) return flag(r.reason);
+    provisional.delete(self.id);
+    conn.sessionId = r.canonical.id;
+    conn.generation = r.generation;
+    if (r.fromName && r.fromName !== r.canonical.name)
+      afterRename(broker, r.canonical.id, r.fromName, r.fromSource, 'recovery');
+    if (r.cancelledRelays.length) broker.questions.emit('changed');
+    broker.questions.emit('assignments');
+    broker.log(
+      `resume recovery: ${self.id} handed its connection to ${r.canonical.id} (${self.agent} native ${native}, generation ${r.generation})`,
+    );
+    broker.broadcastOwner('session', publicSession(db, getSession(db, self.id) as SessionRow));
+    return getSession(db, r.canonical.id) as SessionRow;
   };
 
   broker.onHello = async (conn, hello: Hello) => {
@@ -420,7 +491,12 @@ export function installIdentity(broker: Broker): void {
     // The only await: resolved first, so the selection and binding below run in one tick.
     const hookWorkspace = await broker.workspaces.resolve(p.cwd);
     const bound = listSessions(db).filter(
-      (x) => x.agent === 'claude' && x.state !== 'offline' && x.agent_session_id === p.agent_session_id,
+      (x) =>
+        x.agent === 'claude' &&
+        x.state !== 'offline' &&
+        !x.retired_at &&
+        x.link === 'connected' &&
+        x.agent_session_id === p.agent_session_id,
     );
     if (bound.length > 1) {
       broker.log(`hook.event ${p.event}: ${bound.length} live sessions bound to ${p.agent_session_id}; not bound`);
@@ -453,9 +529,11 @@ export function installIdentity(broker: Broker): void {
     }
     if (s && wrongWorkspace(s)) return { bound: false, additional_context: null };
     if (!s) {
-      const candidates = listSessions(db).filter(
-        (x) => x.agent === 'claude' && x.state !== 'offline' && x.mcp_ppid === agentPid,
+      const matchingParents = listSessions(db).filter(
+        (x) => x.agent === 'claude' && x.state !== 'offline' && !x.retired_at && x.mcp_ppid === agentPid,
       );
+      const connectedParents = matchingParents.filter((x) => x.link === 'connected');
+      const candidates = connectedParents.length ? connectedParents : matchingParents;
       if (candidates.length !== 1) {
         // Only the cold start (the MCP server not registered yet) owes the context later; ambiguity stays unbound.
         if (candidates.length === 0 && p.event === 'SessionStart') startContextOwed.add(p.agent_session_id);
@@ -466,7 +544,15 @@ export function installIdentity(broker: Broker): void {
       }
       s = candidates[0];
       if (wrongWorkspace(s)) return { bound: false, additional_context: null };
-      bindAgentSession(db, s.id, p.agent_session_id);
+      // W7: the Claude hook's session_id is the conversation id itself (S-E), so no further verification is needed.
+      const recovered = recoverOnBind(
+        s,
+        p.agent_session_id,
+        { hook: `claude ${p.event}`, source: p.source ?? null },
+        { verified: true, reason: 'unverified' },
+      );
+      if (recovered) s = recovered;
+      else bindAgentSession(db, s.id, p.agent_session_id);
       broker.bus.emit('session.bound', getSession(db, s.id));
     }
     // W8: the Claude parent's process identity, captured when its pid is new or retried while its start identity is missing.
