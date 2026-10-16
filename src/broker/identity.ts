@@ -188,6 +188,7 @@ export function installIdentity(broker: Broker): void {
       );
       return null;
     };
+    if (!gate.verified && gate.reason === 'codex-thread-id-untrusted') return flag(gate.reason);
     if (candidates.length > 1) return flag('ambiguous');
     if (!gate.verified) return flag(gate.reason);
     const conn = broker.connectionFor(self.id);
@@ -441,8 +442,10 @@ export function installIdentity(broker: Broker): void {
     const first = me(conn.sessionId);
     // W7 (S-E): a Codex hook's session_id is the tree-root id, shared by descendants. Automatic recovery is limited to
     // an app-server-verified root thread. That check is I/O, so it runs first; everything after it is revalidated.
+    const trustedThreadId = first.agent === 'codex' ? broker.trustedThreadId(first) : null;
     const single =
       first.agent === 'codex' &&
+      trustedThreadId === agent_session_id &&
       first.agent_session_id !== agent_session_id &&
       recoveryCandidates(db, {
         agent: 'codex',
@@ -454,6 +457,10 @@ export function installIdentity(broker: Broker): void {
     if (conn.closed || conn.failed || !conn.sessionId)
       throw new WigwagError('transport', 'connection closed during bind');
     let self = me(conn.sessionId);
+    const codexThreadTrusted =
+      self.agent === 'codex' &&
+      trustedThreadId === agent_session_id &&
+      broker.trustedThreadId(self) === trustedThreadId;
     const refuse = (holder: SessionRow): never => {
       // Fail closed: the session stays unbound with its provisional name. The holder is named only when the binder may see it.
       const visible = holder.name !== null && scopeOf(db, self.workspace).has(holder.workspace);
@@ -486,14 +493,31 @@ export function installIdentity(broker: Broker): void {
         : recoverOnBind(
             self,
             agent_session_id,
-            { hook: 'session.bind', root_verified: rootVerified },
-            { verified: self.agent !== 'codex' || rootVerified, reason: 'unverified-root' },
+            { hook: 'session.bind', root_verified: rootVerified, trusted_thread_id: trustedThreadId },
+            {
+              verified: self.agent !== 'codex' || (codexThreadTrusted && rootVerified),
+              reason: self.agent === 'codex' && !codexThreadTrusted ? 'codex-thread-id-untrusted' : 'unverified-root',
+            },
           );
     if (recovered) self = recovered;
     else {
       // Today's behavior, now after any lineage flag: bind this slot and clear an offline holder's stale binding.
-      const r = bindAgentSessionExclusive(db, self.id, agent_session_id);
-      if (!r.ok) refuse(r.holder);
+      if (self.agent === 'codex' && !codexThreadTrusted) {
+        const holder = listSessions(db).find(
+          (s) =>
+            s.agent === 'codex' &&
+            s.id !== self.id &&
+            s.agent_session_id === agent_session_id &&
+            s.state !== 'offline' &&
+            !s.retired_at,
+        );
+        if (holder) refuse(holder);
+        // Preserve offline evidence when the root ID cannot identify this concrete conversation.
+        bindAgentSession(db, self.id, agent_session_id);
+      } else {
+        const r = bindAgentSessionExclusive(db, self.id, agent_session_id);
+        if (!r.ok) refuse(r.holder);
+      }
     }
     applyLaunchIntent(me(conn.sessionId));
     announce(conn.sessionId as string);

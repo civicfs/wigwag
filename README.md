@@ -117,8 +117,10 @@ assigns a provisional name and then adopts the session's native name (Claude
 `/rename` or Codex thread name), sanitized and suffixed on collision. A name set
 with `register` stays until `register` with `native=true`. Resuming a native
 session reclaims its old wigwag slot when exactly one offline or MCP-disconnected,
-unretired slot holds that native id (Codex: verified root threads only); `wigwag recovery` lists what it
-refused and lets the owner retire stale slots. A plugin reload, MCP crash or
+unretired slot holds that native id (Claude only; Codex automatic recovery is unavailable in 0.3.0); `wigwag recovery` lists what it
+refused and lets the owner retire stale slots. Codex `whoami` reports recovery as
+`unavailable` with reason `codex-thread-id-untrusted` until a trusted concrete
+thread ID can be supplied. A plugin reload, MCP crash or
 broker restart no longer takes a session offline while its Claude process (same
 pid and start time) or Codex thread (still loaded) is open: it keeps its name,
 `who` shows "parent open, MCP disconnected", and Claude messages wait for the next

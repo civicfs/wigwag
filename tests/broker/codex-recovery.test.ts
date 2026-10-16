@@ -6,6 +6,7 @@ import { loadConfig } from '../../src/config.js';
 import { CodexNames } from '../../src/native/codex-names.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
+import { insertMessage } from '../../src/store/messages.js';
 import { listLineage } from '../../src/store/recovery.js';
 import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { startBroker, tmpHome, until } from '../helpers.js';
@@ -39,9 +40,10 @@ const cleanup: Array<() => unknown> = [];
 afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
 });
-async function boot(app: FakeApp) {
+async function boot(app: FakeApp, trusted = true) {
   const home = tmpHome();
   const broker = await startBroker(home, {
+    trustedThreadId: trusted ? () => 'T' : undefined,
     codexNames: new CodexNames({ factory: () => app, indexPath: `${home}/missing-session-index.jsonl` }),
   });
   cleanup.push(() => broker.stop());
@@ -75,6 +77,90 @@ async function offlineHelper(home: string, broker: { db: Parameters<typeof getSe
 }
 
 describe('codex resume recovery (W7, verified roots only)', () => {
+  it.each([
+    ['descendant', false],
+    ['fork', false],
+    ['descendant', true],
+    ['fork', true],
+  ])(
+    'an untrusted %s presenting root T cannot adopt its protected slot (disconnected: %s)',
+    async (_kind, detached) => {
+      const app = new FakeApp({ T: ROOT });
+      if (detached) app.loaded.add('T');
+      const { home, broker } = await boot(app, false);
+      const old = await codex(home, 10, { requested_name: 'codex-helper' });
+      await old.client.call('session.bind', { agent_session_id: 'T' });
+      await until(() => broker.codexNames?.available === true);
+      const canonical = getSession(broker.db, old.welcome.session_id);
+      if (!canonical) throw new Error('missing fixture canonical slot');
+      const lead = createSession(broker.db, {
+        agent: 'claude',
+        cwd: canonical.cwd,
+        workspace: canonical.workspace,
+        pid_chain: [],
+        mcp_ppid: null,
+      });
+      const message = insertMessage(
+        broker.db,
+        {
+          from_name: 'owner',
+          to_target: 'codex-helper',
+          kind: 'message',
+          priority: 'low',
+          subject: 'protected',
+          body: 'b',
+          attachments: [],
+          reply_to: null,
+          request_id: null,
+          expires_at: null,
+          stream: null,
+        },
+        ['codex-helper'],
+      );
+      broker.db.prepare("UPDATE deliveries SET state='held', hold_reason='low' WHERE message_id=?").run(message.id);
+      broker.db
+        .prepare('INSERT INTO assignments VALUES (?,?,?,?,?,?,?,?,?,NULL)')
+        .run(
+          'req-protected',
+          lead.id,
+          'L',
+          canonical.id,
+          'T',
+          'protected-key',
+          '{}',
+          message.id,
+          new Date().toISOString(),
+        );
+      old.client.close();
+      await until(
+        () =>
+          getSession(broker.db, canonical.id)?.link === 'disconnected' ||
+          getSession(broker.db, canonical.id)?.state === 'offline',
+      );
+      if (!detached) await until(() => getSession(broker.db, canonical.id)?.state === 'offline');
+      const fresh = await codex(home, 20);
+      if (detached)
+        await expect(fresh.client.call('session.bind', { agent_session_id: 'T' })).rejects.toMatchObject({
+          code: 'conflict',
+        });
+      else await fresh.client.call('session.bind', { agent_session_id: 'T' });
+      expect(getSession(broker.db, canonical.id)).toMatchObject({ name: 'codex-helper', agent_session_id: 'T' });
+      expect(getSession(broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
+      expect(
+        broker.db.prepare('SELECT worker_session_id, ended_at FROM assignments WHERE id=?').get('req-protected'),
+      ).toEqual({ worker_session_id: canonical.id, ended_at: null });
+      expect(broker.db.prepare('SELECT recipient, state FROM deliveries WHERE message_id=?').get(message.id)).toEqual({
+        recipient: 'codex-helper',
+        state: 'held',
+      });
+      expect(await fresh.client.call('session.whoami')).toMatchObject({
+        id: fresh.welcome.session_id,
+        capabilities: { resume_recovery: 'unavailable', resume_recovery_reason: 'codex-thread-id-untrusted' },
+      });
+      expect(listLineage(broker.db, { outcome: 'flagged', limit: 5 })[0]?.reason).toBe('codex-thread-id-untrusted');
+    },
+  );
+
   it('a verified root thread reclaims its canonical slot', async () => {
     const { home, broker } = await boot(new FakeApp({ T: ROOT }));
     const old = await offlineHelper(home, broker);

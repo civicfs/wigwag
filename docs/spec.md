@@ -176,8 +176,10 @@ vitest, linted with biome.
   unretired slot of the same agent, native id and workspace that is named or holds an active assignment is the canonical slot: in one
   transaction the live connection takes it (process fields, state, native binding, a new connection generation), the
   new slot is retired into it, readiness is cleared, and synchronous native questions of its active worker assignment
-  are cancelled. Codex additionally requires the bound id to be a root thread verified through `thread/read`
-  (`id = sessionId`, no parent, non-sub-agent source); otherwise the bind keeps the 0.2 behavior. Several candidates,
+  are cancelled. Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
+  thread ID. Untrusted binds preserve offline slot bindings and record `codex-thread-id-untrusted`; live holders refuse.
+  An injectable trusted-ID provider permits future recovery only when its concrete ID matches the bound ID and the
+  app-server verifies that ID as a root thread. Several candidates,
   a live holder, or a slot already bound to another conversation never take over; each is recorded in
   `session_lineage` and shown by `wigwag recovery`. Disconnects only mark a slot offline when the closing connection
   holds its current generation. Changed-native-id continuations and assignment native-id rebinding are not automatic

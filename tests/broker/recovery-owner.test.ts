@@ -96,7 +96,7 @@ describe('owner recovery diagnostics (W7)', () => {
     });
   });
 
-  it('codex with a reachable app-server reports verified-root-only recovery', async () => {
+  it('codex with a reachable app-server still requires a trusted concrete ID', async () => {
     class App extends EventEmitter {
       async connect() {}
       async call(_m: string, p: { threadId: string }) {
@@ -116,7 +116,8 @@ describe('owner recovery diagnostics (W7)', () => {
     expect(await cx.client.call('session.whoami')).toMatchObject({
       capabilities: {
         native_names: 'codex-app-server',
-        resume_recovery: 'verified-root-only',
+        resume_recovery: 'unavailable',
+        resume_recovery_reason: 'codex-thread-id-untrusted',
         parent_liveness: 'thread-loaded',
       },
     });

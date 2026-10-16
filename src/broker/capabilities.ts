@@ -5,6 +5,7 @@ import type { Broker } from './server.js';
 export interface SessionCapabilities {
   native_names: 'claude-hook-sidecar' | 'codex-app-server' | 'codex-session-index';
   resume_recovery: 'native-id' | 'verified-root-only' | 'unavailable';
+  resume_recovery_reason?: string;
   delivery: 'push' | 'hook-boundary' | 'codex-queue';
   /** W8: how an MCP disconnect is told apart from the parent closing. */
   parent_liveness: 'process-identity' | 'thread-loaded' | 'unavailable';
@@ -21,7 +22,11 @@ export function capabilitiesFor(broker: Broker, s: SessionRow): SessionCapabilit
   const app = broker.codexNames?.available === true;
   return {
     native_names: app ? 'codex-app-server' : 'codex-session-index',
-    resume_recovery: app ? 'verified-root-only' : 'unavailable',
+    resume_recovery:
+      app && broker.trustedThreadId(s) === s.agent_session_id && s.agent_session_id !== null
+        ? 'verified-root-only'
+        : 'unavailable',
+    ...(broker.trustedThreadId(s) === null ? { resume_recovery_reason: 'codex-thread-id-untrusted' } : {}),
     delivery: 'codex-queue',
     parent_liveness: app && s.agent_session_id ? 'thread-loaded' : 'unavailable',
   };

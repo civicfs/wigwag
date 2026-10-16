@@ -20,6 +20,7 @@ import {
 } from '../protocol/rpc.js';
 import type { QuestionService } from '../questions/service.js';
 import { type Db, openDb } from '../store/db.js';
+import type { SessionRow } from '../store/sessions.js';
 import { WorkspaceResolver } from '../workspace.js';
 import { Connection } from './connection.js';
 import type { DeliveryEngine } from './delivery.js';
@@ -68,6 +69,8 @@ export class Broker {
   naming!: NameService;
   codexNames: CodexNames | null = null;
   processProbe: ProcessProbe = systemProbe;
+  /** No trusted concrete Codex thread ID is available from the shipped hooks yet. */
+  trustedThreadId: (session: SessionRow) => string | null = () => null;
   liveness: Liveness | null = null;
   digestProvider: ((name: string) => string | null) | null = null;
   /** Identity's announce (sweep the name's backlog, owner broadcast, session.available); set by installIdentity. */

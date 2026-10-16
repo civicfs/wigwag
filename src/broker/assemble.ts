@@ -52,11 +52,13 @@ export async function startBroker(
     codexNames?: CodexNames;
     codexNameRefreshMs?: number;
     processProbe?: ProcessProbe;
+    trustedThreadId?: Broker['trustedThreadId'];
     liveness?: LivenessOptions;
   } = {},
 ): Promise<Broker> {
   const config = loadConfig(home);
   const broker = new Broker(home, config);
+  if (opts.trustedThreadId) broker.trustedThreadId = opts.trustedThreadId;
   if (opts.processProbe) broker.processProbe = opts.processProbe;
   const transports = opts.transports ?? {
     claude: new ClaudeChannelTransport((id) => broker.connectionFor(id)),

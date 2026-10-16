@@ -249,7 +249,7 @@ describe('identity', () => {
       expect(getSession(broker.db, a.welcome.session_id)?.agent_session_id).toBe('thread-1');
     });
 
-    it('takes over from an offline holder and clears its stale binding', async () => {
+    it('binds a new untrusted Codex slot while preserving the offline holder binding', async () => {
       const { home, broker } = await boot();
       const a = await codex(home, { requested_name: 'codex-old', mcp_ppid: 10, pid_chain: [11, 10] });
       await a.client.call('session.bind', { agent_session_id: 'thread-2' });
@@ -259,7 +259,7 @@ describe('identity', () => {
       await b.client.call('session.bind', { agent_session_id: 'thread-2' });
       expect(getSession(broker.db, b.welcome.session_id)?.agent_session_id).toBe('thread-2');
       const old = getSession(broker.db, a.welcome.session_id);
-      expect(old?.agent_session_id).toBeNull();
+      expect(old?.agent_session_id).toBe('thread-2');
       expect(old?.name).toBe('codex-old');
     });
 

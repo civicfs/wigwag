@@ -9,8 +9,7 @@
 - Forward undelivered mail and the session's own active subscriptions and mutes
   on every rename; notify live sessions in scope and owners. Deferred forwarding
   stops if another session claims the old name.
-- Reclaim the previous slot when a native session resumes (Codex: verified root
-  threads only), with connection generations, lineage records, `wigwag recovery`
+- Reclaim the previous slot when a native session resumes (Claude only; Codex automatic recovery is unavailable in 0.3.0), with connection generations, lineage records, `wigwag recovery`
   diagnostics and per-session capabilities in `whoami`.
 - Keep a session, its name and assignments while its parent remains open after an
   MCP disconnect or broker restart. Hold Claude pushes for the next hook and
