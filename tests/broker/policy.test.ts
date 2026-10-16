@@ -5,6 +5,22 @@ const P = { action: 'push' };
 const H = (reason: string) => ({ action: 'hold', reason });
 
 describe('wake policy (spec §6)', () => {
+  it('a disconnected Claude session keeps an active throttle for every priority', () => {
+    for (const priority of ['urgent', 'normal', 'low'] as const) {
+      expect(decide({ priority, recipient: 'disconnected', muted: false, throttled: true })).toEqual({
+        action: 'hold',
+        reason: 'throttled',
+      });
+    }
+  });
+  it('a Claude session whose MCP is disconnected holds even urgent items as disconnected (W8)', () => {
+    for (const priority of ['urgent', 'normal', 'low'] as const) {
+      expect(decide({ priority, recipient: 'disconnected', muted: false, throttled: false })).toEqual({
+        action: 'hold',
+        reason: 'disconnected',
+      });
+    }
+  });
   it.each([
     ['urgent', 'idle', P],
     ['urgent', 'busy', P],

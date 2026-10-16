@@ -488,11 +488,12 @@ export class DeliveryEngine {
   private async availableNow(session: SessionRow): Promise<void> {
     if (!session.name) return;
     const rs = this.recipient(session.name);
-    if (rs.state === 'offline' || rs.state === 'unbound' || rs.state === 'no-channel') return;
+    if (rs.state === 'offline' || rs.state === 'unbound' || rs.state === 'no-channel' || rs.state === 'disconnected')
+      return;
     const wake: Key[] = [];
     const backlog = deliveriesFor(this.d.db, session.name, ['held']).filter(
       (x) =>
-        (x.hold_reason === 'offline' || x.hold_reason === 'unbound') &&
+        (x.hold_reason === 'offline' || x.hold_reason === 'unbound' || x.hold_reason === 'disconnected') &&
         !this.busy(x) &&
         this.allowed({ message_id: x.message_id, recipient: x.recipient }),
     );

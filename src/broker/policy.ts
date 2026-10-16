@@ -15,6 +15,8 @@ export function decide(i: {
   if (i.recipient === 'offline') return hold('offline');
   if (i.recipient === 'unbound') return hold('unbound');
   if (i.throttled) return hold('throttled');
+  // W8: a Claude session whose MCP link is down cannot take a push; the next hook boundary delivers the digest.
+  if (i.recipient === 'disconnected') return hold('disconnected');
   // A Claude session that cannot take channel pushes is not woken: the item waits for the next turn-boundary hook or an
   // inbox call (E-3). It reuses the `unbound` reason: the stored reasons are fixed by the schema's CHECK constraint.
   const wake: Decision = i.recipient === 'no-channel' ? hold('unbound') : { action: 'push' };

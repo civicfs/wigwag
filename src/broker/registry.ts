@@ -1,11 +1,20 @@
 import type { Db } from '../store/db.js';
 import { scopeOf } from '../store/links.js';
-import { type Agent, getSession, liveHolder, type NameSource, type SessionRow } from '../store/sessions.js';
+import {
+  type Agent,
+  getSession,
+  type Link,
+  liveHolder,
+  type NameSource,
+  type ParentState,
+  type SessionRow,
+} from '../store/sessions.js';
 import { workspaceLabel } from '../workspace.js';
 import { visibleUnreadCount } from './scope.js';
 
 /** `no-channel`: a live Claude session whose MCP client cannot take channel pushes (E-3). */
-export type RecipientState = 'offline' | 'unbound' | 'no-channel' | 'idle' | 'busy';
+/** `disconnected`: a live Claude session whose MCP link dropped while its parent stays open (W8). */
+export type RecipientState = 'offline' | 'unbound' | 'disconnected' | 'no-channel' | 'idle' | 'busy';
 
 export function recipientState(
   db: Db,
@@ -15,8 +24,18 @@ export function recipientState(
   const s = liveHolder(db, name);
   if (!s) return { state: 'offline' };
   if (s.agent === 'codex' && !s.agent_session_id) return { state: 'unbound', session: s };
+  if (s.agent === 'claude' && s.link === 'disconnected') return { state: 'disconnected', session: s };
   if (s.agent === 'claude' && !hasChannel(s)) return { state: 'no-channel', session: s };
   return { state: s.state === 'online-busy' ? 'busy' : 'idle', session: s };
+}
+
+export const PARENT_OPEN_TEXT = 'parent open, MCP disconnected';
+export const PARENT_UNKNOWN_TEXT = 'parent unverified, MCP disconnected; goes offline after a grace period';
+
+/** W8: owner- and agent-facing text for a live session without its MCP link; null otherwise. */
+export function livenessLabel(s: SessionRow): string | null {
+  if (s.state === 'offline' || s.link !== 'disconnected') return null;
+  return s.parent_state === 'live' ? PARENT_OPEN_TEXT : PARENT_UNKNOWN_TEXT;
 }
 
 export interface PublicSession {
@@ -32,6 +51,9 @@ export interface PublicSession {
   last_seen_at: string;
   name_source?: NameSource;
   native_name?: string | null;
+  link?: Link;
+  parent_state?: ParentState;
+  liveness?: string | null;
   orchestration?: { assignment_id: string; orchestrator_session_id: string; orchestrator_name: string | null };
   role?: 'peer' | 'worker' | 'orchestrator' | 'orchestrator-worker';
   workers?: Array<{ assignment_id: string; session_id: string; name: string | null; state: SessionRow['state'] }>;
@@ -51,6 +73,9 @@ export const publicSession = (db: Db, s: SessionRow): PublicSession => ({
   last_seen_at: s.last_seen_at,
   name_source: s.name_source,
   native_name: s.native_name,
+  link: s.link,
+  parent_state: s.parent_state,
+  liveness: livenessLabel(s),
   ...orchestration(db, s),
 });
 

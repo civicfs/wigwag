@@ -43,7 +43,7 @@ export const cmdWho = () =>
           x.role ?? 'peer',
           x.orchestration?.orchestrator_name ?? '-',
           x.workers?.map((w) => w.name ?? w.session_id).join(', ') || '-',
-          x.state,
+          x.liveness ? `${x.state} (${x.liveness})` : x.state,
           String(x.unread),
           x.bound ? 'yes' : 'no',
           x.last_seen_at,
