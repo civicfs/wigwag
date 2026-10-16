@@ -23,6 +23,17 @@ const session = (o: Partial<SessionRow> = {}): SessionRow => ({
   launch_json: null,
   created_at: '',
   last_seen_at: '',
+  name_source: 'custom',
+  native_name: null,
+  native_ref: null,
+  conn_generation: 0,
+  retired_at: null,
+  retired_into: null,
+  link: 'connected',
+  parent_state: 'unknown',
+  agent_pid: null,
+  agent_start: null,
+  parent_checked_at: null,
   ...o,
 });
 const items = (n: number, body = 'hello'): RenderItem[] =>

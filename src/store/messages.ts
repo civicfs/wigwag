@@ -5,7 +5,7 @@ import { type Db, nowIso, tx } from './db.js';
 export type Priority = 'urgent' | 'normal' | 'low';
 export type MessageKind = 'message' | 'request' | 'response' | 'notice';
 export type DeliveryState = 'pending' | 'held' | 'pushed' | 'failed' | 'stuck' | 'read';
-export type HoldReason = 'offline' | 'unbound' | 'low' | 'muted' | 'throttled';
+export type HoldReason = 'offline' | 'unbound' | 'low' | 'muted' | 'throttled' | 'disconnected';
 
 export interface MessageRow {
   id: string;
