@@ -4,6 +4,7 @@ import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
 import { loadConfig } from '../../src/config.js';
 import { frameLimit } from '../../src/protocol/frame.js';
+import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { listLineage } from '../../src/store/recovery.js';
 import {
   bindAgentSession,
@@ -360,14 +361,61 @@ describe('Claude in-process conversation switches', () => {
     expect(events).not.toContain('session.identity');
   });
 
-  it.each(['different', 'unknown', 'reused-pid'])(
+  it.each(['capture-failed', 'verification-failed'])(
+    'ignores a switched-away hint before channel delivery when MCP identity is %s',
+    async (failure) => {
+      const f = await fixture();
+      await f.h.call('hook.event', f.event(B));
+      const b = await f.worker.client.call<Who>('session.whoami');
+      await f.send(b.name, 'B-retained-body');
+      const owner = await ownerClient(f.home);
+      cleanup.push(() => owner.close());
+      const mail = await owner.call<{ id: string }>('owner.send', {
+        to: 'launch-worker',
+        subject: 'A only',
+        body: 'A-private-body',
+        priority: 'urgent',
+        attach_paths: [],
+      });
+      await until(() => deliveriesOfMessage(f.broker.db, mail.id)[0]?.state === 'held');
+      await f.restart();
+      let mcpProbes = 0;
+      f.broker.processProbe = (pids) => {
+        if (pids.includes(101)) {
+          mcpProbes++;
+          if (failure === 'capture-failed' || mcpProbes > 1) return null;
+        }
+        return new Map(pids.flatMap((pid) => (f.processes.has(pid) ? [[pid, f.processes.get(pid) as string]] : [])));
+      };
+      const back = await f.connect(100, {
+        resume_session_id: f.worker.welcome.session_id,
+        requested_name: 'launch-worker',
+        channel: true,
+      });
+      await back.client.call('sys.ping');
+      expect(deliveriesOfMessage(f.broker.db, mail.id)[0]?.state).toBe('held');
+      expect(back.welcome.session_id).not.toBe(f.worker.welcome.session_id);
+      expect(await back.client.call('session.whoami')).toMatchObject({ bound: false });
+      expect(JSON.stringify(await back.client.call('msg.inbox'))).not.toContain(mail.id);
+      const h = await f.hook();
+      const reply = await h.call('hook.event', f.event(B));
+      expect(JSON.stringify(reply)).not.toContain('A-private-body');
+      expect(await back.client.call('session.whoami')).toMatchObject({ id: b.id, bound: true });
+      expect(getSession(f.broker.db, f.worker.welcome.session_id)).toMatchObject({
+        agent_session_id: A,
+        name: 'launch-worker',
+      });
+      expect(deliveriesOfMessage(f.broker.db, mail.id)[0]?.state).toBe('held');
+    },
+  );
+
+  it.each(['different', 'reused-pid'])(
     'keeps normal explicit reattach for a %s MCP identity, but splits on a different hook native id',
     async (identity) => {
       const f = await fixture();
       await f.send('launch-worker', 'A-private-body');
       await f.h.call('hook.event', f.event(B));
       await f.restart();
-      if (identity === 'unknown') f.processes.delete(102);
       if (identity === 'reused-pid') f.processes.set(101, 'new-mcp-start');
       const back = await f.connect(100, {
         pid_chain: [identity === 'reused-pid' ? 101 : 102, 100],

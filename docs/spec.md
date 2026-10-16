@@ -248,8 +248,11 @@ vitest, linted with biome.
   Switching back uses the same gates. An internal session.identity event updates the MCP's remembered resume hint.
   Durable switch lineage records source/target slots, workspace and verified MCP pid/start when available. A hint
   most recently switched away from by that exact verified process is ignored (including its old launch name),
-  forcing a fresh slot and trusted hook binding; there are no switch redirects or chains. Other or unverifiable
-  MCP processes keep the existing reattach rules, and a later differing trusted hook still splits before delivery.
+  forcing a fresh slot and trusted hook binding; there are no switch redirects or chains. When process capture or
+  verification fails, a hint most recently switched away from is also ignored: its mailbox cannot become push-ready
+  before a trusted hook identifies the conversation. Verified different MCP processes keep the existing reattach
+  rules, and a later differing trusted hook still splits before delivery. A differing hook while MCP is disconnected
+  refuses until reconnect allows the split; it never overwrites the old slot's native binding.
   Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
   thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the
   binding and pass metadata root verification. Untrusted binds preserve offline canonical bindings and record

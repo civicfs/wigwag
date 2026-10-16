@@ -269,10 +269,14 @@ export function installIdentity(broker: Broker): void {
         ? captureIdentity(mcpPid, broker.processProbe)
         : null;
     const ignoredHint =
+      hello.agent === 'claude' &&
       !!hello.resume_session_id &&
-      !!conn.mcpIdentity &&
-      sameProcess(conn.mcpIdentity, broker.processProbe) === true &&
-      switchedAwayHint(db, hello.resume_session_id, workspace, conn.mcpIdentity);
+      switchedAwayHint(
+        db,
+        hello.resume_session_id,
+        workspace,
+        conn.mcpIdentity && sameProcess(conn.mcpIdentity, broker.processProbe) === true ? conn.mcpIdentity : null,
+      );
     let s = hello.resume_session_id && !ignoredHint ? getSession(db, hello.resume_session_id) : undefined;
     // W7: a slot handed over by a resume recovery points at its canonical slot; a reconnect hint follows it and never
     // revives a retired row.
