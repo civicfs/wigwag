@@ -39,7 +39,7 @@ export function verifyAtStart(broker: Pick<Broker, 'db' | 'processProbe' | 'log'
   unknown: number;
 } {
   const db = broker.db;
-  const rows = listSessions(db).filter((s) => s.state !== 'offline');
+  const rows = listSessions(db).filter((s) => s.state !== 'offline' && !s.retired_at);
   const claude = rows.filter((s) => s.agent === 'claude' && s.agent_pid !== null && s.agent_start);
   const checks = checkIdentities(
     claude.map((s) => ({ pid: s.agent_pid as number, start: s.agent_start as string })),

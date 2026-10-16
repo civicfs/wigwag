@@ -186,6 +186,22 @@ describe('parent-verified disconnect (W8)', () => {
     expect(back.welcome.session_id).toBe(keep.welcome.session_id);
   });
 
+  it('verifyAtStart leaves retired rows untouched and does not probe their parents', () => {
+    reset();
+    const db = openDb(join(mkdtempSync(join(tmpdir(), 'ww-retired-start-')), 'state.db'));
+    try {
+      const s = createSession(db, { agent: 'claude', cwd: '/w', workspace: '/w', pid_chain: [], mcp_ppid: 4242 });
+      setAgentIdentity(db, s.id, 4242, 'start-A');
+      db.prepare("UPDATE sessions SET retired_at = 'retired' WHERE id = ?").run(s.id);
+      const before = getSession(db, s.id);
+      expect(verifyAtStart({ db, processProbe: probe, log: () => {} })).toEqual({ live: 0, gone: 0, unknown: 0 });
+      expect(probeCalls).toBe(0);
+      expect(getSession(db, s.id)).toEqual(before);
+    } finally {
+      db.close();
+    }
+  });
+
   it('verifyAtStart checks every Claude parent with one probe call', () => {
     reset();
     const db = openDb(join(mkdtempSync(join(tmpdir(), 'ww-va-')), 'state.db'));
