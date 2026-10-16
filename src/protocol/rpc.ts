@@ -134,6 +134,10 @@ export const METHODS = {
       pid_chain: z.array(z.number().int()),
       // The hook's nearest `claude` ancestor (its own agent process), or null when it has none.
       agent_pid: z.number().int().nullable(),
+      // W2/W7 (S-B, S-E): Claude's optional custom title, transcript location and SessionStart source.
+      session_title: z.string().max(1000).optional(),
+      transcript_path: z.string().startsWith('/').max(4096).optional(),
+      source: z.string().max(32).optional(),
     }),
   ),
 

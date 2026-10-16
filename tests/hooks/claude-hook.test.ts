@@ -92,6 +92,32 @@ const hookIn = (agent: FakeClaude, home: string, event: string, session_id: stri
   );
 
 describe('claude hook command', () => {
+  it('forwards session_title, transcript_path and source to the broker (W2)', async () => {
+    const started = await startTestBroker();
+    broker = started.broker;
+    const claude = await startClaude();
+    const a = await mcpClient(started.home, { mcp_ppid: claude.pid });
+    const r = await claude.run(
+      [process.execPath, DIST_MAIN, 'hook', 'claude', 'SessionStart'],
+      JSON.stringify({
+        session_id: 'cs-t',
+        cwd: '/w/myproject',
+        hook_event_name: 'SessionStart',
+        source: 'resume',
+        session_title: '  Node refactor  ',
+        transcript_path: '/tmp/ww-none/cs-t.jsonl',
+      }),
+      { WIGWAG_HOME: started.home },
+    );
+    expect(r.status).toBe(0);
+    expect(getSession(started.broker.db, a.welcome.session_id)).toMatchObject({
+      name: 'node-refactor',
+      name_source: 'native',
+      native_name: 'Node refactor',
+      native_ref: '/tmp/ww-none/cs-t.jsonl',
+    });
+    a.client.close();
+  });
   it('SessionStart binds via the pid chain and returns additionalContext', async () => {
     const started = await startTestBroker();
     broker = started.broker;

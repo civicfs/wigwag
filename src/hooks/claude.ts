@@ -62,7 +62,13 @@ export async function runClaudeHook(event: ClaudeHookEvent): Promise<void> {
     const work = (async () => {
       const raw = await readStdin(config.hooks.max_stdin_bytes);
       if (raw.trim() === '') throw new Error('empty hook input');
-      const input = JSON.parse(raw) as { session_id?: string; cwd?: string };
+      const input = JSON.parse(raw) as {
+        session_id?: string;
+        cwd?: string;
+        session_title?: unknown;
+        transcript_path?: unknown;
+        source?: unknown;
+      };
       if (!input.session_id) throw new Error('hook input has no session_id');
       if (!(await canConnect(sockPath(home), ac.signal))) return;
       const connected = await Client.connect(
@@ -83,6 +89,15 @@ export async function runClaudeHook(event: ClaudeHookEvent): Promise<void> {
         // Spec §4: the hook's own agent is its nearest ancestor that is not a shell or launcher; an outer claude
         // further up (a nested `claude -p` run from a session's shell tool) is never this hook's session.
         agent_pid: agentAncestor(chain),
+        ...(typeof input.session_title === 'string' && input.session_title.trim()
+          ? { session_title: input.session_title.trim().slice(0, 200) }
+          : {}),
+        ...(typeof input.transcript_path === 'string' &&
+        input.transcript_path.startsWith('/') &&
+        input.transcript_path.length <= 4096
+          ? { transcript_path: input.transcript_path }
+          : {}),
+        ...(typeof input.source === 'string' ? { source: input.source.slice(0, 32) } : {}),
       });
       if (r.additional_context && CONTEXT_EVENTS.has(event)) {
         process.stdout.write(

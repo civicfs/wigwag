@@ -2,6 +2,7 @@ import { randomInt } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { WigwagError } from '../errors.js';
 import { RESERVED_NAMES } from '../ids.js';
+import { resolveClaudeTitle, validTranscriptPath } from '../native/claude-title.js';
 import type { Hello } from '../protocol/rpc.js';
 import { scopeOf } from '../store/links.js';
 import {
@@ -16,6 +17,7 @@ import {
   provisionalName,
   refreshProcess,
   type SessionRow,
+  setNativeRef,
   setState,
 } from '../store/sessions.js';
 import type { Connection } from './connection.js';
@@ -404,6 +406,18 @@ export function installIdentity(broker: Broker): void {
       s = candidates[0];
       if (wrongWorkspace(s)) return { bound: false, additional_context: null };
       bindAgentSession(db, s.id, p.agent_session_id);
+    }
+    if (validTranscriptPath(p.transcript_path, p.agent_session_id) && s.native_ref !== p.transcript_path)
+      setNativeRef(db, s.id, p.transcript_path);
+    if (p.event !== 'Stop') {
+      // W2: synchronous and bounded (sidecar ≤ 64 KiB; the 256 KiB transcript tail only at SessionStart).
+      const title = resolveClaudeTitle({
+        hookTitle: p.session_title ?? null,
+        transcriptPath: getSession(db, s.id)?.native_ref ?? null,
+        sessionId: p.agent_session_id,
+        scanTranscript: p.event === 'SessionStart',
+      });
+      if (title) broker.naming.adoptNative(s.id, title.title, title.origin);
     }
     if (p.event === 'UserPromptSubmit' || p.event === 'PostToolUse') setState(db, s.id, 'online-busy');
     else setState(db, s.id, 'online-idle');
