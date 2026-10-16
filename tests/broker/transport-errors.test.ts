@@ -15,7 +15,8 @@ it('keeps stderr echoes out of stored errors, audit events, notices and owner de
   const home = tmpHome();
   const config = loadConfig(home);
   config.retry.max_attempts = 1;
-  const broker = new Broker(home, config); // real store and engine; no socket needed
+  const broker = new Broker(home, config);
+  await broker.start(); // opens the real store while holding its fixture mutex
   const ownerFeed: unknown[] = [];
   const engine = new DeliveryEngine({
     db: broker.db,

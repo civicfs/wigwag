@@ -54,7 +54,12 @@ const unlinkIfPresent = (path: string): void => {
 };
 
 export class Broker {
-  readonly db: Db;
+  private database: Db | null = null;
+  /** Available only after start acquires the broker mutex; constructors never open or migrate state.db. */
+  get db(): Db {
+    if (!this.database) throw new WigwagError('internal', 'Broker database is not open');
+    return this.database;
+  }
   readonly bus = new EventEmitter();
   readonly versionWarnings: string[] = [];
   readonly connections = new Set<Connection>();
@@ -66,6 +71,8 @@ export class Broker {
     return { role: hello.role };
   };
   onDisconnect: Array<(conn: Connection) => void> = [];
+  /** Install modules that need the database, after the mutex and migration, before onStart/listen. */
+  onOpen: Array<() => void> = [];
   onStart: Array<() => void> = [];
   onStop: Array<() => unknown> = [];
   engine: DeliveryEngine | null = null;
@@ -92,10 +99,10 @@ export class Broker {
   private lock: BrokerLock | null = null;
   private server: Server | null = null;
   private ownsSocket = false;
-  private dbOpen = true;
   private started = false;
   private startPromise: Promise<void> | null = null;
   private stopPromise: Promise<void> | null = null;
+  private stopHooksPromise: Promise<void> | null = null;
 
   constructor(
     readonly home: string,
@@ -104,7 +111,6 @@ export class Broker {
     mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
     this.sockPath = join(home, 'broker.sock');
     this.logPath = join(home, 'logs', 'broker.log');
-    this.db = openDb(join(home, 'state.db'));
   }
 
   handle<M extends MethodName>(method: M, h: (ctx: HandlerCtx, params: Params<M>) => unknown): void {
@@ -145,6 +151,8 @@ export class Broker {
   private async doStart(): Promise<void> {
     try {
       this.lock = BrokerLock.acquire(this.home);
+      this.database = openDb(join(this.home, 'state.db'));
+      for (const f of this.onOpen) f();
       for (const f of this.onStart) f();
       // We hold the lock, so whatever sits at the socket path was left by a dead broker.
       unlinkIfPresent(this.sockPath);
@@ -163,6 +171,7 @@ export class Broker {
       this.started = true;
       this.log(`broker started pid=${process.pid}`);
     } catch (e) {
+      await this.stopHooks();
       await this.release();
       throw e;
     }
@@ -173,15 +182,7 @@ export class Broker {
     if (!this.stopPromise) {
       const starting = this.startPromise;
       this.stopPromise = (async () => {
-        await Promise.all(
-          this.onStop.map(async (f) => {
-            try {
-              await f();
-            } catch (e) {
-              this.log(`onStop hook failed: ${(e as Error).message}`);
-            }
-          }),
-        );
+        await this.stopHooks();
         if (starting) await starting.catch(() => {});
         // Final review I-10: in-flight pushes record their outcome before the db closes (bounded).
         await this.engine?.drain(this.config.codex.queue_timeout_ms).catch(() => {});
@@ -189,6 +190,19 @@ export class Broker {
       })();
     }
     return this.stopPromise;
+  }
+
+  private stopHooks(): Promise<void> {
+    this.stopHooksPromise ??= Promise.all(
+      this.onStop.map(async (f) => {
+        try {
+          await f();
+        } catch (e) {
+          this.log(`onStop hook failed: ${(e as Error).message}`);
+        }
+      }),
+    ).then(() => {});
+    return this.stopHooksPromise;
   }
 
   /** Runs one shutdown step; a throw is logged (best-effort) so the remaining steps still run. */
@@ -218,14 +232,13 @@ export class Broker {
       this.started = false;
       this.log('broker stopped');
     }
+    this.attempt('bus cleanup', () => this.bus.removeAllListeners());
+    const db = this.database;
+    this.database = null;
+    if (db) this.attempt('db close', () => db.close());
     const lock = this.lock;
     this.lock = null;
     if (lock) this.attempt('lock release', () => lock.release());
-    this.attempt('bus cleanup', () => this.bus.removeAllListeners());
-    if (this.dbOpen) {
-      this.dbOpen = false;
-      this.attempt('db close', () => this.db.close());
-    }
   }
 
   private accept(socket: Socket): void {

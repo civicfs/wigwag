@@ -75,36 +75,38 @@ export async function startBroker(
       broker.checkCodexPush(s, true),
     ),
   };
-  installSys(broker);
-  installIdentity(broker);
-  installNaming(broker);
-  installDelivery(broker, transports);
-  installMessages(broker);
-  installData(broker);
-  installRequests(broker);
-  installOwner(broker);
-  installRecovery(broker);
-  const questions = installQuestions(broker);
-  installQuestionHooks(broker, questions);
-  installCodexNames(
-    broker,
-    opts.codexNames ??
-      new CodexNames({
-        factory: () => new AppServer(config.questions.app_server_socket, config.questions.app_server_timeout_ms),
-        indexPath: codexIndexPath(config.questions.app_server_socket),
-        log: (l) => broker.log(l),
-      }),
-    opts.codexNameRefreshMs,
-  );
-  installCodexPushTrust(broker);
-  installLiveness(broker, opts.liveness);
-  const codexQuestions = new CodexQuestions(questions, opts.codexQuestionFactory, {
-    idleGraceMs: opts.codexQuestionIdleGraceMs,
+  broker.onOpen.push(() => {
+    installSys(broker);
+    installIdentity(broker);
+    installNaming(broker);
+    installDelivery(broker, transports);
+    installMessages(broker);
+    installData(broker);
+    installRequests(broker);
+    installOwner(broker);
+    installRecovery(broker);
+    const questions = installQuestions(broker);
+    installQuestionHooks(broker, questions);
+    installCodexNames(
+      broker,
+      opts.codexNames ??
+        new CodexNames({
+          factory: () => new AppServer(config.questions.app_server_socket, config.questions.app_server_timeout_ms),
+          indexPath: codexIndexPath(config.questions.app_server_socket),
+          log: (l) => broker.log(l),
+        }),
+      opts.codexNameRefreshMs,
+    );
+    installCodexPushTrust(broker);
+    installLiveness(broker, opts.liveness);
+    const codexQuestions = new CodexQuestions(questions, opts.codexQuestionFactory, {
+      idleGraceMs: opts.codexQuestionIdleGraceMs,
+    });
+    questions.prepareCodex = (session) => codexQuestions.attach(session);
+    broker.onStop.push(() => codexQuestions.stop());
+    const claudeTitles = new ClaudeTitleWatcher(broker);
+    broker.onStop.push(() => claudeTitles.stop());
   });
-  questions.prepareCodex = (session) => codexQuestions.attach(session);
-  broker.onStop.push(() => codexQuestions.stop());
-  const claudeTitles = new ClaudeTitleWatcher(broker);
-  broker.onStop.push(() => claudeTitles.stop());
   await broker.start();
   return broker;
 }
