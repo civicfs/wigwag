@@ -115,16 +115,29 @@ Names use lowercase letters, digits, and hyphens, start with a letter, and conta
 2–48 characters. `owner`, `all`, and `wigwag` are reserved. Without `--as`, Wigwag
 assigns a provisional name and then adopts the session's native name (Claude
 `/rename` or Codex thread name), sanitized and suffixed on collision. A name set
-with `register` stays until `register` with `native=true`. Resuming a native
-session reclaims its old wigwag slot when exactly one offline or MCP-disconnected,
-unretired slot holds that native id (Claude only; Codex automatic recovery is unavailable in 0.3.0); `wigwag recovery` lists what it
-refused and lets the owner retire stale slots. Codex `whoami` reports recovery as
-`unavailable` with reason `codex-thread-id-untrusted` until a trusted concrete
-thread ID can be supplied. A plugin reload, MCP crash or
-broker restart no longer takes a session offline while its Claude process (same
-pid and start time) or Codex thread (still loaded) is open: it keeps its name,
-`who` shows "parent open, MCP disconnected", and Claude messages wait for the next
-prompt or tool call. Codex pushes continue through `codex queue`.
+with `register` stays until `register` with `native=true`.
+
+Resuming Claude through its hooks reclaims exactly one eligible offline or
+MCP-disconnected slot for that native ID and workspace. Empty provisional slots
+and empty refused-resume shells do not make recovery ambiguous. An explicit
+launch or register name on the new slot is kept when it can be claimed; otherwise
+the canonical name stays and lineage records the reason. Native and provisional
+names do not replace the canonical name.
+
+Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
+a shared tree-root ID. `whoami` reports `unavailable` with reason
+`codex-thread-id-untrusted`. A future trusted concrete thread ID must also pass
+root verification. Existing Codex queue delivery still uses the presented ID.
+
+`wigwag recovery` shows duplicate slots with names, name sources, last-seen times,
+state/link, assignment IDs and roles, and held/pending and total undelivered mail
+counts. Retiring an offline slot with an active assignment or undelivered mail
+requires `--force`; resolved flags disappear from the report while historical
+records remain. A resolved empty refused shell remains excluded from candidates.
+
+A plugin reload, MCP crash or broker restart keeps a session's name while its
+parent remains open. `who` shows "parent open, MCP disconnected"; Claude messages
+wait for the next prompt or tool call, while Codex pushes use `codex queue`.
 
 ## Delegate work and answer questions
 
@@ -291,7 +304,7 @@ tool boundary.
 ```sh
 wigwag who
 wigwag recovery [--json]
-wigwag recovery retire <session-id>
+wigwag recovery retire <session-id> [--force]
 wigwag send test-worker --subject "Status check" --body "Report progress and blockers."
 wigwag tail -f --name test-worker
 wigwag deliveries --stuck

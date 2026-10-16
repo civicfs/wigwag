@@ -95,7 +95,7 @@ export const liveNativeHolders = (db: Db, agent: Agent, native: string, exceptId
 
 /**
  * W7: offline slots a resumed native session may reclaim, plus (W8) live slots whose MCP link dropped: a new MCP
- * process for the same native session re-attaches to them. Empty provisional/unnamed slots and unresolved refused-resume shells are excluded unless they retain
+ * process for the same native session re-attaches to them. Empty provisional/unnamed slots and historically refused-resume shells are excluded unless they retain
  * assignments, undelivered mail, subscriptions or mutes. A refused slot keeps its explicit name without creating loops.
  */
 export const recoveryCandidates = (
@@ -141,7 +141,7 @@ export type AdoptResult =
  * (process fields, state, native binding) onto the canonical slot and retire the provisional slot into it. The
  * canonical slot keeps its name, or takes the provisional name if it lost its own. Readiness is cleared for both (a new
  * process must prove QuestionReady again). Pending or answered synchronous relays of the canonical slot's active worker
- * assignment for this native id are cancelled (their tool call died with the old process); async Codex relays stay for
+ * assignment for this native id are cancelled unless the same verified live Claude parent still owns them; async Codex relays stay for
  * the adapter's history reconciliation. Lineage is recorded inside the same transaction.
  */
 export function adoptCanonical(

@@ -9,8 +9,15 @@
 - Forward undelivered mail and the session's own active subscriptions and mutes
   on every rename; notify live sessions in scope and owners. Deferred forwarding
   stops if another session claims the old name.
-- Reclaim the previous slot when a native session resumes (Claude only; Codex automatic recovery is unavailable in 0.3.0), with connection generations, lineage records, `wigwag recovery`
-  diagnostics and per-session capabilities in `whoami`.
+- Reclaim eligible slots through Claude hook binds, preserving explicit names and
+  same-parent polling questions. Codex automatic recovery is unavailable in 0.3.0
+  until a trusted concrete thread ID exists; root metadata alone is insufficient.
+- Exclude empty provisional/refused shells from recovery candidates, including
+  after flag resolution. Report duplicate slot details and require force to
+  retire slots with active assignments or undelivered mail. Resolve related flags
+  on adoption/retirement while retaining lineage history.
+- Replace an older connected Claude MCP only when its own process is verified
+  gone, preventing two live MCP servers from taking the slot back and forth.
 - Keep a session, its name and assignments while its parent remains open after an
   MCP disconnect or broker restart. Hold Claude pushes for the next hook and
   recheck after two seconds, then every ten seconds. Mark offline when the parent

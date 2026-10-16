@@ -124,13 +124,16 @@ describe('claude resume recovery (W7)', () => {
     await until(() => pushes.includes(fresh.welcome.session_id));
     await fresh.client.call('session.register', { name: 'temporary-two' });
     await h.call('hook.event', ev('SessionStart', 600));
-    expect(await fresh.client.call('session.whoami')).toMatchObject({ id: old.welcome.session_id, name: 'worker-one' });
+    expect(await fresh.client.call('session.whoami')).toMatchObject({
+      id: old.welcome.session_id,
+      name: 'temporary-two',
+    });
     release();
     await until(() => deliveriesOfMessage(broker.db, message.id)[0]?.state === 'held');
-    expect(deliveriesOfMessage(broker.db, message.id)).toMatchObject([{ recipient: 'worker-one' }]);
+    expect(deliveriesOfMessage(broker.db, message.id)).toMatchObject([{ recipient: 'temporary-two' }]);
     const inbox = JSON.stringify(await fresh.client.call('msg.inbox'));
     expect(inbox).toContain(message.id);
-    for (const name of ['temporary-one', 'temporary-two'])
+    for (const name of ['temporary-one', 'worker-one'])
       expect(broker.db.prepare('SELECT message_id FROM deliveries WHERE recipient = ?').all(name)).toEqual([]);
   });
 
@@ -145,6 +148,73 @@ describe('claude resume recovery (W7)', () => {
     expect(getSession(broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
     expect(getSession(broker.db, old.welcome.session_id)?.name).toBe('worker-one');
     expect(listLineage(broker.db, { outcome: 'adopted', limit: 10 })).toEqual([]);
+  });
+
+  it.each(['launch', 'register'])(
+    'preserves an explicit %s name through canonical adoption and forwards both inboxes',
+    async (choice) => {
+      const { home, broker } = await boot();
+      const { old, h } = await oldSession(home);
+      old.client.close();
+      await settle();
+      const peer = await mcp(home, 800, { requested_name: 'peer-one' });
+      const fresh = await mcp(home, 600, choice === 'launch' ? { requested_name: 'chosen-role' } : {});
+      if (choice === 'register') await fresh.client.call('session.register', { name: 'chosen-role' });
+      const owner = await ownerClient(home);
+      cleanup.push(() => owner.close());
+      const messages = [];
+      for (const to of ['worker-one', 'chosen-role'])
+        messages.push(
+          await owner.call<{ id: string }>('owner.send', {
+            to,
+            subject: 'retained',
+            body: 'b',
+            priority: 'low',
+            attach_paths: [],
+          }),
+        );
+      await h.call('hook.event', ev('SessionStart', 600));
+      expect(await fresh.client.call('session.whoami')).toMatchObject({
+        id: old.welcome.session_id,
+        name: 'chosen-role',
+        name_source: 'custom',
+      });
+      for (const message of messages)
+        expect(deliveriesOfMessage(broker.db, message.id)[0]?.recipient).toBe('chosen-role');
+      expect(listLineage(broker.db, { outcome: 'adopted', limit: 1 })[0]?.evidence).toMatchObject({
+        explicit_name: { requested: 'chosen-role', applied: true },
+      });
+      expect(JSON.stringify(await peer.client.call('msg.inbox'))).toContain('session renamed: worker-one');
+    },
+  );
+
+  it.each(['native', 'provisional'])('a %s name never replaces the canonical name', async (source) => {
+    const { home, broker } = await boot();
+    const { old, h } = await oldSession(home);
+    old.client.close();
+    await settle();
+    const fresh = await mcp(home, 600);
+    if (source === 'native')
+      broker.naming.adoptNative(fresh.welcome.session_id, 'Temporary native title', 'claude-hook');
+    await h.call('hook.event', ev('SessionStart', 600));
+    expect(await fresh.client.call('session.whoami')).toMatchObject({ id: old.welcome.session_id, name: 'worker-one' });
+  });
+
+  it('keeps the canonical name and records why an explicit name cannot be claimed', async () => {
+    const { home, broker } = await boot();
+    const { old, h } = await oldSession(home);
+    old.client.close();
+    await settle();
+    const blocker = await mcp(home, 800, { requested_name: 'blocking-role' });
+    const fresh = await mcp(home, 600, { requested_name: 'chosen-role' });
+    broker.db.exec(`CREATE TRIGGER claim_during_adoption AFTER UPDATE OF retired_into ON sessions
+      WHEN NEW.id='${fresh.welcome.session_id}' AND NEW.retired_into IS NOT NULL
+      BEGIN UPDATE sessions SET name='chosen-role' WHERE id='${blocker.welcome.session_id}'; END`);
+    await h.call('hook.event', ev('SessionStart', 600));
+    expect(await fresh.client.call('session.whoami')).toMatchObject({ id: old.welcome.session_id, name: 'worker-one' });
+    expect(listLineage(broker.db, { outcome: 'adopted', limit: 1 })[0]?.evidence).toMatchObject({
+      explicit_name: { requested: 'chosen-role', applied: false, reason: 'live' },
+    });
   });
 
   it('a fresh MCP process after a resume takes the canonical slot, name and mail', async () => {

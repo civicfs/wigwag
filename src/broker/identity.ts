@@ -212,8 +212,21 @@ export function installIdentity(broker: Broker): void {
     provisional.delete(self.id);
     conn.sessionId = r.canonical.id;
     conn.generation = r.generation;
-    if (r.fromName && r.fromName !== r.canonical.name)
-      afterRename(broker, r.canonical.id, r.fromName, r.fromSource, 'recovery');
+    let canonical = r.canonical;
+    if (r.fromSource === 'custom' && r.fromName) {
+      const choice = claimName(db, canonical.id, r.fromName, 'custom');
+      const explicitName = choice.ok
+        ? { requested: r.fromName, applied: true }
+        : { requested: r.fromName, applied: false, reason: choice.reason, holder_session_id: choice.holder.id };
+      db.prepare('UPDATE session_lineage SET evidence_json=? WHERE id=?').run(
+        JSON.stringify({ ...evidence, explicit_name: explicitName }),
+        r.lineageId,
+      );
+      if (choice.ok) renamed(canonical, 'recovery');
+      canonical = getSession(db, canonical.id) as SessionRow;
+    }
+    if (r.fromName && r.fromName !== canonical.name)
+      afterRename(broker, canonical.id, r.fromName, r.fromSource, 'recovery');
     if (r.cancelledRelays.length) broker.questions.emit('changed');
     broker.questions.emit('assignments');
     broker.log(

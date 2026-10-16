@@ -172,18 +172,29 @@ vitest, linted with biome.
   `[a-z0-9-]`, prefixed with the agent when they start with a digit, and
   capped at 43 characters; a name held by any other session or reserved gets `-2`…`-9`, then a random suffix. Unusable
   titles keep the current name. `register` sets `custom`; `register` with `native=true` reverts.
-- **Resume recovery (W7, 0.3.0).** At the first native bind of a live slot, exactly one offline or MCP-disconnected,
-  unretired slot of the same agent, native id and workspace that is named or holds an active assignment is the canonical slot: in one
-  transaction the live connection takes it (process fields, state, native binding, a new connection generation), the
-  new slot is retired into it, readiness is cleared, and synchronous native questions of its active worker assignment
-  are cancelled. Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
-  thread ID. Untrusted binds preserve offline slot bindings and record `codex-thread-id-untrusted`; live holders refuse.
-  An injectable trusted-ID provider permits future recovery only when its concrete ID matches the bound ID and the
-  app-server verifies that ID as a root thread. Several candidates,
-  a live holder, or a slot already bound to another conversation never take over; each is recorded in
-  `session_lineage` and shown by `wigwag recovery`. Disconnects only mark a slot offline when the closing connection
-  holds its current generation. Changed-native-id continuations and assignment native-id rebinding are not automatic
-  in 0.3.0.
+- **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
+  `session.bind` tool path for Claude. Exactly one eligible offline or MCP-disconnected, unretired slot of the same
+  agent, native ID and workspace is canonical. An empty provisional/unnamed slot is excluded unless it retains an
+  active assignment, pending/held/failed/stuck mail, or active subscriptions/mutes. A refused-resume shell needs that
+  retained work even if it has a native/custom name; historical refusal keeps an empty shell excluded after its
+  display flag is resolved. Several meaningful candidates flag ambiguity without adopting.
+  In one transaction the live connection takes the canonical slot's identity, work and a new connection generation;
+  incoming process fields replace stale ones, and the new slot retires into it. Readiness is cleared. Synchronous
+  questions remain intact when the incoming Claude parent matches the canonical pid/start identity and both are
+  verified live; otherwise stale synchronous relays are cancelled. An explicit custom launch/register name on the
+  new slot is applied to the canonical slot through the normal claim/rename pipeline, with forwarding and notices.
+  If refused, the canonical name stays and lineage evidence records the requested name and refusal reason.
+  Native/provisional names never override it.
+  Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
+  thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the
+  binding and pass metadata root verification. Untrusted binds preserve offline canonical bindings and record
+  `codex-thread-id-untrusted`; non-offline holders refuse. Legacy queue pushes still address the presented ID.
+  `whoami.capabilities` reports recovery unavailable with that reason. `wigwag recovery` reports duplicate slot
+  names, name sources, times, state/link, active assignment IDs/roles, held/pending counts and total undelivered counts.
+  `owner.retire_slot` refuses an active assignment or any of the four undelivered mail states unless `force:true`
+  (`wigwag recovery retire <id> --force`). Related flags resolve on retirement or adoption; resolving a display flag
+  does not erase its history or revive an empty shell. Changed-native-ID continuation and assignment rebinding remain
+  manual in 0.3.0.
 - **Parent liveness (W8, 0.3.0).** `sessions.link` (`connected | disconnected`) is separate from `parent_state`
   (`live | gone | unknown`). A Claude hook bind records the agent pid and its start identity (Linux: boot id, start
   ticks, uid; macOS: UTC `ps lstart` to the second, uid). On MCP disconnect and at broker start the parent is verified:
@@ -194,7 +205,8 @@ vitest, linted with biome.
   continues checking and marks the session offline once the parent is gone. No recorded evidence at
   disconnect (Claude without identity, Codex without app-server) keeps the 0.2 behavior; an unverifiable parent (probe
   error, legacy row at broker start) goes offline after 3 consecutive unknown probes and 60 s. A new MCP process under
-  the same verified Claude parent re-attaches to the slot.
+  the same verified Claude parent re-attaches to a disconnected slot. Replacing an older connected MCP additionally
+  requires its own recorded process identity to be verified gone; a live or unverifiable older MCP keeps its slot.
 - **Binding the MCP connection to the agent session:**
   - Codex: the plugin declares `SessionStart` / `Stop` / `Interrupt` hooks of `type: "mcp_tool"` calling the
     plugin's own server (`session_bind`, `turn_ended`) with `${session_id}` — same pattern the bundled `browser`

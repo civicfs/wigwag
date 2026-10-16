@@ -30,7 +30,10 @@ Paths and message contents can identify people or contain confidential informati
 flow and does not read provider credential stores or forward agent conversation transcripts. Native Codex question recovery can read the assigned thread history locally to match questions and existing answers; that history is not relayed to other agents.
 Native naming reads local Claude title sidecars and bounded transcript tails, or Codex thread metadata and bounded
 session-index tails. It stores the display title and transcript reference path; it does not relay conversation
-transcripts for naming. Resume lineage records keep native IDs, slot IDs, provenance and recovery outcomes.
+transcripts for naming. Resume lineage records keep native IDs, slot IDs, provenance, recovery outcomes, explicit
+name choices and claim refusal reasons. Owner recovery reports include names, name sources, timestamps, connection
+state, assignment IDs/roles and undelivered-mail counts. Codex automatic slot recovery is disabled because the hook's
+shared tree-root ID does not establish a concrete conversation identity.
 Tools process the snippets, data, and file paths supplied to them; a blob upload reads the specified file.
 
 Do not send passwords, API keys, authentication tokens, protected health information, or payment-card data through
@@ -81,7 +84,9 @@ maintainer has no access to your local installation to sell, inspect, or delete 
 Wigwag currently has no automatic retention period or per-message erasure feature. Messages, stream records, and
 key/value history are append-only and remain until the operator removes the installation's stored data. Expiring a
 request, acknowledging a message, deleting a current key/value entry, or unlinking workspaces does not erase history.
-Unlinking restricts subsequent scoped access; it cannot recall copies already received.
+Unlinking restricts subsequent scoped access; it cannot recall copies already received. Retiring a slot or resolving
+a recovery flag affects eligibility and active diagnostics; neither action erases stored messages, assignments or
+lineage history. Forced retirement can exclude slots that still hold work.
 
 `wigwag uninstall` removes plugin registrations and retains the home directory. To remove local stored data:
 
