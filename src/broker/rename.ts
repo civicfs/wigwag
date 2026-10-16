@@ -42,7 +42,7 @@ export function afterRename(
   const s = getSession(db, sessionId);
   if (!s?.name || s.name === from) return;
   const to = s.name;
-  const mail = from ? (broker.engine?.forward(from, to) ?? 0) : 0;
+  const mail = from ? (broker.engine?.forward(from, to, s.id) ?? 0) : 0;
   const at = nowIso();
   const moved = tx(db, () => {
     const subs = from ? moveActive(db, 'subscriptions', from, to, at) : 0;

@@ -53,8 +53,11 @@ export class DeliveryEngine {
   private readonly now: () => number;
   /** Deliveries whose transport call is running. Keyed `message_id\0recipient`. */
   private readonly inflight = new Set<string>();
-  /** from-name → to-name for a forward that skipped an in-flight push; re-run when that push settles (W2a). */
-  private readonly deferredForwards = new Map<string, string>();
+  /** Only the owning session's exact skipped rows may follow a settled push (W2a). */
+  private readonly deferredForwards = new Map<
+    string,
+    { sessionId: string; from: string; to: string; messageIds: Set<string> }
+  >();
   /** Running transport pushes; a graceful stop waits for them (final review I-10). */
   private readonly running = new Set<Promise<void>>();
   private readonly recipientQueues = new Map<string, Promise<void>>();
@@ -187,19 +190,35 @@ export class DeliveryEngine {
    * (spec §17). Pending and failed deliveries are dispatched again under the new name (their timers and queued
    * dispatches were keyed by the old one); held ones are picked up by the `session.available` sweep that follows.
    */
-  forward(from: string, to: string): number {
-    let skipped = false;
+  /** A new holder of a source name invalidates the previous holder's deferred forwarding. */
+  nameClaimed(sessionId: string, name: string): void {
+    for (const [key, deferred] of this.deferredForwards) {
+      if (deferred.from === name && deferred.sessionId !== sessionId) this.deferredForwards.delete(key);
+    }
+  }
+
+  forward(from: string, to: string, sessionId: string, onlyMessageIds?: Set<string>): number {
+    const key = `${sessionId}\u0000${from}`;
+    const holder = holderOf(this.d.db, from);
+    if (from === to || (holder && holder.id !== sessionId)) {
+      this.deferredForwards.delete(key);
+      return 0;
+    }
+    const skipped = new Set<string>();
     const moved = moveDeliveries(this.d.db, from, to, (x) => {
+      if (onlyMessageIds && !onlyMessageIds.has(x.message_id)) return false;
       if (this.busy({ message_id: x.message_id, recipient: from })) {
-        skipped = true;
+        skipped.add(x.message_id);
         return false;
       }
       return scopeViolation(this.d.db, x.message.from_workspace, to) === null;
     });
-    // A later rename of `to` must carry deferred deliveries all the way to the newest name.
-    for (const [f, t] of this.deferredForwards) if (t === from) this.deferredForwards.set(f, to);
-    if (skipped) this.deferredForwards.set(from, to);
-    else this.deferredForwards.delete(from);
+    // A later rename carries only this session's deferred rows to its newest name.
+    for (const deferred of this.deferredForwards.values()) {
+      if (deferred.sessionId === sessionId && deferred.to === from) deferred.to = to;
+    }
+    if (skipped.size) this.deferredForwards.set(key, { sessionId, from, to, messageIds: skipped });
+    else this.deferredForwards.delete(key);
     for (const row of moved) {
       this.d.emitFeed('delivery', { ...row, recipient_unread: visibleUnreadCount(this.d.db, to) });
       if (row.state === 'pending' || row.state === 'failed') {
@@ -360,8 +379,10 @@ export class DeliveryEngine {
       for (const k of keys) this.inflight.delete(DeliveryEngine.id(k));
       if (!this.drained) {
         for (const recipient of new Set(keys.map((k) => k.recipient))) {
-          const to = this.deferredForwards.get(recipient);
-          if (to) this.forward(recipient, to);
+          for (const deferred of [...this.deferredForwards.values()]) {
+            if (deferred.from === recipient)
+              this.forward(deferred.from, deferred.to, deferred.sessionId, deferred.messageIds);
+          }
         }
       }
     }

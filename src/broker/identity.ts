@@ -87,7 +87,10 @@ export function installIdentity(broker: Broker): void {
   const announce = (id: string) => {
     const s = getSession(db, id) as SessionRow;
     // R42-D: before any agent call can read the name's backlog, out-of-scope held/pending deliveries become stuck.
-    if (s.name) broker.engine?.sweep(s.name);
+    if (s.name) {
+      broker.engine?.nameClaimed(s.id, s.name);
+      broker.engine?.sweep(s.name);
+    }
     broker.broadcastOwner('session', publicSession(db, s));
     if (isReachable(s)) broker.bus.emit('session.available', s);
     return s;

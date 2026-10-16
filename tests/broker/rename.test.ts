@@ -4,6 +4,7 @@ import type { Broker } from '../../src/broker/server.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
 import { loadConfig } from '../../src/config.js';
+import { noProcesses } from '../../src/proc/identity.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { FeedData, Hello } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
@@ -47,6 +48,61 @@ const notices = (broker: Broker) =>
     .all() as Array<{ to_target: string; subject: string }>;
 
 describe('every rename (W2a)', () => {
+  it.each([false, true])(
+    'reclaiming a deferred source name leaves the new holder mail in place (push in flight: %s)',
+    async (busyB) => {
+      let releaseA = () => {};
+      let releaseB = () => {};
+      const gateA = new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
+      const gateB = new Promise<void>((resolve) => {
+        releaseB = resolve;
+      });
+      let aId = '';
+      const pushed: string[] = [];
+      const transport: Transport = {
+        kind: 'claude-channel',
+        push: async (s) => {
+          pushed.push(s.id);
+          await (s.id === aId ? gateA : gateB);
+          throw new Error('fixture push failed');
+        },
+      };
+      const home = tmpHome();
+      const broker = await startBroker(home, {
+        processProbe: noProcesses,
+        transports: { claude: transport, codex: { ...transport, kind: 'codex-queue' } },
+      });
+      cleanup.push(
+        () => broker.stop(),
+        () => {
+          releaseA();
+          releaseB();
+        },
+      );
+      const a = await mcp(home, { requested_name: 'busy-name' });
+      aId = a.welcome.session_id;
+      const original = await ownerSend(home, 'busy-name', 'for-a', 'urgent');
+      await until(() => pushed.includes(aId));
+      await a.client.call('session.register', { name: 'new-name' });
+      const b = await mcp(home, { mcp_ppid: 401 });
+      await b.client.call('session.register', { name: 'busy-name' });
+      const held = await ownerSend(home, 'busy-name', 'for-b');
+      const wake = busyB ? await ownerSend(home, 'busy-name', 'wake-b', 'urgent') : null;
+      releaseA();
+      await until(() => deliveriesOfMessage(broker.db, original.id)[0]?.state === 'held');
+      expect(deliveriesOfMessage(broker.db, held.id)[0]?.recipient).toBe('busy-name');
+      if (wake) {
+        expect(deliveriesOfMessage(broker.db, wake.id)[0]?.recipient).toBe('busy-name');
+        await until(() => pushed.includes(b.welcome.session_id));
+        releaseB();
+        await until(() => deliveriesOfMessage(broker.db, wake.id)[0]?.state === 'held');
+        expect(deliveriesOfMessage(broker.db, wake.id)[0]?.recipient).toBe('busy-name');
+        expect(deliveriesOfMessage(broker.db, held.id)[0]?.recipient).toBe('busy-name');
+      }
+    },
+  );
   it('forwards undelivered mail from a registered name too and audits the rename', async () => {
     const { home, broker } = await boot();
     const a = await mcp(home, { requested_name: 'first-name' });
