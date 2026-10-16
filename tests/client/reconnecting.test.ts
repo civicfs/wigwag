@@ -1,10 +1,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { Broker } from '../../src/broker/server.js';
 import { ReconnectingClient } from '../../src/client/reconnecting.js';
 import { configPath, loadConfig } from '../../src/config.js';
-import { tmpHome } from '../helpers.js';
+import { startBroker, tmpHome } from '../helpers.js';
 
 // Cleanup is registered as each resource is created, so a failing assertion leaks nothing.
 const cleanups: Array<() => unknown> = [];

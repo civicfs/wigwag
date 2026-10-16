@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { PARENT_OPEN_TEXT } from '../../src/broker/registry.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
@@ -9,7 +8,7 @@ import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello, PushData } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { addThrottle } from '../../src/store/subs.js';
-import { ownerClient, tmpHome, until } from '../helpers.js';
+import { ownerClient, startBroker, tmpHome, until } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {

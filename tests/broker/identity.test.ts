@@ -2,7 +2,6 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import type { Broker } from '../../src/broker/server.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
@@ -12,7 +11,7 @@ import type { Hello } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { GIT_TIMEOUT_MS } from '../../src/workspace.js';
-import { fakeGitDir, ownerClient, startTestBroker } from '../helpers.js';
+import { fakeGitDir, ownerClient, startBroker, startTestBroker } from '../helpers.js';
 
 type Welcome = { session_id: string; name: string; agent: string; warning: string | null };
 const cleanup: Array<() => unknown> = [];

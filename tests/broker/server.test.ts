@@ -2,13 +2,12 @@ import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, w
 import { createConnection, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { Broker } from '../../src/broker/server.js';
 import { canConnect, sockPath } from '../../src/client/autospawn.js';
 import { loadConfig } from '../../src/config.js';
 import { WigwagError } from '../../src/errors.js';
 import { VERSION } from '../../src/version.js';
-import { ownerClient, staleSocket, startTestBroker, tmpHome } from '../helpers.js';
+import { ownerClient, staleSocket, startBroker, startTestBroker, tmpHome } from '../helpers.js';
 
 const brokers: Broker[] = [];
 afterEach(async () => {

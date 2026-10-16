@@ -163,7 +163,7 @@ describe('post-commit fan-out isolation', () => {
     cfg.limits.inline_body_bytes = 10;
     cfg.limits.max_blob_bytes = 10;
     writeFileSync(configPath(home), JSON.stringify(cfg, null, 2));
-    const { startBroker } = await import('../../src/broker/assemble.js');
+    const { startBroker } = await import('../helpers.js');
     broker = await startBroker(home);
     const a = await join2('alpha-one');
     const b = await join2('beta-one');

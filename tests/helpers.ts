@@ -1,14 +1,15 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { vi } from 'vitest';
-import { startBroker } from '../src/broker/assemble.js';
+import { startBroker as assembleBroker } from '../src/broker/assemble.js';
 import type { Broker } from '../src/broker/server.js';
 import { sockPath } from '../src/client/autospawn.js';
 import { Client } from '../src/client/client.js';
 import { configPath, initHome, loadConfig } from '../src/config.js';
+import { codexIndexPath } from '../src/native/codex-names.js';
 import { noProcesses } from '../src/proc/identity.js';
 import { frameLimit } from '../src/protocol/frame.js';
 import type { Hello, PushData } from '../src/protocol/rpc.js';
@@ -28,9 +29,23 @@ export function tmpHome(): string {
   // against them.
   cfg.broker.start_timeout_ms = 30000;
   cfg.hooks.deadline_ms = 30000;
-  cfg.questions.app_server_socket = join(home, 'codex-app-server.sock');
+  cfg.questions.app_server_socket = join(home, 'app-server-control', 'fixture.sock');
   writeFileSync(configPath(home), JSON.stringify(cfg, null, 2));
   return home;
+}
+
+/** All test broker starts validate native paths and default to a fake process table, including restarts. */
+export async function startBroker(
+  home: string,
+  opts: NonNullable<Parameters<typeof assembleBroker>[1]> = {},
+): Promise<Broker> {
+  const socket = loadConfig(home).questions.app_server_socket;
+  for (const path of [socket, codexIndexPath(socket)]) {
+    const rel = relative(resolve(home), path);
+    if (isAbsolute(rel) || rel === '..' || rel.startsWith('../'))
+      throw new Error('test broker native path is outside its fixture home');
+  }
+  return assembleBroker(home, { processProbe: noProcesses, ...opts });
 }
 
 export async function startTestBroker(home = tmpHome()): Promise<{ home: string; broker: Broker }> {

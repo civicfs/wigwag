@@ -5,12 +5,11 @@ import { join } from 'node:path';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import type { Broker } from '../../src/broker/server.js';
 import { loadConfig } from '../../src/config.js';
 import { loadsWigwagChannel, processArgs } from '../../src/proc/channel-flag.js';
 import { deliveriesByState } from '../../src/store/messages.js';
-import { DIST_MAIN, killSpawnedBrokers, ownerClient, sessionOnline, tmpHome, until } from '../helpers.js';
+import { DIST_MAIN, killSpawnedBrokers, ownerClient, sessionOnline, startBroker, tmpHome, until } from '../helpers.js';
 
 // E-3 with the real MCP server: whether a channel push is attempted depends on what the client advertised at
 // initialize, or on the parent claude having been started with the wigwag channel flag.

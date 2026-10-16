@@ -2,7 +2,6 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { verifyAtStart } from '../../src/broker/liveness.js';
 import type { Broker } from '../../src/broker/server.js';
 import { sockPath } from '../../src/client/autospawn.js';
@@ -13,7 +12,7 @@ import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { openDb } from '../../src/store/db.js';
 import { claimName, createSession, getSession, liveHolder, setAgentIdentity } from '../../src/store/sessions.js';
-import { tmpHome, until } from '../helpers.js';
+import { startBroker, tmpHome, until } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {

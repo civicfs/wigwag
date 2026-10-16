@@ -1,12 +1,11 @@
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import type { Broker } from '../../src/broker/server.js';
 import { deliveriesOfMessage, insertMessage, transition } from '../../src/store/messages.js';
 import { activeThrottles } from '../../src/store/subs.js';
 import { CODEX_ARG_BUDGET_BYTES } from '../../src/transports/codex-queue.js';
 import type { Transport } from '../../src/transports/types.js';
-import { mcpClient, readCodexCalls, startTestBroker, until } from '../helpers.js';
+import { mcpClient, readCodexCalls, startBroker, startTestBroker, until } from '../helpers.js';
 
 let home: string;
 let broker: Broker;

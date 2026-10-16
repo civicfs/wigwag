@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { configPath, loadConfig } from '../../src/config.js';
 import { WigwagError } from '../../src/errors.js';
 import { describeError } from '../../src/mcp/server.js';
@@ -16,6 +15,7 @@ import {
   killSpawnedBrokers,
   ownerClient,
   readCodexCalls,
+  startBroker,
   tmpHome,
   until,
   WAIT_MS,

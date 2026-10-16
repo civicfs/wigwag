@@ -1,6 +1,5 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { installLiveness } from '../../src/broker/liveness.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
@@ -10,7 +9,7 @@ import type { ProcessProbe } from '../../src/proc/identity.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import type { Hello } from '../../src/protocol/rpc.js';
 import { getSession } from '../../src/store/sessions.js';
-import { tmpHome, until } from '../helpers.js';
+import { startBroker, tmpHome, until } from '../helpers.js';
 
 class FakeApp extends EventEmitter {
   loaded = new Set<string>();
