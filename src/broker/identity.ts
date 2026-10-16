@@ -255,7 +255,7 @@ export function installIdentity(broker: Broker): void {
     markDisconnectedIfCurrent(db, s.id, conn.generation, verdict);
     broker.log(`${s.id} (${s.name ?? 'unnamed'}) MCP disconnected; parent ${verdict}; session kept`);
     announce(s.id);
-    broker.liveness?.kick();
+    broker.liveness?.kick(true);
   });
 
   // W8: a probe-confirmed offline frees a name a launcher may be waiting for.

@@ -150,6 +150,34 @@ describe('parent probe loop (W8)', () => {
     }
   });
 
+  it('rechecks a disconnected parent after two seconds and cancels that timer on stop', async () => {
+    const { home, broker } = await boot();
+    procs.set(4242, 'start-A');
+    const a = await claudeBound(home, 4242, 'worker-one');
+    broker.liveness?.stop();
+    vi.useFakeTimers();
+    const live = installLiveness(broker, { intervalMs: 10_000, now: () => clock });
+    try {
+      // Drive the disconnect callbacks with this fixture connection; timers are fully fake.
+      const conn = broker.connectionFor(a.welcome.session_id);
+      if (!conn) throw new Error('missing fixture connection');
+      for (const f of broker.onDisconnect) f(conn);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getSession(broker.db, a.welcome.session_id)?.parent_state).toBe('live');
+      procs.delete(4242);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(getSession(broker.db, a.welcome.session_id)?.state).toBe('online-idle');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getSession(broker.db, a.welcome.session_id)?.state).toBe('offline');
+      live.kick(true);
+      live.stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      live.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it('a parent that exits while the MCP is already down: offline at the next probe, name freed', async () => {
     const { home, broker } = await boot();
     procs.set(4242, 'start-A');

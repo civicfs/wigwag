@@ -154,6 +154,11 @@ vitest, linted with biome.
   `session_renames`, live sessions in scope get a low-priority `session renamed: <old> → <new>` notice (not sent when
   the old name was an unused provisional name), and owners get the session. Pending and failed deliveries are
   dispatched again, and the session is announced so held backlog is swept and delivered.
+- **Parent liveness limits (0.3.0).** A Codex worker with an active assignment is kept loaded by Wigwag's own question
+  relay, which re-attaches with `thread/resume`; liveness cannot detect its TUI closing until the assignment is released.
+  Pushes to disconnected Codex sessions still use `codex queue`, independently of the MCP link, and may resume a closed
+  thread. macOS identities use UTC `ps lstart` plus uid with one-second resolution, so same-uid PID reuse within a
+  second cannot be distinguished.
 - **Rename**: `register(name)` tool. Rejected if a *live* session holds it. If the holder is offline, the new
   session takes the name and inherits its undelivered backlog (delivered as one digest on first wake).
 - **Binding the MCP connection to the agent session:**

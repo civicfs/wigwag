@@ -67,18 +67,20 @@ export function verifyAtStart(broker: Pick<Broker, 'db' | 'processProbe' | 'log'
 
 /** Fixed internal bounds (W8), in the style of the other fixed constants; tests override them via startBroker. */
 export const PARENT_PROBE_MS = 10000;
+export const PARENT_DISCONNECT_RECHECK_MS = 2000;
 export const PARENT_UNKNOWN_GRACE_MS = 60000;
 export const PARENT_UNKNOWN_GRACE_PROBES = 3;
 
 export interface LivenessOptions {
   intervalMs?: number;
+  disconnectRecheckMs?: number;
   graceMs?: number;
   graceProbes?: number;
   now?: () => number;
 }
 export interface Liveness {
   probeNow(): Promise<void>;
-  kick(): void;
+  kick(recheckAfterDisconnect?: boolean): void;
   stop(): void;
 }
 
@@ -98,6 +100,7 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
   let running: Promise<void> | null = null;
   let stopped = false;
   let queuedKick: NodeJS.Immediate | null = null;
+  const rechecks = new Set<NodeJS.Timeout>();
 
   const connected = (s: SessionRow) => {
     if (s.link === 'connected') unknownSince.delete(s.id);
@@ -190,8 +193,17 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
       });
     return running;
   };
-  const kick = () => {
-    if (stopped || queuedKick) return;
+  const kick = (recheckAfterDisconnect = false) => {
+    if (stopped) return;
+    if (recheckAfterDisconnect) {
+      const recheck = setTimeout(() => {
+        rechecks.delete(recheck);
+        void probeNow();
+      }, opts.disconnectRecheckMs ?? PARENT_DISCONNECT_RECHECK_MS);
+      recheck.unref();
+      rechecks.add(recheck);
+    }
+    if (queuedKick) return;
     queuedKick = setImmediate(() => {
       queuedKick = null;
       void probeNow();
@@ -203,6 +215,8 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
   const stop = () => {
     stopped = true;
     clearInterval(timer);
+    for (const recheck of rechecks) clearTimeout(recheck);
+    rechecks.clear();
     if (queuedKick) clearImmediate(queuedKick);
     queuedKick = null;
     unknownSince.clear();

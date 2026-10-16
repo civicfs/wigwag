@@ -36,6 +36,15 @@ Sessions in a Git repository and its worktrees share a workspace automatically.
 Other workspaces need an owner-created link. Wigwag runs on one host; it does not
 currently spawn replacement agents or transfer tasks after a worker fails.
 
+## Parent liveness limits in 0.3.0
+
+A Codex worker with an active assignment remains loaded because Wigwag's question
+relay re-attaches with `thread/resume`. Liveness cannot detect that its TUI closed
+until the assignment is released. Pushes to a disconnected Codex session still
+use `codex queue`, independently of the MCP link, and may resume a closed thread.
+On macOS, parent identity uses `ps lstart` in UTC plus uid, with one-second
+resolution; PID reuse within the same second by the same uid cannot be distinguished.
+
 ## Install
 
 Version **0.2.0** is the first public source release. GitHub releases and npm
