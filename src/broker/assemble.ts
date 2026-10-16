@@ -31,9 +31,10 @@ function installSys(broker: Broker): void {
   }));
 }
 
-function installDelivery(broker: Broker, transports: TransportRegistry): DeliveryEngine {
+function installDelivery(broker: Broker, transports: TransportRegistry, now?: () => number): DeliveryEngine {
   const engine = new DeliveryEngine({
     db: broker.db,
+    now,
     codexPushTrust: (s) => broker.checkCodexPush(s, true),
     config: broker.config,
     transports,
@@ -60,6 +61,7 @@ export async function startBroker(
     codexNameRefreshMs?: number;
     codexQuestionFactory?: () => AppConnection;
     codexQuestionIdleGraceMs?: number;
+    codexPushNow?: () => number;
     processProbe?: ProcessProbe;
     trustedThreadId?: Broker['trustedThreadId'];
     liveness?: LivenessOptions;
@@ -71,15 +73,15 @@ export async function startBroker(
   if (opts.processProbe) broker.processProbe = opts.processProbe;
   const transports = opts.transports ?? {
     claude: new ClaudeChannelTransport((id) => broker.connectionFor(id)),
-    codex: new CodexQueueTransport(config.codex.binary, config.codex.queue_timeout_ms, (s) =>
-      broker.checkCodexPush(s, true),
+    codex: new CodexQueueTransport(config.codex.binary, config.codex.queue_timeout_ms, (s, proof) =>
+      broker.checkCodexPush(s, true, true, proof),
     ),
   };
   broker.onOpen.push(() => {
     installSys(broker);
     installIdentity(broker);
     installNaming(broker);
-    installDelivery(broker, transports);
+    installDelivery(broker, transports, opts.codexPushNow);
     installMessages(broker);
     installData(broker);
     installRequests(broker);
@@ -97,7 +99,7 @@ export async function startBroker(
         }),
       opts.codexNameRefreshMs,
     );
-    installCodexPushTrust(broker);
+    installCodexPushTrust(broker, opts.codexPushNow);
     installLiveness(broker, opts.liveness);
     const codexQuestions = new CodexQuestions(questions, opts.codexQuestionFactory, {
       idleGraceMs: opts.codexQuestionIdleGraceMs,

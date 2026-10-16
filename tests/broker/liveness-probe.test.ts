@@ -84,6 +84,45 @@ async function claudeBound(home: string, ppid: number, name: string) {
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
 describe('parent probe loop (W8)', () => {
+  it('applies Claude process checks before awaiting a slow Codex trust scan', async () => {
+    const { home, broker, app } = await boot();
+    procs.set(4242, 'start-A');
+    const a = await claudeBound(home, 4242, 'worker-one');
+    app.loaded.add('T');
+    const codex = await connect(home, {
+      protocol: 1,
+      role: 'mcp',
+      agent: 'codex',
+      cwd: CWD,
+      pid_chain: [11, 2191],
+      mcp_ppid: 2191,
+    });
+    await codex.client.call('session.bind', { agent_session_id: 'T' });
+    a.client.close();
+    await settle();
+    procs.delete(4242);
+    let release = () => {};
+    let entered = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const waiting = new Promise<void>((r) => {
+      entered = r;
+    });
+    vi.spyOn(broker, 'checkCodexPush').mockImplementation(async () => {
+      entered();
+      await gate;
+      return null;
+    });
+    const probing = broker.liveness?.probeNow();
+    try {
+      await waiting;
+      expect(getSession(broker.db, a.welcome.session_id)?.state).toBe('offline');
+    } finally {
+      release();
+      await probing;
+    }
+  });
   it.each([false, true])(
     'a reconnect starts a fresh grace period (probe while connected: %s)',
     async (probeConnected) => {

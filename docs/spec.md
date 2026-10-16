@@ -236,7 +236,11 @@ vitest, linted with biome.
   reads at most 256 loaded threads in batches of eight, and caches non-push checks for 2 s. Unavailable/malformed
   evidence fails closed. Reasons are shared-root, root-not-loaded, descendant-loaded or app-server-unavailable;
   deliveries hold as codex-untrusted and remain accessible through hooks/inbox. Public session/capability/TUI/recovery
-  diagnostics show the reason. This gate does not enable automatic Codex slot recovery.
+  diagnostics show the reason, including `too-many-loaded` for over 256 loaded threads and `unreadable-loaded`
+  when a loaded thread's metadata cannot be read or lacks sessionId. The transport may reuse only this push's
+  fresh engine verdict for less than one second; binding, generation, host, duplicate holders and MCP link are
+  rechecked for every chunk. Bind-time cached evidence is never a push proof. Claude liveness verdicts apply
+  before the probe awaits Codex I/O. This gate does not enable automatic Codex slot recovery.
   Pushes additionally require `bind_origin='hook-verified'`. All internal MCP hook tools advertise
   `_meta.ui.visibility=['app']`; the server derives origin only from initialized host identity and request
   metadata, never tool arguments. Model `callId`, missing metadata or sessionId/threadId disagreement refuses

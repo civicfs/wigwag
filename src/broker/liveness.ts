@@ -125,12 +125,6 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
 
   const probeOnce = async () => {
     const sessions = listSessions(db);
-    for (const s of sessions.filter(
-      (s) => s.agent === 'codex' && s.agent_session_id && !s.retired_at && s.state !== 'offline',
-    )) {
-      await broker.checkCodexPush(s, true);
-      if (stopped) return;
-    }
     const current = new Map(sessions.map((s) => [s.id, s]));
     for (const [id, grace] of unknownSince) {
       const s = current.get(id);
@@ -144,7 +138,6 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
         unknownSince.delete(id);
     }
     const rows = sessions.filter((s) => s.state !== 'offline' && s.link === 'disconnected' && !s.retired_at);
-    if (!rows.length) return;
     const withId = rows.filter(
       (s) => s.agent === 'claude' && !isLegacySession(db, s.id) && s.agent_pid !== null && s.agent_start,
     );
@@ -152,50 +145,63 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
       withId.map((s) => ({ pid: s.agent_pid as number, start: s.agent_start as string })),
       broker.processProbe,
     );
-    const loaded = rows.some((s) => s.agent === 'codex' && !isLegacySession(db, s.id))
-      ? ((await broker.codexNames?.loadedThreads()) ?? null)
-      : null;
-    if (stopped) return;
-    for (const s of rows) {
+    const apply = (s: SessionRow, v: ParentVerdict) => {
       const fresh = getSession(db, s.id);
       if (
         !fresh ||
+        fresh.retired_at ||
         fresh.state === 'offline' ||
         fresh.link !== 'disconnected' ||
         fresh.conn_generation !== s.conn_generation
       )
-        continue;
-      let v: ParentVerdict;
-      if (isLegacySession(db, s.id)) v = 'unknown';
-      else if (s.agent === 'claude') {
-        const i = withId.indexOf(s);
-        v = i < 0 || checks === null ? 'unknown' : checks[i] ? 'live' : 'gone';
-      } else
-        v = !s.agent_session_id
-          ? 'gone'
-          : loaded === null
-            ? 'unknown'
-            : loaded.has(s.agent_session_id)
-              ? 'live'
-              : 'gone';
+        return;
       if (v === 'gone') {
         offline(fresh, s.agent === 'claude' ? 'parent process gone' : 'thread no longer loaded');
-        continue;
+        return;
       }
       if (v === 'live') {
         unknownSince.delete(s.id);
         mark(fresh, 'live');
-        continue;
+        return;
       }
       const u = unknownSince.get(s.id) ?? { first: now(), probes: 0, generation: s.conn_generation };
       u.probes++;
       unknownSince.set(s.id, u);
       if (u.probes >= graceProbes && now() - u.first >= graceMs) {
         offline(fresh, `parent unverifiable for ${u.probes} probes; falling back to offline`);
-        continue;
+        return;
       }
       mark(fresh, 'unknown');
+    };
+    // Claude verdicts are synchronous: apply them before any potentially slow Codex I/O.
+    for (const s of rows.filter((s) => s.agent === 'claude')) {
+      const i = withId.indexOf(s);
+      apply(s, isLegacySession(db, s.id) || i < 0 || checks === null ? 'unknown' : checks[i] ? 'live' : 'gone');
     }
+    for (const s of sessions.filter(
+      (s) => s.agent === 'codex' && s.agent_session_id && !s.retired_at && s.state !== 'offline',
+    )) {
+      await broker.checkCodexPush(s, true);
+      if (stopped) return;
+    }
+    const codex = rows.filter((s) => s.agent === 'codex');
+    const loaded = codex.some((s) => !isLegacySession(db, s.id))
+      ? ((await broker.codexNames?.loadedThreads()) ?? null)
+      : null;
+    if (stopped) return;
+    for (const s of codex)
+      apply(
+        s,
+        isLegacySession(db, s.id)
+          ? 'unknown'
+          : !s.agent_session_id
+            ? 'gone'
+            : loaded === null
+              ? 'unknown'
+              : loaded.has(s.agent_session_id)
+                ? 'live'
+                : 'gone',
+      );
   };
 
   const probeNow = (): Promise<void> => {

@@ -1,13 +1,22 @@
 import type { RenderItem } from '../broker/render.js';
 import type { Agent, SessionRow } from '../store/sessions.js';
 
+/** Issued by the delivery engine only for this push, after a fresh metadata verdict; never bind-time evidence. */
+export interface CodexPushProof {
+  sessionId: string;
+  nativeId: string | null;
+  generation: number;
+  checkedAt: number;
+}
+export interface PushOptions {
+  signal?: AbortSignal;
+  onPushed?: (items: RenderItem[]) => void;
+  codexPushProof?: CodexPushProof;
+}
+
 export interface Transport {
   readonly kind: 'claude-channel' | 'codex-queue';
-  push(
-    session: SessionRow,
-    items: RenderItem[],
-    options?: { signal?: AbortSignal; onPushed?: (items: RenderItem[]) => void },
-  ): Promise<void>;
+  push(session: SessionRow, items: RenderItem[], options?: PushOptions): Promise<void>;
   /** False when the live session cannot take this transport's pushes at all (Claude without the channel, E-3); absent means it can. */
   hasChannel?(session: SessionRow): boolean;
   /** Why this item can never be pushed by this transport (deterministic, so not worth retrying); null if it can. */

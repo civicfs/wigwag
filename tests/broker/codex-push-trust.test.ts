@@ -72,6 +72,25 @@ async function boot() {
   return { home, app, broker, pushes, o, c, send };
 }
 describe('Codex push trust at bind, probe and dispatch', () => {
+  it.each(['too-many-loaded', 'unreadable-loaded'])('persists and reports the distinct %s hold', async (reason) => {
+    const { app, broker, c, send, pushes, o } = await boot();
+    app.loaded =
+      reason === 'too-many-loaded'
+        ? ['T', ...Array.from({ length: 256 }, (_, i) => `other-${i}`)]
+        : ['T', 'unreadable'];
+    await c.client.call('session.bind', { agent_session_id: 'T' });
+    expect(getSession(broker.db, c.welcome.session_id)?.codex_push_reason).toBe(reason);
+    const m = await send();
+    await until(() => deliveriesOfMessage(broker.db, m.id)[0]?.state === 'held');
+    expect(deliveriesOfMessage(broker.db, m.id)[0]?.hold_reason).toBe('codex-untrusted');
+    expect(pushes).toEqual([]);
+    for (const output of [
+      await c.client.call('session.whoami'),
+      await o.call('session.who'),
+      await o.call('owner.recovery'),
+    ])
+      expect(JSON.stringify(output)).toContain(reason);
+  });
   it.each(['bind-first', 'reattach-first'])(
     'keeps one live holder when an offline binding returns (%s)',
     async (order) => {

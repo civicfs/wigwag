@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Distinguish overloaded and unreadable Codex metadata from unavailable listings.
+  Reuse a fresh engine verdict only within the same push for less than one second,
+  with current slot checks on every chunk. Apply Claude liveness before Codex I/O.
+
 - Split Claude slots on an in-process conversation change, preserving the old
   conversation's name, mail, assignments and relays. Recover only the destination's
   unique eligible slot; ambiguous or live-held destinations remain unbound.

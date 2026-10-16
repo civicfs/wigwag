@@ -141,6 +141,10 @@ a shared tree-root ID. `whoami` reports `unavailable` with reason
 `codex-thread-id-untrusted`. A future trusted concrete thread ID must also pass
 root verification. Codex queue pushes require a connected MCP link and a loaded root with no other
 loaded thread sharing its root ID. Metadata is rechecked before each push;
+the transport reuses that same push's verdict for less than one second while
+rechecking current binding, generation, host, duplicate holders and MCP link.
+More than 256 loaded threads hold with `too-many-loaded`; an unreadable loaded
+thread holds with `unreadable-loaded`, distinct from an unavailable listing.
 unavailable or ambiguous evidence
 holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
 (<reason>)`. This push check does not enable automatic slot recovery.

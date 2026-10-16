@@ -19,7 +19,7 @@ import {
 } from '../store/messages.js';
 import { getSession, holderOf, type SessionRow } from '../store/sessions.js';
 import { activeThrottles, addThrottle, isMuted, isThrottled, releaseThrottle } from '../store/subs.js';
-import type { TransportRegistry } from '../transports/types.js';
+import type { CodexPushProof, TransportRegistry } from '../transports/types.js';
 import { codexPushHold, codexPushLabel } from './codex-push.js';
 import { decide } from './policy.js';
 import { WakeLimiter } from './ratelimit.js';
@@ -354,6 +354,7 @@ export class DeliveryEngine {
 
   private async push(session: SessionRow, wake: Key[]): Promise<void> {
     if (this.stopped) return;
+    let codexPushProof: CodexPushProof | undefined;
     if (session.agent === 'codex' && this.d.codexPushTrust) {
       const reason = await this.d.codexPushTrust(session);
       if (this.stopped) return;
@@ -365,6 +366,12 @@ export class DeliveryEngine {
           });
         return;
       }
+      codexPushProof = {
+        sessionId: session.id,
+        nativeId: session.agent_session_id,
+        generation: session.conn_generation,
+        checkedAt: this.now(),
+      };
     }
     const transport = session.agent === 'claude' ? this.d.transports.claude : this.d.transports.codex;
     // Codex cannot be shown hook context reliably (spike S4), so a wake push to Codex also carries its held
@@ -419,7 +426,11 @@ export class DeliveryEngine {
         await transport.push(
           session,
           pairs.map((x) => x.item),
-          { signal: this.abortPushes.signal, onPushed: (items) => markPushed(new Set(items.map((it) => it.msg.id))) },
+          {
+            signal: this.abortPushes.signal,
+            onPushed: (items) => markPushed(new Set(items.map((it) => it.msg.id))),
+            codexPushProof,
+          },
         );
       } catch (e) {
         err = e as Error;

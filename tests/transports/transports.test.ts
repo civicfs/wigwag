@@ -114,6 +114,20 @@ describe('bounded Claude channel batches', () => {
 });
 
 describe('CodexQueueTransport', () => {
+  it('passes the engine’s per-push proof to every chunk verifier', async () => {
+    const log = join(tmpHome(), 'proof.jsonl');
+    process.env.FAKE_CODEX_LOG = log;
+    const s = session();
+    const proof = { sessionId: s.id, nativeId: s.agent_session_id, generation: s.conn_generation, checkedAt: 1000 };
+    const seen: unknown[] = [];
+    const transport = new CodexQueueTransport(FAKE_CODEX, 5000, async (_s, received) => {
+      seen.push(received);
+      return null;
+    });
+    await transport.push(s, items(2, 'x'.repeat(60000)), { codexPushProof: proof });
+    expect(seen).toEqual([proof, proof]);
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
   it('fails closed without evidence and rechecks every chunk before executing queue', async () => {
     const log = join(tmpHome(), 'queue-trust.jsonl');
     process.env.FAKE_CODEX_LOG = log;

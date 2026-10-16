@@ -51,6 +51,23 @@ const doctor = (home: string, path: string) =>
   });
 
 describe('read-only doctor state diagnostics', () => {
+  it.each(['too-many-loaded', 'unreadable-loaded'])(
+    'reports persisted %s after the broker is stopped',
+    async (reason) => {
+      const home = tmpHome(),
+        path = fixturePath(home),
+        db = openDb(join(home, 'state.db'));
+      const s = createSession(db, { agent: 'codex', cwd: home, pid_chain: [], mcp_ppid: null });
+      bindAgentSession(db, s.id, 'T');
+      db.prepare(
+        "UPDATE sessions SET bind_origin='hook-verified',host_client_name='codex-mcp-client',host_client_version='0.162.1',codex_push_reason=? WHERE id=?",
+      ).run(reason, s.id);
+      db.close();
+      const before = snapshot(home);
+      expect((await doctor(home, path)).stdout).toContain(reason);
+      expect(snapshot(home)).toEqual(before);
+    },
+  );
   it('never starts a broker or creates a state database', async () => {
     const home = tmpHome(),
       path = fixturePath(home),

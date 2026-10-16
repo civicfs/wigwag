@@ -3,7 +3,7 @@ import { codexPushHold, codexPushLabel } from '../broker/codex-push.js';
 import { type RenderItem, renderCodex } from '../broker/render.js';
 import { WigwagError } from '../errors.js';
 import type { SessionRow } from '../store/sessions.js';
-import type { Transport } from './types.js';
+import type { CodexPushProof, PushOptions, Transport } from './types.js';
 
 /** Below Linux's 128 KiB single-argument ceiling (including NUL), with room for rendering. Not a tunable. */
 export const CODEX_ARG_BUDGET_BYTES = 96 * 1024;
@@ -28,7 +28,8 @@ export class CodexQueueTransport implements Transport {
   constructor(
     private readonly binary: string,
     private readonly timeoutMs: number,
-    private readonly verify: (s: SessionRow) => Promise<string | null> = async () => 'app-server-unavailable',
+    private readonly verify: (s: SessionRow, proof?: CodexPushProof) => Promise<string | null> = async () =>
+      'app-server-unavailable',
   ) {}
 
   tooLarge(it: RenderItem): string | null {
@@ -37,11 +38,7 @@ export class CodexQueueTransport implements Transport {
     return `message ${it.msg.id} renders to ${n} bytes, over the codex argv budget of ${CODEX_ARG_BUDGET_BYTES} bytes`;
   }
 
-  async push(
-    session: SessionRow,
-    items: RenderItem[],
-    options: { signal?: AbortSignal; onPushed?: (items: RenderItem[]) => void } = {},
-  ): Promise<void> {
+  async push(session: SessionRow, items: RenderItem[], options: PushOptions = {}): Promise<void> {
     const thread = session.agent_session_id;
     if (!thread) throw new WigwagError('unbound', `Codex session ${session.name ?? session.id} has no thread id yet`);
     for (const it of items) {
@@ -50,7 +47,7 @@ export class CodexQueueTransport implements Transport {
     }
     for (const part of chunk(items)) {
       if (options.signal?.aborted) throw new WigwagError('transport', 'codex queue cancelled during shutdown');
-      const reason = await this.verify(session);
+      const reason = await this.verify(session, options.codexPushProof);
       if (reason)
         throw new WigwagError('unbound', codexPushLabel(reason), {
           hold_reason: codexPushHold(reason),

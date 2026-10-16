@@ -28,22 +28,30 @@ export const codexPushLabel = (reason: string): string =>
         : `Codex push held: thread identity unverified (${reason})`;
 
 /** Revalidate slot ownership after metadata I/O; never apply evidence to a different binding or a closed DB. */
-export function installCodexPushTrust(broker: Broker): void {
+export function installCodexPushTrust(broker: Broker, now: () => number = Date.now): void {
   let stopped = false;
   broker.onStop.push(() => {
     stopped = true;
   });
-  broker.checkCodexPush = async (s, fresh = false, announce = true) => {
+  broker.checkCodexPush = async (s, fresh = false, announce = true, proof) => {
     if (stopped) return 'app-server-unavailable';
-    const verified =
-      !isLegacySession(broker.db, s.id) &&
-      s.bind_origin === 'hook-verified' &&
+    const matches = (current: SessionRow | undefined): current is SessionRow =>
+      !!current &&
+      !current.retired_at &&
+      current.agent_session_id === s.agent_session_id &&
+      current.conn_generation === s.conn_generation;
+    const before = getSession(broker.db, s.id);
+    if (!matches(before)) return 'app-server-unavailable';
+    const isVerified = (slot: SessionRow) =>
+      !isLegacySession(broker.db, slot.id) &&
+      slot.bind_origin === 'hook-verified' &&
       trustedCodexHost(
-        s.host_client_name && s.host_client_version
-          ? { name: s.host_client_name, version: s.host_client_version }
+        slot.host_client_name && slot.host_client_version
+          ? { name: slot.host_client_name, version: slot.host_client_version }
           : null,
         broker.config.codex.trusted_host_versions,
       );
+    const verified = isVerified(before);
     const duplicated = () =>
       !!(
         s.agent_session_id &&
@@ -52,23 +60,30 @@ export function installCodexPushTrust(broker: Broker): void {
       WHERE agent='codex' AND agent_session_id=? AND id<>? AND retired_at IS NULL AND state<>'offline' LIMIT 1`)
           .get(s.agent_session_id, s.id)
       );
+    const age = proof ? now() - proof.checkedAt : Infinity;
+    const reuse =
+      !!proof &&
+      age >= 0 &&
+      age < 1000 &&
+      proof.sessionId === s.id &&
+      proof.nativeId === s.agent_session_id &&
+      proof.generation === s.conn_generation &&
+      before.codex_push_reason === null &&
+      verified;
     const trust = !verified
       ? { trusted: false, reason: 'unverified-bind' as const }
       : duplicated()
         ? { trusted: false, reason: 'shared-root' as const }
-        : s.agent_session_id
-          ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh)
-          : undefined;
+        : reuse
+          ? { trusted: true, reason: null }
+          : s.agent_session_id
+            ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh)
+            : undefined;
     if (stopped) return 'app-server-unavailable';
     const current = getSession(broker.db, s.id);
-    if (
-      !current ||
-      current.retired_at ||
-      current.agent_session_id !== s.agent_session_id ||
-      current.conn_generation !== s.conn_generation
-    )
-      return 'app-server-unavailable';
-    const reason = !verified
+    if (!matches(current)) return 'app-server-unavailable';
+    const stillVerified = isVerified(current);
+    const reason = !stillVerified
       ? 'unverified-bind'
       : duplicated()
         ? 'shared-root'
@@ -77,7 +92,7 @@ export function installCodexPushTrust(broker: Broker): void {
       .prepare(
         "UPDATE sessions SET codex_push_reason=?,bind_origin=CASE WHEN ? THEN bind_origin ELSE 'unverified' END WHERE id=?",
       )
-      .run(reason, verified ? 1 : 0, s.id);
+      .run(reason, stillVerified ? 1 : 0, s.id);
     if (announce && current.codex_push_reason !== reason) {
       // Announce through the usual path so restored trust can release held deliveries.
       broker.announce(s.id);

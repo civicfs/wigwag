@@ -134,11 +134,13 @@ export class CodexNames {
     if (!fresh && cached && Date.now() - cached.at < 2000) return cached.value;
     let reason: CodexPushReason | null = 'app-server-unavailable';
     const loaded = this.stopped ? null : await this.loadedThreads();
-    if (loaded && loaded.size <= 256) {
+    if (loaded && loaded.size > 256) reason = 'too-many-loaded';
+    else if (loaded) {
       if (!loaded.has(threadId)) reason = 'root-not-loaded';
       else {
         const own = await this.read(threadId);
-        if (own.available && own.meta) {
+        if (!own.available || !own.meta?.sessionId) reason = 'unreadable-loaded';
+        else {
           if (!own.meta.root) reason = 'shared-root';
           else {
             reason = null;
@@ -151,7 +153,7 @@ export class CodexNames {
                 break;
               }
               if (reads.some((r) => !r.available || !r.meta?.sessionId)) {
-                reason = 'app-server-unavailable';
+                reason = 'unreadable-loaded';
                 break;
               }
             }

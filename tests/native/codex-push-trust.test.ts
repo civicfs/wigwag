@@ -8,6 +8,7 @@ class FakeApp extends EventEmitter {
   loaded = ['T'];
   threads: Record<string, unknown> = { T: root('T') };
   down = false;
+  readErrors = new Set<string>();
   calls: string[] = [];
   async connect() {
     if (this.down) throw new Error('fixture unavailable');
@@ -15,6 +16,8 @@ class FakeApp extends EventEmitter {
   async call(method: string, p: { threadId?: string }) {
     this.calls.push(method);
     if (this.down) throw new Error('fixture unavailable');
+    if (method === 'thread/read' && this.readErrors.has(p.threadId ?? ''))
+      throw new Error('Codex app-server error: fixture unreadable');
     return method === 'thread/loaded/list' ? { data: this.loaded } : { thread: this.threads[p.threadId ?? ''] };
   }
   send() {}
@@ -58,9 +61,24 @@ describe('Codex push trust: metadata only', () => {
       names = reader(app);
     try {
       app.loaded.push('unknown');
-      expect(await names.pushTrust('T', true)).toEqual({ trusted: false, reason: 'app-server-unavailable' });
+      expect(await names.pushTrust('T', true)).toEqual({ trusted: false, reason: 'unreadable-loaded' });
       app.loaded = Array.from({ length: 257 }, (_, i) => String(i));
-      expect(await names.pushTrust('T', true)).toEqual({ trusted: false, reason: 'app-server-unavailable' });
+      expect(await names.pushTrust('T', true)).toEqual({ trusted: false, reason: 'too-many-loaded' });
+    } finally {
+      names.stop();
+    }
+  });
+  it.each(['T', 'other'])('identifies a loaded %s whose metadata read errors or omits sessionId', async (id) => {
+    const app = new FakeApp(),
+      names = reader(app);
+    app.loaded = ['T', 'other'];
+    app.threads.other = root('other');
+    try {
+      app.readErrors.add(id);
+      expect(await names.pushTrust('T', true)).toEqual({ trusted: false, reason: 'unreadable-loaded' });
+      app.readErrors.clear();
+      app.threads[id] = { ...root(id), sessionId: null };
+      expect(await names.pushTrust('T', true)).toEqual({ trusted: false, reason: 'unreadable-loaded' });
     } finally {
       names.stop();
     }
