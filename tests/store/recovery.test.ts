@@ -9,6 +9,7 @@ import {
   liveNativeHolders,
   recordLineage,
   recoveryCandidates,
+  switchedAwayHint,
 } from '../../src/store/recovery.js';
 import {
   type Agent,
@@ -410,4 +411,40 @@ describe('adoptCanonical', () => {
       { reason: 'ambiguous', evidence: { candidates: ['a', 'b'] } },
     ]);
   });
+});
+
+it.each([
+  { mcp_pid: null, mcp_start: null },
+  { mcp_pid: 101, mcp_start: null },
+  { mcp_pid: null, mcp_start: 'old-start' },
+])('treats incomplete switch identity %j as switched away for every reconnect', (evidence) => {
+  const a = mk({ name: 'slot-a', native: 'A' }),
+    b = mk({ name: 'slot-b', native: 'B' });
+  recordLineage(db, {
+    agent: 'claude',
+    native_id: 'B',
+    previous_native_id: 'A',
+    workspace: a.workspace,
+    session_id: a.id,
+    canonical_session_id: b.id,
+    cause: 'switch',
+    outcome: 'observed',
+    reason: 'conversation-split',
+    evidence,
+  });
+  expect(switchedAwayHint(db, a.id, a.workspace, { pid: 102, start: 'verified-new-start' })).toBe(true);
+  expect(switchedAwayHint(db, a.id, a.workspace, null)).toBe(true);
+  recordLineage(db, {
+    agent: 'claude',
+    native_id: 'A',
+    previous_native_id: 'B',
+    workspace: a.workspace,
+    session_id: b.id,
+    canonical_session_id: a.id,
+    cause: 'switch',
+    outcome: 'observed',
+    reason: 'conversation-split',
+    evidence: { mcp_pid: 102, mcp_start: 'verified-new-start' },
+  });
+  expect(switchedAwayHint(db, a.id, a.workspace, { pid: 102, start: 'verified-new-start' })).toBe(false);
 });

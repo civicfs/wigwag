@@ -278,8 +278,10 @@ vitest, linted with biome.
   most recently switched away from by that exact verified process is ignored (including its old launch name),
   forcing a fresh slot and trusted hook binding; there are no switch redirects or chains. When process capture or
   verification fails, a hint most recently switched away from is also ignored: its mailbox cannot become push-ready
-  before a trusted hook identifies the conversation. Verified different MCP processes keep the existing reattach
-  rules, and a later differing trusted hook still splits before delivery. A differing hook while MCP is disconnected
+  before a trusted hook identifies the conversation. A split recorded with a null/missing pid or start identity
+  applies to every reconnecting MCP, even after a successful new capture. The newest applicable switch record
+  still governs, so a verified later switch back can restore the original slot. Verified different MCP processes
+  keep the existing reattach rules only when the earlier record has a complete different verified identity, and a later differing trusted hook still splits before delivery. A differing hook while MCP is disconnected
   refuses until reconnect allows the split; it never overwrites the old slot's native binding.
   Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
   thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the

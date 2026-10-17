@@ -83,13 +83,13 @@ export function listLineage(
   return rows.map(({ evidence_json, ...r }) => ({ ...r, evidence: JSON.parse(evidence_json) }));
 }
 
-/** No redirects. An unverifiable MCP cannot safely reclaim a mailbox recorded as switched away from. */
+/** No redirects. A split recorded without a complete verified identity applies to every reconnect; a later capture cannot make that old hint safe. */
 export function switchedAwayHint(db: Db, id: string, workspace: string, mcp: ProcessIdentity | null): boolean {
   const latest = db
     .prepare(`SELECT session_id, canonical_session_id FROM session_lineage
     WHERE agent='claude' AND cause='switch' AND outcome='observed' AND reason='conversation-split'
       AND workspace=? AND (session_id=? OR canonical_session_id=?)
-      ${mcp ? "AND json_extract(evidence_json,'$.mcp_pid')=? AND json_extract(evidence_json,'$.mcp_start')=?" : ''}
+      ${mcp ? "AND (json_extract(evidence_json,'$.mcp_pid') IS NULL OR json_extract(evidence_json,'$.mcp_start') IS NULL OR (json_extract(evidence_json,'$.mcp_pid')=? AND json_extract(evidence_json,'$.mcp_start')=?))" : ''}
     ORDER BY id DESC LIMIT 1`)
     .get(workspace, id, id, ...(mcp ? [mcp.pid, mcp.start] : [])) as
     | { session_id: string; canonical_session_id: string | null }

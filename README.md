@@ -139,7 +139,9 @@ moves to a fresh provisional slot and may reclaim the resumed conversation's
 unique canonical slot. Ambiguous or live-held destinations leave it unbound.
 The MCP remembers the new slot ID. After a crash, a stale hint from the same
 verified MCP process is ignored until a trusted hook binds the conversation;
-switch records never redirect a connection to another slot.
+switch records never redirect a connection to another slot. If the earlier split
+could not record a complete verified MCP identity, its old hint is ignored for
+every reconnecting MCP, even if identity capture later succeeds.
 
 Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
 a shared tree-root ID. `whoami` reports `unavailable` with reason

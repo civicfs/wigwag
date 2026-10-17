@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Ignore stale reconnect hints for every MCP when the earlier conversation split
+  could not record a complete verified process identity; a later successful
+  capture cannot expose the previous conversation’s mailbox before a trusted hook.
+
 - Claim native Codex question submissions durably before I/O, preventing duplicate
   async replies across MCP handover and repeat sync/async replies after broker
   restart. Unknown outcomes remain held and visible; the owner can cancel or

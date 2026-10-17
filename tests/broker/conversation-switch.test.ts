@@ -114,6 +114,61 @@ async function fixture(choice = 'launch') {
 type Who = { id: string; name: string; bound: boolean; name_source: string };
 
 describe('Claude in-process conversation switches', () => {
+  it.each([101, 102])(
+    'ignores an unstamped switch hint when MCP %s has a verified identity after restart',
+    async (pid) => {
+      const f = await fixture();
+      const a = f.worker.welcome.session_id;
+      const conn = f.broker.connectionFor(a);
+      if (!conn) throw new Error('missing connection');
+      const original = conn.event.bind(conn);
+      vi.spyOn(conn, 'event').mockImplementation((name, data) =>
+        name === ('session.identity' as string) ? true : original(name, data),
+      );
+      f.broker.processProbe = (pids) =>
+        pids.includes(101)
+          ? null
+          : new Map(pids.flatMap((id) => (f.processes.has(id) ? [[id, f.processes.get(id) as string]] : [])));
+      await f.h.call('hook.event', f.event(B));
+      const b = await f.worker.client.call<Who>('session.whoami');
+      expect(listLineage(f.broker.db, { limit: 20 })).toContainEqual(
+        expect.objectContaining({
+          reason: 'conversation-split',
+          session_id: a,
+          evidence: expect.objectContaining({ mcp_pid: null, mcp_start: null }),
+        }),
+      );
+      const owner = await ownerClient(f.home);
+      cleanup.push(() => owner.close());
+      const mail = await owner.call<{ id: string }>('owner.send', {
+        to: 'launch-worker',
+        body: 'A-private-body',
+        priority: 'urgent',
+        attach_paths: [],
+      });
+      await until(() => deliveriesOfMessage(f.broker.db, mail.id)[0]?.state === 'held');
+      await f.send(b.name, 'B-private-body');
+      await f.restart();
+      const fresh = await f.connect(100, {
+        pid_chain: [pid, 100],
+        resume_session_id: a,
+        requested_name: 'launch-worker',
+        channel: true,
+      });
+      await fresh.client.call('sys.ping');
+      expect(await fresh.client.call('session.whoami')).toMatchObject({ bound: false });
+      expect(fresh.welcome.session_id).not.toBe(a);
+      expect(deliveriesOfMessage(f.broker.db, mail.id)[0]?.state).toBe('held');
+      expect(JSON.stringify(await fresh.client.call('msg.inbox'))).not.toContain('A-private-body');
+      const hook = await f.hook();
+      const bound = await hook.call('hook.event', f.event(B));
+      expect(JSON.stringify(bound)).not.toContain('A-private-body');
+      expect(await fresh.client.call('session.whoami')).toMatchObject({ id: b.id, bound: true });
+      expect(getSession(f.broker.db, a)).toMatchObject({ agent_session_id: A, name: 'launch-worker' });
+      expect(deliveriesOfMessage(f.broker.db, mail.id)[0]?.state).toBe('held');
+    },
+  );
+
   it('refuses a changed conversation while MCP is disconnected, preserving the old mailbox', async () => {
     const f = await fixture();
     const oldId = f.worker.welcome.session_id;
