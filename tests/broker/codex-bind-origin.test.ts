@@ -63,21 +63,24 @@ async function boot(version = '0.162.1', extraVersions: string[] = []) {
   return { home, broker, c, o, pushes, origin, bind, send };
 }
 
-it.each(['0.162.1', '0.163.0', '0.164.0'])('refuses model-origin and root/descendant mismatches for host %s', async (version) => {
-  const { broker, c, origin } = await boot(version);
-  for (const hook_origin of [
-    { ...origin(), call_id: 'model-call' },
-    origin('descendant-of-root-A'),
-    { ...origin(), version: 'forged-version' },
-  ])
-    await expect(c.client.call('session.bind', { agent_session_id: 'root-A', hook_origin })).rejects.toMatchObject({
-      code: 'bad_request',
-    });
-  await expect(
-    c.client.call('session.bind', { agent_session_id: 'root-B', hook_origin: origin('root-A') }),
-  ).rejects.toMatchObject({ code: 'bad_request' });
-  expect(getSession(broker.db, c.welcome.session_id)?.agent_session_id).toBeNull();
-});
+it.each(['0.162.1', '0.163.0', '0.164.0'])(
+  'refuses model-origin and root/descendant mismatches for host %s',
+  async (version) => {
+    const { broker, c, origin } = await boot(version);
+    for (const hook_origin of [
+      { ...origin(), call_id: 'model-call' },
+      origin('descendant-of-root-A'),
+      { ...origin(), version: 'forged-version' },
+    ])
+      await expect(c.client.call('session.bind', { agent_session_id: 'root-A', hook_origin })).rejects.toMatchObject({
+        code: 'bad_request',
+      });
+    await expect(
+      c.client.call('session.bind', { agent_session_id: 'root-B', hook_origin: origin('root-A') }),
+    ).rejects.toMatchObject({ code: 'bad_request' });
+    expect(getSession(broker.db, c.welcome.session_id)?.agent_session_id).toBeNull();
+  },
+);
 
 it('trusts a valid pinned hook, exposes host/origin, and keeps automatic recovery disabled', async () => {
   const { c, bind, send, pushes, broker } = await boot();
