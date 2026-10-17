@@ -325,7 +325,8 @@ vitest, linted with biome.
   `_meta.ui.visibility=['app']`; the server derives origin only from initialized host identity and request
   metadata, never tool arguments. Model `callId`, missing metadata or sessionId/threadId disagreement refuses
   binding. The broker independently validates the origin envelope against the connection's observed host.
-  Verified host versions are an explicit code allow-list (codex-mcp-client 0.162.1), extended only by owner
+  Verified host versions are an explicit code allow-list (codex-mcp-client 0.162.1, source-audited; 0.163.0,
+  owner-approved without a separate source audit), extended only by owner
   config `codex.trusted_host_versions` (default []). Structurally valid hooks from unsupported versions bind
   unverified and retain digest/turn/inbox delivery, but never push; diagnostics name the unsupported host and
   point to README. Legacy/pre-guard bindings migrate unverified and require plugin reload/session restart

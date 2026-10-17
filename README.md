@@ -183,7 +183,8 @@ safely rehomes that work; explicit owner resolution is a 0.4.0 follow-up.
 Codex pushes also require a verified hook-origin bind. Internal hook tools are
 hidden from the model; host-generated `threadId` must match the hook's session ID,
 and calls with model `callId` metadata or argument-supplied origin are refused.
-The source-audited host is `codex-mcp-client` 0.162.1. An unknown host version with
+The built-in verified hosts are `codex-mcp-client` 0.162.1 (source-audited) and
+0.163.0 (owner-approved; not separately source-audited). An unknown host version with
 valid hook metadata keeps inbox and hook delivery, but pushes are held:
 `Codex host <name> <version> not in the verified list: pushes held, inbox delivery works; see README`.
 After checking a newer Codex host, the owner may add its version to

@@ -62,7 +62,7 @@ describe('MCP server', () => {
     home = tmpHome();
     const broker = await startBroker(home, { codexNames: fixtureCodexNames(home, () => ['T']) });
     try {
-      const c = await start('codex', 'unsupported-host', {}, '0.163.0');
+      const c = await start('codex', 'unsupported-host', {}, '0.164.0');
       const bound = await c.client.callTool({
         name: 'session_bind',
         arguments: { session_id: 'T' },
@@ -72,7 +72,7 @@ describe('MCP server', () => {
       expect(JSON.parse(text(await c.client.callTool({ name: 'whoami', arguments: {} })))).toMatchObject({
         bound: true,
         bind_origin: 'unverified',
-        host_client_version: '0.163.0',
+        host_client_version: '0.164.0',
         capabilities: { codex_push: 'held' },
       });
       expect((await c.client.callTool({ name: 'inbox', arguments: {} })).isError).toBeFalsy();

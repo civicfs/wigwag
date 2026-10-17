@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hookOrigin } from '../../src/mcp/hook-origin.js';
+import { trustedCodexHost } from '../../src/protocol/codex-hook.js';
 
 const host = { name: 'codex-mcp-client', version: '0.162.1' };
 describe('pinned Codex hook metadata contract', () => {
@@ -23,10 +24,16 @@ describe('pinned Codex hook metadata contract', () => {
     },
   );
   it('allows structurally valid unknown versions to bind unverified at the broker', () => {
-    expect(hookOrigin({ ...host, version: '0.163.0' }, { threadId: 'A' }, { session_id: 'A' })).toEqual({
+    expect(hookOrigin({ ...host, version: '0.164.0' }, { threadId: 'A' }, { session_id: 'A' })).toEqual({
       ...host,
-      version: '0.163.0',
+      version: '0.164.0',
       thread_id: 'A',
     });
+  });
+  it('trusts exactly the built-in verified host versions', () => {
+    expect(trustedCodexHost({ ...host, version: '0.162.1' })).toBe(true);
+    expect(trustedCodexHost({ ...host, version: '0.163.0' })).toBe(true);
+    expect(trustedCodexHost({ ...host, version: '0.164.0' })).toBe(false);
+    expect(trustedCodexHost({ name: 'other-client', version: '0.163.0' })).toBe(false);
   });
 });

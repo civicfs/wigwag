@@ -63,7 +63,7 @@ async function boot(version = '0.162.1', extraVersions: string[] = []) {
   return { home, broker, c, o, pushes, origin, bind, send };
 }
 
-it.each(['0.162.1', '0.163.0'])('refuses model-origin and root/descendant mismatches for host %s', async (version) => {
+it.each(['0.162.1', '0.163.0', '0.164.0'])('refuses model-origin and root/descendant mismatches for host %s', async (version) => {
   const { broker, c, origin } = await boot(version);
   for (const hook_origin of [
     { ...origin(), call_id: 'model-call' },
@@ -94,14 +94,14 @@ it('trusts a valid pinned hook, exposes host/origin, and keeps automatic recover
 });
 
 it('keeps unsupported-host inbox and hook delivery, then upgrades only on the next allowed bind', async () => {
-  const { c, bind, send, pushes, broker, origin } = await boot('0.163.0');
+  const { c, bind, send, pushes, broker, origin } = await boot('0.164.0');
   await bind();
   expect(await c.client.call('session.whoami')).toMatchObject({
     bound: true,
     bind_origin: 'unverified',
-    host_client_version: '0.163.0',
+    host_client_version: '0.164.0',
     codex_push_reason: 'unverified-bind',
-    codex_host_warning: expect.stringContaining('Codex host codex-mcp-client 0.163.0 not in the verified list'),
+    codex_host_warning: expect.stringContaining('Codex host codex-mcp-client 0.164.0 not in the verified list'),
     capabilities: { delivery: 'hook-boundary', codex_push: 'held' },
   });
   await c.client.call('session.register', { name: 'guarded-worker' });
@@ -115,7 +115,7 @@ it('keeps unsupported-host inbox and hook delivery, then upgrades only on the ne
     text: expect.stringContaining('safe mailbox'),
   });
   await c.client.call('session.turn', { phase: 'ended', hook_origin: origin() });
-  broker.config.codex.trusted_host_versions.push('0.163.0');
+  broker.config.codex.trusted_host_versions.push('0.164.0');
   expect(getSession(broker.db, c.welcome.session_id)?.bind_origin).toBe('unverified');
   await bind();
   expect(await c.client.call('session.whoami')).toMatchObject({
@@ -125,11 +125,11 @@ it('keeps unsupported-host inbox and hook delivery, then upgrades only on the ne
 });
 
 it('loads the owner trusted-host extension from config for a fresh bind', async () => {
-  const { c, bind } = await boot('0.163.0', ['0.163.0']);
+  const { c, bind } = await boot('0.164.0', ['0.164.0']);
   await bind();
   expect(await c.client.call('session.whoami')).toMatchObject({
     bind_origin: 'hook-verified',
-    host_client_version: '0.163.0',
+    host_client_version: '0.164.0',
   });
 });
 

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { WigwagError } from '../errors.js';
 
 /** Source-audited host contract, not cryptographic attestation. Real hook metadata still needs live acceptance. */
-export const VERIFIED_CODEX_HOST_VERSIONS = ['0.162.1'] as const;
+export const VERIFIED_CODEX_HOST_VERSIONS = ['0.162.1', '0.163.0'] as const;
 export const HostClientZ = z.object({ name: z.string().min(1).max(100), version: z.string().min(1).max(100) }).strict();
 export type HostClient = z.infer<typeof HostClientZ>;
 export const HookOriginZ = HostClientZ.extend({

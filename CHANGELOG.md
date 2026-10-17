@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add Codex host `codex-mcp-client` 0.163.0 to the built-in verified push list
+  (owner-approved; 0.162.1 remains the source-audited version).
+
 - Block rehearsal symlink/parent-component escapes and hard-linked storage.
   Use validated canonical paths for I/O, guard opened leaves before truncation,
   recheck database/sidecar paths before open, and refuse copies nested in live homes.
