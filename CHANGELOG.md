@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Require rehearsal-mode broker evidence on owner CLI connections, including
+  autospawn and broker control; reject socket symlinks and escaped storage before
+  any connection so rehearsal commands cannot reach a normal broker.
+
 - Diagnose malformed protocol/schema stamps separately from valid older/newer
   versions, avoiding misleading restart advice for fractional schema values.
 

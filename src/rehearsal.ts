@@ -81,6 +81,15 @@ export function assertRehearsalHome(home: string): void {
 }
 export function assertRehearsalStorage(home: string): void {
   const root = canonical(home);
+  try {
+    if (lstatSync(sockPath(home)).isSymbolicLink())
+      throw new WigwagError(
+        'config',
+        'Rehearsal storage broker.sock is a symlink; outside or aliased broker sockets are refused.',
+      );
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  }
   // External-native-path overrides never permit state/mutex/log writes or broker socket probes outside the copy.
   for (const name of [
     'state.db',
@@ -95,6 +104,16 @@ export function assertRehearsalStorage(home: string): void {
     if (isAbsolute(rel) || rel === '..' || rel.startsWith('../'))
       throw new WigwagError('config', `Rehearsal storage ${name} is outside WIGWAG_HOME`);
   }
+}
+/** Used by every owner CLI connection before any socket probe or autospawn. */
+export function assertRehearsalClientPaths(home: string, config: Config): RehearsalMode {
+  const mode = rehearsalMode(config);
+  assertRehearsalAccess(home, mode);
+  if (mode.enabled) {
+    assertRehearsalHome(home);
+    assertRehearsalStorage(home);
+  }
+  return mode;
 }
 export async function validateRehearsal(home: string, config: Config, mode = rehearsalMode(config)): Promise<void> {
   assertRehearsalAccess(home, mode);

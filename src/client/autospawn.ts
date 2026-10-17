@@ -5,6 +5,8 @@ import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Config } from '../config.js';
 import { WigwagError } from '../errors.js';
+import { assertRehearsalClientPaths } from '../rehearsal.js';
+import { connectOwner } from './owner.js';
 
 /** Poll granularity while waiting for a freshly spawned broker; not a tunable. */
 const POLL_MS = 50;
@@ -47,7 +49,16 @@ export function canConnect(path: string, signal?: AbortSignal): Promise<boolean>
  * an abort after the spawn stops the wait (the spawned process is left to finish starting).
  */
 export async function ensureBroker(home: string, config: Config, entry: string, signal?: AbortSignal): Promise<void> {
-  if (await canConnect(sockPath(home), signal)) return;
+  const mode = assertRehearsalClientPaths(home, config);
+  const reachable = async () => {
+    if (!(await canConnect(sockPath(home), signal))) return false;
+    if (mode.enabled) {
+      const { client } = await connectOwner(home, config, undefined, signal);
+      client.destroy();
+    }
+    return true;
+  };
+  if (await reachable()) return;
   if (signal?.aborted) throw cancelled();
   const logPath = join(home, 'logs', 'broker.log');
   mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
@@ -84,7 +95,7 @@ export async function ensureBroker(home: string, config: Config, entry: string, 
   const deadline = Date.now() + config.broker.start_timeout_ms;
   try {
     while (Date.now() < deadline) {
-      if (await canConnect(sockPath(home), signal)) return;
+      if (await reachable()) return;
       if (failure) throw failure;
       await sleep(POLL_MS, undefined, { signal });
     }

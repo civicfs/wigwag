@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { configPath } from '../../src/config.js';
-import { DIST_MAIN, tmpHome } from '../helpers.js';
+import { DIST_MAIN, fixtureCodexNames, mcpClient, startBroker, tmpHome } from '../helpers.js';
 
 function fixture() {
   const home = tmpHome(),
@@ -127,4 +127,43 @@ it('explicit clear refuses a home with a running broker socket and keeps its mar
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
+});
+
+const cleanup: Array<() => unknown> = [];
+afterEach(async () => {
+  for (const f of cleanup.splice(0).reverse()) await f();
+});
+it('refuses rehearsal send to a normal custom-home broker before storing or pushing the message', async () => {
+  const f = fixture(),
+    push = vi.fn(async () => {});
+  const broker = await startBroker(f.home, {
+    codexNames: fixtureCodexNames(f.home, () => []),
+    transports: { claude: { kind: 'claude-channel', push }, codex: { kind: 'codex-queue', push } },
+  });
+  cleanup.push(() => broker.stop());
+  const worker = await mcpClient(f.home, { requested_name: 'worker-one', cwd: f.home, channel: true });
+  cleanup.push(() => worker.client.destroy());
+  const before = broker.db.prepare('SELECT count(*) AS n FROM messages').get();
+  const result = await cli(['send', 'worker-one', '--priority', 'urgent', '--body', 'rehearsal-only'], f.env);
+  expect(result.code).not.toBe(0);
+  expect(result.stderr).toMatch(/rehearsal.*broker/i);
+  expect(broker.db.prepare('SELECT count(*) AS n FROM messages').get()).toEqual(before);
+  expect(push).not.toHaveBeenCalled();
+});
+it.each(['outside', 'inside'])('refuses a %s-home broker socket symlink without connecting', async (where) => {
+  const f = fixture(),
+    outside = tmpHome(),
+    socket = join(where === 'inside' ? f.home : outside, 'target.sock');
+  let connections = 0;
+  const server = createServer((s) => {
+    connections++;
+    s.destroy();
+  });
+  await new Promise<void>((r) => server.listen(socket, r));
+  cleanup.push(() => new Promise<void>((r) => server.close(() => r())));
+  symlinkSync(socket, join(f.home, 'broker.sock'));
+  const result = await cli(['who'], f.env);
+  expect(result.code).not.toBe(0);
+  expect(result.stderr).toMatch(/rehearsal.*(symlink|storage)/i);
+  expect(connections).toBe(0);
 });

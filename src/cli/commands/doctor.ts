@@ -5,10 +5,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { codexPushBlock, codexPushLabel } from '../../broker/codex-push.js';
 import { sockPath } from '../../client/autospawn.js';
-import { Client } from '../../client/client.js';
+import { connectOwner } from '../../client/owner.js';
 import { type Config, configPath, loadConfig, resolveHome } from '../../config.js';
 import { codexHostWarning } from '../../protocol/codex-hook.js';
-import { frameLimit } from '../../protocol/frame.js';
 import { HANDSHAKE_VERSIONS, LEGACY_CLIENT_WARNING } from '../../protocol/rpc.js';
 import {
   assertRehearsalAccess,
@@ -260,13 +259,7 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
   if (config) {
     try {
       const signal = AbortSignal.timeout(config.broker.start_timeout_ms);
-      const { client } = await Client.connect(
-        sockPath(home),
-        { protocol: HANDSHAKE_VERSIONS.protocol, role: 'owner' },
-        frameLimit(config),
-        undefined,
-        signal,
-      );
+      const { client } = await connectOwner(home, config, undefined, signal);
       const abort = () => client.destroy();
       signal.addEventListener('abort', abort, { once: true });
       try {

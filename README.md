@@ -259,7 +259,10 @@ wigwag doctor
 wigwag recovery --json
 ```
 
-Rehearsal accepts owner clients only. It can migrate and inspect the copy, but
+Rehearsal accepts owner clients only. Owner CLI connections validate storage
+before probing, refuse every broker-socket symlink, and require that the same
+connection reports rehearsal mode with native I/O disabled before sending work
+or controlling a broker. A normal or unknown broker is refused, even at a custom home. It can migrate and inspect the copy, but
 creates no native app-server reader, question adapter, title watcher or process
 probe loop, sends no native pushes/answers, and skips update checks. Native
 MCP/hook clients and launch/install/update commands are refused. Retained mail,

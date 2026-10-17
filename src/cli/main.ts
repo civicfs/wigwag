@@ -10,6 +10,7 @@ import {
   assertNativeAllowed,
   assertRehearsalAccess,
   assertRehearsalHome,
+  assertRehearsalStorage,
   clearRehearsal,
   homeRehearsalMode,
 } from '../rehearsal.js';
@@ -70,6 +71,7 @@ async function main(argv: string[]): Promise<void> {
       if (!process.env.WIGWAG_HOME || !isAbsolute(process.env.WIGWAG_HOME))
         throw new UsageError('Rehearsal requires an explicit absolute WIGWAG_HOME');
       assertRehearsalHome(home);
+      assertRehearsalStorage(home);
       if (['claude', 'codex', 'install', 'uninstall', 'update', 'mcp'].includes(cmd ?? ''))
         assertNativeAllowed(home, cmd as string);
     }
