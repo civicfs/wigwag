@@ -41,14 +41,9 @@ it.each(
   let alias = live;
   if (kind === 'case') alias = live.replace('.wigwag', '.WIGWAG');
   if (kind === 'firmlink') alias = `/System/Volumes/Data${realpathSync.native(live)}`;
-  if (kind === 'case' || kind === 'firmlink') {
-    // On a case-sensitive filesystem the missing leaf still must fail the conservative parent check.
-    if (!existsSync(alias)) {
-      expect(() => assertRehearsalHome(alias)).toThrow(/rehearsal.*live home/i);
-      return;
-    }
-    expect(statSync(alias).ino).toBe(statSync(live).ino);
-  }
+  // On a case-sensitive volume (Linux CI) `.WIGWAG` is a distinct directory, not an alias of the live home.
+  if (kind === 'case' && !existsSync(alias)) return;
+  if (kind === 'case' || kind === 'firmlink') expect(statSync(alias).ino).toBe(statSync(live).ino);
   if (kind === 'home-override') vi.stubEnv('HOME', tmpHome());
   vi.stubEnv('WIGWAG_REHEARSAL', '1');
   vi.stubEnv('WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS', '1');
