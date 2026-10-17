@@ -1,9 +1,9 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { WigwagError } from '../../errors.js';
 import { readBoundedFile } from '../../files.js';
 import { isTextual } from '../../mime.js';
-import { assertRehearsalStoragePaths } from '../../rehearsal.js';
+import { assertRehearsalStoragePaths, writeStorageFile } from '../../rehearsal.js';
 import { addBlobScope, blobInScope, getBlobMeta, putBlob, readBlob } from '../../store/blobs.js';
 import { kvCas, kvGet, kvHistory, kvScan } from '../../store/kv.js';
 import { inScope, type Scope } from '../../store/links.js';
@@ -134,17 +134,17 @@ export function installData(broker: Broker): void {
     const data = readBlob(broker.home, p.ref);
     if (p.dest_path !== undefined) {
       requireAbsolute(p.dest_path);
-      assertRehearsalStoragePaths(broker.home, [p.dest_path]);
-      if (existsSync(p.dest_path)) throw new WigwagError('conflict', `Refusing to overwrite ${p.dest_path}`);
+      const [dest] = assertRehearsalStoragePaths(broker.home, [p.dest_path]);
+      if (existsSync(dest)) throw new WigwagError('conflict', `Refusing to overwrite ${p.dest_path}`);
       try {
-        writeFileSync(p.dest_path, data, { flag: 'wx', mode: 0o600 });
+        writeStorageFile(broker.home, dest, data, 'wx');
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
           throw new WigwagError('conflict', `Refusing to overwrite ${p.dest_path}`);
         }
         throw e;
       }
-      return { meta, written_to: p.dest_path };
+      return { meta, written_to: dest };
     }
     if (meta.size > limits.inline_blob_bytes || !isTextual(meta.media_type)) {
       throw new WigwagError(

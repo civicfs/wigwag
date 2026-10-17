@@ -53,6 +53,15 @@ async function main(argv: string[]): Promise<void> {
   )
     return out(commandHelp(cmd));
   const noHome = cmd === undefined || ['--help', '-h', 'help', '--version'].includes(cmd);
+  // An explicit rehearsal hook does no home discovery; lifecycle hooks must stay fail-open even with a typo.
+  if (cmd === 'hook' && process.env.WIGWAG_REHEARSAL === '1') return;
+  if (
+    !noHome &&
+    cmd !== 'hook' &&
+    process.env.WIGWAG_REHEARSAL === '1' &&
+    (!process.env.WIGWAG_HOME || !isAbsolute(process.env.WIGWAG_HOME))
+  )
+    throw new UsageError('Rehearsal requires an explicit absolute WIGWAG_HOME');
   if (!noHome && cmd !== 'hook') {
     const home = resolveHome(),
       mode = homeRehearsalMode(home);

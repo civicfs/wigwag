@@ -293,6 +293,11 @@ config and temporary files share one containment inventory. Blob paths and
 temporary leaves are checked again before I/O. Explicit blob exports also stay
 inside the copy; inline inspection remains available. The external-native-path
 override never permits storage or exports outside the copy.
+Rehearsal rejects `..` path components and uses the exact validated canonical
+path for I/O. Writes use exclusive/no-follow opens and check regular-file link
+counts before writing. Hard-linked storage and aliased SQLite sidecars are
+refused; make independent database/config copies. A rehearsal home must also
+be outside every known live home, including its subdirectories.
 
 Rehearsal compares native paths and filesystem device/inode identity against
 the account home (independent of `$HOME`), `$HOME`, configured XDG state home,

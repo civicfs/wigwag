@@ -1,9 +1,15 @@
 import {
+  closeSync,
+  constants,
+  fstatSync,
+  ftruncateSync,
   lstatSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   realpathSync,
+  type Stats,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -37,13 +43,20 @@ export function rehearsalMode(config?: Pick<Config, 'rehearsal'>): RehearsalMode
 }
 /** No config creation/migration; usable before init and before update network/cache work. */
 export function homeRehearsalMode(home: string): RehearsalMode {
+  if (process.env.WIGWAG_REHEARSAL === '1') noParentComponents(home);
+  const configFile =
+    process.env.WIGWAG_REHEARSAL === '1'
+      ? containedStorage(assertRehearsalHome(home), join(home, 'config.json'))
+      : join(home, 'config.json');
   let config: Pick<Config, 'rehearsal'> | undefined;
   try {
-    config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
+    config = JSON.parse(readFileSync(configFile, 'utf8'));
   } catch {
     /* loadConfig reports invalid config. */
   }
-  return rehearsalMode(config?.rehearsal ? config : undefined);
+  const mode = rehearsalMode(config?.rehearsal ? config : undefined);
+  if (mode.enabled) noParentComponents(home);
+  return mode;
 }
 function markerStat(home: string) {
   try {
@@ -61,7 +74,12 @@ export function assertRehearsalAccess(home: string, mode = homeRehearsalMode(hom
     );
 }
 /** Resolve even missing leaves and dangling symlinks, without executing binaries or following an escape unnoticed. */
+function noParentComponents(path: string): void {
+  if (path.split('/').includes('..'))
+    throw new WigwagError('config', 'Rehearsal paths must not contain a parent (..) component');
+}
 function canonical(path: string, depth = 0): string {
+  noParentComponents(path); // before resolve/join can erase the OS's symlink-first meaning
   if (depth > 64) throw new WigwagError('config', 'Rehearsal path has too many symlinks');
   const abs = resolve(path);
   try {
@@ -69,7 +87,11 @@ function canonical(path: string, depth = 0): string {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
     try {
-      if (lstatSync(abs).isSymbolicLink()) return canonical(resolve(dirname(abs), readlinkSync(abs)), depth + 1);
+      if (lstatSync(abs).isSymbolicLink()) {
+        const target = readlinkSync(abs);
+        noParentComponents(target);
+        return canonical(isAbsolute(target) ? target : `${dirname(abs)}/${target}`, depth + 1);
+      }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
@@ -95,24 +117,36 @@ function pathIdentity(path: string): { dev: number; ino: number; missing: string
     }
   }
 }
-export function assertRehearsalHome(home: string): void {
-  if (!isAbsolute(home)) throw new WigwagError('config', 'Rehearsal requires an explicit absolute WIGWAG_HOME');
-  const actual = canonical(home);
-  const identity = pathIdentity(actual);
-  // userInfo is independent of $HOME. Missing leaves are conservatively case-folded against their existing parent.
+function knownLiveHomes(): string[] {
   const accountHomes = new Set([userInfo().homedir, homedir(), process.env.HOME].filter((p): p is string => !!p));
-  const defaults = [
+  return [
     ...[...accountHomes].flatMap((p) => [join(p, '.wigwag'), join(p, '.local', 'state', 'wigwag')]),
     ...(process.env.XDG_STATE_HOME ? [join(process.env.XDG_STATE_HOME, 'wigwag')] : []),
   ];
+}
+export function assertRehearsalHome(home: string): string {
+  if (!isAbsolute(home)) throw new WigwagError('config', 'Rehearsal requires an explicit absolute WIGWAG_HOME');
+  const actual = canonical(home);
+  const identity = pathIdentity(actual);
+  // userInfo is independent of $HOME; nearest-parent identity also catches missing nested leaves and firmlinks.
   if (
-    defaults.some((p) => {
-      if (canonical(p) === actual) return true;
+    knownLiveHomes().some((p) => {
+      const rel = relative(canonical(p), actual);
+      if (rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith('../'))) return true;
       const candidate = pathIdentity(p);
-      return candidate.dev === identity.dev && candidate.ino === identity.ino && candidate.missing === identity.missing;
+      const within = (x: ReturnType<typeof pathIdentity>) =>
+        candidate.dev === x.dev &&
+        candidate.ino === x.ino &&
+        (candidate.missing === '' || candidate.missing === x.missing || x.missing.startsWith(`${candidate.missing}/`));
+      if (within(identity)) return true;
+      for (let parent = dirname(actual); ; parent = dirname(parent)) {
+        if (within(pathIdentity(parent))) return true;
+        if (dirname(parent) === parent) return false;
+      }
     })
   )
     throw new WigwagError('config', 'Rehearsal refuses the default live home; use a separate copied WIGWAG_HOME.');
+  return actual;
 }
 /** Every implicit writable root/file. Dynamic leaves must also use assertRehearsalStoragePaths before I/O. */
 export const REHEARSAL_STORAGE_PATHS: readonly string[] = Object.freeze([
@@ -130,14 +164,40 @@ export const REHEARSAL_STORAGE_PATHS: readonly string[] = Object.freeze([
   ...['state.db', 'broker.mutex'].flatMap((file) => [file, `${file}-wal`, `${file}-shm`, `${file}-journal`]),
   ...[3, 4].map((version) => `state.db.pre-v${version}.bak`),
 ]);
-function containedStorage(home: string, path: string): void {
+function containedStorage(home: string, path: string): string {
   if (!isAbsolute(path)) throw new WigwagError('config', 'Rehearsal storage requires absolute paths');
-  const rel = relative(canonical(home), canonical(path));
+  const actual = canonical(path),
+    rel = relative(canonical(home), actual);
   if (isAbsolute(rel) || rel === '..' || rel.startsWith('../'))
     throw new WigwagError('config', `Rehearsal storage ${path} is outside WIGWAG_HOME`);
+  let stat: Stats;
+  try {
+    stat = statSync(actual);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return actual;
+    throw e;
+  }
+  if (stat.isFile()) {
+    if (stat.nlink > 1)
+      throw new WigwagError('config', `Rehearsal storage ${path} has a hard link; use an independent copy.`);
+    for (const live of knownLiveHomes()) {
+      try {
+        const other = statSync(join(live, rel));
+        if (other.isFile() && other.dev === stat.dev && other.ino === stat.ino)
+          throw new WigwagError(
+            'config',
+            `Rehearsal storage ${path} shares an inode with a live home; use an independent copy.`,
+          );
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      }
+    }
+  }
+  return actual;
 }
 /** Include current temporary names and leftover managed temp/archive entries, without traversing the blob store. */
 export function rehearsalStoragePaths(home: string): string[] {
+  noParentComponents(home);
   const paths = new Set(REHEARSAL_STORAGE_PATHS.map((name) => join(home, name)));
   for (const name of [
     `config.json.${process.pid}.tmp`,
@@ -146,9 +206,9 @@ export function rehearsalStoragePaths(home: string): string[] {
   ])
     paths.add(join(home, name));
   for (const directory of [home, join(home, 'archive')]) {
-    containedStorage(home, directory);
+    const actualDirectory = containedStorage(home, directory);
     try {
-      for (const name of readdirSync(directory))
+      for (const name of readdirSync(actualDirectory))
         if (
           directory !== home ||
           /^(?:config\.json\.\d+\.tmp|broker\.lock\.\d+\.tmp|state\.db\.pre-v\d+(?:\.\d+\.tmp|\.bak))$/.test(name)
@@ -165,6 +225,7 @@ export function rehearsalStoragePaths(home: string): string[] {
   return [...paths];
 }
 export function assertRehearsalStorage(home: string): void {
+  noParentComponents(home);
   try {
     if (lstatSync(sockPath(home)).isSymbolicLink())
       throw new WigwagError(
@@ -179,12 +240,75 @@ export function assertRehearsalStorage(home: string): void {
   for (const path of rehearsalStoragePaths(home)) containedStorage(home, path);
 }
 /** Validate actual blob/temp/export leaves again at I/O time; the external-native-path override never applies. */
-export function assertRehearsalStoragePaths(home: string, paths: string[]): void {
-  const mode = homeRehearsalMode(home);
+export function assertRehearsalStoragePaths(home: string, paths: string[], mode = homeRehearsalMode(home)): string[] {
   assertRehearsalAccess(home, mode);
-  if (!mode.enabled) return;
+  if (!mode.enabled) return paths;
   assertRehearsalHome(home);
-  for (const path of paths) containedStorage(home, path);
+  return paths.map((path) => containedStorage(home, path));
+}
+/** Use on the returned canonical leaf; prevent a final-leaf symlink swap where Node exposes O_NOFOLLOW. */
+export function storageFlags(home: string, flag: 'a' | 'w' | 'wx', mode = homeRehearsalMode(home)): string | number {
+  if (!mode.enabled) return flag;
+  return (
+    constants.O_WRONLY |
+    constants.O_CREAT |
+    (constants.O_NOFOLLOW ?? 0) |
+    (flag === 'a' ? constants.O_APPEND : flag === 'wx' ? constants.O_EXCL : constants.O_TRUNC)
+  );
+}
+/** Open our own checked descriptor; never truncate or pass a newly swapped hard link to a child. */
+export function openStorageFile(
+  home: string,
+  file: string,
+  flag: 'a' | 'w' | 'wx',
+  mode = homeRehearsalMode(home),
+): number {
+  const [actual] = assertRehearsalStoragePaths(home, [file], mode);
+  if (!mode.enabled) return openSync(actual, flag, 0o600);
+  const flags = (storageFlags(home, flag, mode) as number) & ~constants.O_TRUNC;
+  const fd = openSync(actual, flags | (constants.O_NONBLOCK ?? 0), 0o600);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.nlink > 1)
+      throw new WigwagError('config', 'Rehearsal write refuses non-regular or hard-linked storage');
+    if (flag === 'w') ftruncateSync(fd, 0);
+    return fd;
+  } catch (e) {
+    closeSync(fd);
+    throw e;
+  }
+}
+export function writeStorageFile(
+  home: string,
+  file: string,
+  data: string | Uint8Array,
+  flag: 'a' | 'w' | 'wx',
+  mode = homeRehearsalMode(home),
+): void {
+  const fd = openStorageFile(home, file, flag, mode);
+  try {
+    writeFileSync(fd, data);
+  } finally {
+    closeSync(fd);
+  }
+}
+/** SQLite chooses its own auxiliary filenames; require canonical, unshared paths instead of following aliases. */
+export function rehearsalSqlitePath(
+  home: string,
+  file: string,
+  migrations = false,
+  mode = homeRehearsalMode(home),
+): string {
+  const [actual] = assertRehearsalStoragePaths(home, [file], mode);
+  if (mode.enabled) {
+    const auxiliary = ['-wal', '-shm', '-journal'].map((suffix) => actual + suffix);
+    if (migrations)
+      for (const v of [3, 4]) auxiliary.push(`${actual}.pre-v${v}.bak`, `${actual}.pre-v${v}.${process.pid}.tmp`);
+    const checked = assertRehearsalStoragePaths(home, auxiliary, mode);
+    if (auxiliary.some((path, i) => path !== checked[i]))
+      throw new WigwagError('config', 'Rehearsal SQLite auxiliary paths must not be aliased');
+  }
+  return actual;
 }
 /** Used by every owner CLI connection before any socket probe or autospawn. */
 export function assertRehearsalClientPaths(home: string, config: Config): RehearsalMode {
@@ -199,7 +323,7 @@ export function assertRehearsalClientPaths(home: string, config: Config): Rehear
 export async function validateRehearsal(home: string, config: Config, mode = rehearsalMode(config)): Promise<void> {
   assertRehearsalAccess(home, mode);
   if (!mode.enabled) return;
-  assertRehearsalHome(home);
+  home = assertRehearsalHome(home);
   assertRehearsalStorage(home);
   // Startup only: a prepared sqlite backup/config copy contains no socket. Owner inspection connections still work.
   try {
@@ -236,30 +360,35 @@ export async function validateRehearsal(home: string, config: Config, mode = reh
 export function markRehearsal(home: string, mode: RehearsalMode): void {
   assertRehearsalAccess(home, mode);
   if (!mode.enabled) return;
+  const [marker] = assertRehearsalStoragePaths(home, [rehearsalMarker(home)], mode);
   const stat = markerStat(home);
   if (stat) {
     if (!stat.isFile() || (stat.mode & 0o777) !== 0o600)
       throw new WigwagError('config', 'Rehearsal marker must be a regular file with mode 0600');
     return;
   }
-  writeFileSync(
-    rehearsalMarker(home),
+  writeStorageFile(
+    home,
+    marker,
     `${JSON.stringify({ format: 1, created_at: new Date().toISOString(), native_disabled: true })}\n`,
-    { flag: 'wx', mode: 0o600 },
+    'wx',
+    mode,
   );
 }
 /** Explicit owner command only: no DB open, broker start, native I/O, or config mutation. */
 export async function clearRehearsal(home: string): Promise<boolean> {
-  assertRehearsalHome(home);
+  home = assertRehearsalHome(home);
   assertRehearsalStorage(home);
   if (await canConnect(sockPath(home), AbortSignal.timeout(1000)))
     throw new WigwagError('conflict', 'Stop the rehearsal broker before wigwag rehearsal clear.');
-  const lock = BrokerLock.acquire(home);
+  const mode = { ...homeRehearsalMode(home), enabled: true, native_io: false };
+  const [marker] = assertRehearsalStoragePaths(home, [rehearsalMarker(home)], mode);
+  const lock = BrokerLock.acquire(home, mode);
   try {
     const stat = markerStat(home);
     if (!stat) return false;
     if (!stat.isFile()) throw new WigwagError('config', 'Rehearsal marker is not a regular file; not removed');
-    unlinkSync(rehearsalMarker(home));
+    unlinkSync(marker);
     return true;
   } finally {
     lock.release();

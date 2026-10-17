@@ -1,11 +1,16 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { appendFileSync, closeSync, mkdirSync, openSync } from 'node:fs';
+import { closeSync, mkdirSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Config } from '../config.js';
 import { WigwagError } from '../errors.js';
-import { assertRehearsalClientPaths, assertRehearsalStoragePaths } from '../rehearsal.js';
+import {
+  assertRehearsalClientPaths,
+  assertRehearsalStoragePaths,
+  openStorageFile,
+  writeStorageFile,
+} from '../rehearsal.js';
 import { connectOwner } from './owner.js';
 
 /** Poll granularity while waiting for a freshly spawned broker; not a tunable. */
@@ -50,6 +55,7 @@ export function canConnect(path: string, signal?: AbortSignal): Promise<boolean>
  */
 export async function ensureBroker(home: string, config: Config, entry: string, signal?: AbortSignal): Promise<void> {
   const mode = assertRehearsalClientPaths(home, config);
+  [home] = assertRehearsalStoragePaths(home, [home], mode);
   const reachable = async () => {
     if (!(await canConnect(sockPath(home), signal))) return false;
     if (mode.enabled) {
@@ -60,12 +66,15 @@ export async function ensureBroker(home: string, config: Config, entry: string, 
   };
   if (await reachable()) return;
   if (signal?.aborted) throw cancelled();
-  const logPath = join(home, 'logs', 'broker.log');
-  assertRehearsalStoragePaths(home, [join(home, 'logs'), logPath]);
-  mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
+  const [logs, logPath] = assertRehearsalStoragePaths(
+    home,
+    [join(home, 'logs'), join(home, 'logs', 'broker.log')],
+    mode,
+  );
+  mkdirSync(logs, { recursive: true, mode: 0o700 });
   let failure: WigwagError | null = null;
   let child: ChildProcess;
-  const log = openSync(logPath, 'a');
+  const log = openStorageFile(home, logPath, 'a', mode);
   try {
     child = spawn(process.execPath, [entry, 'broker', 'run'], {
       detached: true,
@@ -92,8 +101,8 @@ export async function ensureBroker(home: string, config: Config, entry: string, 
   });
   child.unref();
   if (child.pid !== undefined) {
-    assertRehearsalStoragePaths(home, [logPath]);
-    appendFileSync(logPath, `${new Date().toISOString()} spawned broker pid=${child.pid}\n`);
+    const [file] = assertRehearsalStoragePaths(home, [logPath], mode);
+    writeStorageFile(home, file, `${new Date().toISOString()} spawned broker pid=${child.pid}\n`, 'a', mode);
   }
 
   const deadline = Date.now() + config.broker.start_timeout_ms;

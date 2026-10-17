@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { canConnect, sockPath } from '../client/autospawn.js';
 import { Client } from '../client/client.js';
@@ -6,7 +6,7 @@ import { loadConfig, resolveHome } from '../config.js';
 import { WigwagError } from '../errors.js';
 import { agentAncestor, processChain } from '../proc/ancestors.js';
 import { frameLimit } from '../protocol/frame.js';
-import { assertRehearsalStoragePaths } from '../rehearsal.js';
+import { assertRehearsalStoragePaths, writeStorageFile } from '../rehearsal.js';
 
 export type ClaudeHookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'Stop';
 const CONTEXT_EVENTS = new Set<ClaudeHookEvent>(['SessionStart', 'UserPromptSubmit', 'PostToolUse']);
@@ -37,11 +37,13 @@ function logError(home: string, event: string, e: unknown): void {
   if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew')
     process.stderr.write(`wigwag: ${e.message}\n`);
   try {
-    assertRehearsalStoragePaths(home, [join(home, 'logs'), join(home, 'logs', 'hooks.log')]);
-    mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
-    appendFileSync(
-      join(home, 'logs', 'hooks.log'),
+    const [logs, file] = assertRehearsalStoragePaths(home, [join(home, 'logs'), join(home, 'logs', 'hooks.log')]);
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    writeStorageFile(
+      home,
+      file,
       `${new Date().toISOString()} claude ${event}: ${e instanceof Error ? e.message : String(e)}\n`,
+      'a',
     );
   } catch {
     // never fail the agent session

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Block rehearsal symlink/parent-component escapes and hard-linked storage.
+  Use validated canonical paths for I/O, guard opened leaves before truncation,
+  recheck database/sidecar paths before open, and refuse copies nested in live homes.
+
 - Refuse raw Claude binds that change a native ID or claim another canonical
   slot. Trusted same-workspace hooks detach only positively recorded raw/legacy
   holders, preserving their work on the old offline slot. Protect unstamped

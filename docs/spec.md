@@ -240,6 +240,11 @@ vitest, linted with biome.
   and archive entries are checked before startup. Dynamic blob, log, config and export leaves are checked again
   at I/O; explicit blob.get dest_path exports must also resolve inside the copy. Inline blob inspection works.
   A marked-home hook failure stays fail-open without logging through an escaped path.
+  Raw parent (`..`) components are refused before lexical normalization. Storage/export I/O uses the returned
+  canonical paths, with no-follow/exclusive leaf opens and descriptor checks before writes/truncation.
+  Inventoried regular files with nlink>1 or a corresponding known-live-home device/inode are refused, including
+  config/logs/blobs/archive/backups/SQLite files; recheck immediately before open. SQLite's generated auxiliary
+  filenames must themselves be canonical. Rehearsal homes nested within a known live home are also refused.
   Owner CLI connections validate storage before socket probes/autospawn, reject all broker.sock symlinks, and require
   a ping reporting rehearsal.enabled=true/native_io=false on that same connection before owner actions. Missing,
   normal or inconsistent evidence fails closed, including broker start/stop/restart and doctor; legacy status fallback

@@ -14,6 +14,7 @@ import {
   assertRehearsalHome,
   assertRehearsalStorage,
   homeRehearsalMode,
+  rehearsalSqlitePath,
 } from '../../rehearsal.js';
 import { isLegacySession } from '../../store/compatibility.js';
 import { SCHEMA_VERSION } from '../../version.js';
@@ -68,7 +69,7 @@ function inspectState(
   add: (ok: boolean, name: string, detail: string) => void,
   warn: (name: string, detail: string) => void,
 ): void {
-  const file = join(home, 'state.db');
+  const file = rehearsalSqlitePath(home, join(home, 'state.db'), true);
   for (const version of [3, 4]) {
     const backup = `${file}.pre-v${version}.bak`;
     try {
@@ -221,11 +222,11 @@ export async function cmdDoctor(args: string[] = []): Promise<void> {
     throw new UsageError('--claude-only and --codex-only are exclusive');
   const checkClaude = !values['codex-only'];
   const checkCodex = !values['claude-only'];
-  const home = resolveHome(),
-    mode = homeRehearsalMode(home);
+  let home = resolveHome();
+  const mode = homeRehearsalMode(home);
   assertRehearsalAccess(home, mode);
   if (mode.enabled) {
-    assertRehearsalHome(home);
+    home = assertRehearsalHome(home);
     assertRehearsalStorage(home);
   }
   const rows: string[][] = [['STATUS', 'CHECK', 'DETAIL']];

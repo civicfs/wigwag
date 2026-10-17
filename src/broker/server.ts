@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { appendFileSync, chmodSync, mkdirSync, unlinkSync } from 'node:fs';
+import { chmodSync, mkdirSync, unlinkSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -27,7 +27,9 @@ import {
   markRehearsal,
   type RehearsalMode,
   rehearsalMode,
+  rehearsalSqlitePath,
   validateRehearsal,
+  writeStorageFile,
 } from '../rehearsal.js';
 import { type Db, openDb } from '../store/db.js';
 import type { SessionRow } from '../store/sessions.js';
@@ -119,10 +121,15 @@ export class Broker {
     readonly config: Config,
   ) {
     this.rehearsal = rehearsalMode(config);
-    assertRehearsalStoragePaths(home, [join(home, 'logs')]);
-    mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
-    this.sockPath = join(home, 'broker.sock');
-    this.logPath = join(home, 'logs', 'broker.log');
+    const [root, logs, socket, log] = assertRehearsalStoragePaths(
+      home,
+      [home, join(home, 'logs'), join(home, 'broker.sock'), join(home, 'logs', 'broker.log')],
+      this.rehearsal,
+    );
+    this.home = root;
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    this.sockPath = socket;
+    this.logPath = log;
   }
 
   handle<M extends MethodName>(method: M, h: (ctx: HandlerCtx, params: Params<M>) => unknown): void {
@@ -132,8 +139,8 @@ export class Broker {
   /** Best-effort: a failed log write (full disk, removed home) is ignored and never fails the caller. */
   log(line: string): void {
     try {
-      assertRehearsalStoragePaths(this.home, [this.logPath]);
-      appendFileSync(this.logPath, `${new Date().toISOString()} ${line}\n`);
+      const [file] = assertRehearsalStoragePaths(this.home, [this.logPath], this.rehearsal);
+      writeStorageFile(this.home, file, `${new Date().toISOString()} ${line}\n`, 'a', this.rehearsal);
     } catch {
       // ignored by design (ruling R34)
     }
@@ -164,9 +171,9 @@ export class Broker {
   private async doStart(): Promise<void> {
     try {
       await validateRehearsal(this.home, this.config, this.rehearsal);
-      this.lock = BrokerLock.acquire(this.home);
+      this.lock = BrokerLock.acquire(this.home, this.rehearsal);
       markRehearsal(this.home, this.rehearsal);
-      this.database = openDb(join(this.home, 'state.db'));
+      this.database = openDb(rehearsalSqlitePath(this.home, join(this.home, 'state.db'), true, this.rehearsal));
       for (const f of this.onOpen) f();
       for (const f of this.onStart) f();
       // We hold the lock, so whatever sits at the socket path was left by a dead broker.

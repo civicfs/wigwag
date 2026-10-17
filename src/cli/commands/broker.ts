@@ -8,7 +8,7 @@ import { connectOwner } from '../../client/owner.js';
 import { loadConfig, resolveHome } from '../../config.js';
 import { WigwagError } from '../../errors.js';
 import { frameLimit } from '../../protocol/frame.js';
-import { assertRehearsalClientPaths } from '../../rehearsal.js';
+import { assertRehearsalClientPaths, assertRehearsalStoragePaths, homeRehearsalMode } from '../../rehearsal.js';
 import { usageError } from '../help.js';
 import { cliEntry, out, ownerConnect, parseCli } from '../util.js';
 
@@ -16,6 +16,7 @@ import { cliEntry, out, ownerConnect, parseCli } from '../util.js';
 export async function liveStatus(home: string): Promise<{ pid: number; version?: string } | null> {
   const config = loadConfig(home);
   const mode = assertRehearsalClientPaths(home, config);
+  [home] = assertRehearsalStoragePaths(home, [home], mode);
   if (!(await canConnect(sockPath(home)))) return null;
   const signal = AbortSignal.timeout(config.broker.start_timeout_ms);
   let client: Client | undefined;
@@ -66,7 +67,8 @@ export function signalBroker(
 }
 
 export async function cmdBroker(sub: string | undefined, args: string[] = []): Promise<void> {
-  const home = resolveHome();
+  const requested = resolveHome();
+  const [home] = assertRehearsalStoragePaths(requested, [requested], homeRehearsalMode(requested));
   if (sub === 'run') {
     try {
       const broker = await startBroker(home);

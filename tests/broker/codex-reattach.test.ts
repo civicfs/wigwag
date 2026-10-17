@@ -181,6 +181,14 @@ async function asyncQuestion() {
   return { f, native, q, item };
 }
 describe('verified Codex MCP reattachment without a remembered slot', () => {
+  it('claims an answered native submission only once at the SQL layer without an in-memory sent flag', async () => {
+    const { f, q } = await asyncQuestion();
+    // No changed event: isolate the durable claim from adapter flush/pending.sent checks.
+    f.broker.db.prepare("UPDATE question_relays SET state='answered',answers_json='{}' WHERE id=?").run(q.id);
+    expect(f.broker.questions.claimSubmission(q.id, f.old.welcome.session_id)).toBe(true);
+    expect(f.broker.questions.claimSubmission(q.id, f.old.welcome.session_id)).toBe(false);
+    expect(f.broker.questions.get(q.id)?.submission_state).toBe('unknown');
+  });
   it.each(['ambiguous', 'switched-away'])(
     'refuses an initially %s holder before any metadata await',
     async (condition) => {

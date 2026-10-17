@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { WigwagError } from './errors.js';
-import { assertRehearsalAccess, assertRehearsalStoragePaths, rehearsalMode } from './rehearsal.js';
+import { assertRehearsalAccess, assertRehearsalStoragePaths, rehearsalMode, writeStorageFile } from './rehearsal.js';
 
 export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
   if (env.WIGWAG_HOME) return env.WIGWAG_HOME;
@@ -112,14 +112,15 @@ function fillMissing(existing: Record<string, unknown>, defaults: Record<string,
 
 /** Temp file + rename, mode 0600. */
 function writeConfigAtomic(path: string, cfg: unknown): void {
-  const tmp = `${path}.${process.pid}.tmp`;
-  assertRehearsalStoragePaths(dirname(path), [path, tmp]);
+  const [target, tmp] = assertRehearsalStoragePaths(dirname(path), [path, `${path}.${process.pid}.tmp`]);
+  let written = false;
   try {
-    writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tmp, path);
+    writeStorageFile(dirname(path), tmp, `${JSON.stringify(cfg, null, 2)}\n`, 'w');
+    written = true;
+    renameSync(tmp, target);
   } catch (e) {
     try {
-      unlinkSync(tmp); // never leave the temp file behind
+      if (written) unlinkSync(tmp); // remove only a temporary file this attempt wrote
     } catch {
       // it was never created
     }
@@ -134,14 +135,13 @@ function writeConfigAtomic(path: string, cfg: unknown): void {
  */
 export function initHome(home: string, codexBinary: string): { path: string; created: boolean; added: string[] } {
   assertRehearsalAccess(home);
-  assertRehearsalStoragePaths(home, [configPath(home), join(home, 'logs')]);
-  mkdirSync(home, { recursive: true, mode: 0o700 });
-  chmodSync(home, 0o700);
-  mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
-  const path = configPath(home);
+  const [root, path, logs] = assertRehearsalStoragePaths(home, [home, configPath(home), join(home, 'logs')]);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  chmodSync(root, 0o700);
+  mkdirSync(logs, { recursive: true, mode: 0o700 });
   const cfg: Config = { ...INIT_VALUES, codex: { ...INIT_VALUES.codex, binary: codexBinary } };
   try {
-    writeFileSync(path, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    writeStorageFile(home, path, `${JSON.stringify(cfg, null, 2)}\n`, 'wx');
     return { path, created: true, added: [] };
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
@@ -167,7 +167,7 @@ export function setCodexBinary(home: string, binary: string): void {
 }
 
 export function loadConfig(home: string): Config {
-  const path = configPath(home);
+  const [path] = assertRehearsalStoragePaths(home, [configPath(home)]);
   if (!existsSync(path)) throw new WigwagError('config', `No config at ${path}. Run: wigwag init`);
   let text: string;
   try {
