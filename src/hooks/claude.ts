@@ -6,6 +6,7 @@ import { loadConfig, resolveHome } from '../config.js';
 import { WigwagError } from '../errors.js';
 import { agentAncestor, processChain } from '../proc/ancestors.js';
 import { frameLimit } from '../protocol/frame.js';
+import { assertRehearsalStoragePaths } from '../rehearsal.js';
 
 export type ClaudeHookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'Stop';
 const CONTEXT_EVENTS = new Set<ClaudeHookEvent>(['SessionStart', 'UserPromptSubmit', 'PostToolUse']);
@@ -36,6 +37,7 @@ function logError(home: string, event: string, e: unknown): void {
   if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew')
     process.stderr.write(`wigwag: ${e.message}\n`);
   try {
+    assertRehearsalStoragePaths(home, [join(home, 'logs'), join(home, 'logs', 'hooks.log')]);
     mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
     appendFileSync(
       join(home, 'logs', 'hooks.log'),

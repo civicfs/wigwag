@@ -274,7 +274,12 @@ skips Claude/Codex executable probes. Config keys `rehearsal.enabled` and
 of `1` force them on. External paths require the explicit override and a loud
 ping/doctor warning; native I/O stays disabled. Without the override, native
 socket/binary and effective Codex/Claude home paths must be absolute and resolve
-inside the copy. Storage paths must always stay inside it, including symlinks.
+inside the copy. Storage paths must always stay inside it, including symlinks:
+blobs, archive databases and sidecars, migration backups, logs, sockets, locks,
+config and temporary files share one containment inventory. Blob paths and
+temporary leaves are checked again before I/O. Explicit blob exports also stay
+inside the copy; inline inspection remains available. The external-native-path
+override never permits storage or exports outside the copy.
 
 Rehearsal refuses the default live home (including XDG/aliases) and any home
 with a running broker socket. It writes `rehearsal.json` with mode 0600 under

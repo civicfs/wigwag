@@ -167,3 +167,14 @@ it.each(['outside', 'inside'])('refuses a %s-home broker socket symlink without 
   expect(result.stderr).toMatch(/rehearsal.*(symlink|storage)/i);
   expect(connections).toBe(0);
 });
+
+it('marked-home hook failure stays fail-open without writing through an escaped hooks.log', async () => {
+  const f = fixture(),
+    outside = tmpHome(),
+    escaped = join(outside, 'outside-hooks.log');
+  writeFileSync(join(f.home, 'rehearsal.json'), '{}', { mode: 0o600 });
+  symlinkSync(escaped, join(f.home, 'logs', 'hooks.log'));
+  const result = await cli(['hook', 'claude', 'Stop'], { ...f.env, WIGWAG_REHEARSAL: '0' }, '{"session_id":"T"}');
+  expect(result).toMatchObject({ code: 0, stdout: '', stderr: '' });
+  expect(existsSync(escaped)).toBe(false);
+});

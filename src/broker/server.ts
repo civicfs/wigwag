@@ -22,7 +22,13 @@ import {
   type WireError,
 } from '../protocol/rpc.js';
 import type { QuestionService } from '../questions/service.js';
-import { markRehearsal, type RehearsalMode, rehearsalMode, validateRehearsal } from '../rehearsal.js';
+import {
+  assertRehearsalStoragePaths,
+  markRehearsal,
+  type RehearsalMode,
+  rehearsalMode,
+  validateRehearsal,
+} from '../rehearsal.js';
 import { type Db, openDb } from '../store/db.js';
 import type { SessionRow } from '../store/sessions.js';
 import { WorkspaceResolver } from '../workspace.js';
@@ -113,6 +119,7 @@ export class Broker {
     readonly config: Config,
   ) {
     this.rehearsal = rehearsalMode(config);
+    assertRehearsalStoragePaths(home, [join(home, 'logs')]);
     mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
     this.sockPath = join(home, 'broker.sock');
     this.logPath = join(home, 'logs', 'broker.log');
@@ -125,6 +132,7 @@ export class Broker {
   /** Best-effort: a failed log write (full disk, removed home) is ignored and never fails the caller. */
   log(line: string): void {
     try {
+      assertRehearsalStoragePaths(this.home, [this.logPath]);
       appendFileSync(this.logPath, `${new Date().toISOString()} ${line}\n`);
     } catch {
       // ignored by design (ruling R34)

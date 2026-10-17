@@ -133,6 +133,9 @@ backups. Rehearsal disables native integration reads, pushes and answer submissi
 skips update network/cache work. Owner inspection and migrations still read/write the copy. The external-native-path
 override never enables native I/O. A mode-0600 `rehearsal.json` marker records the first rehearsal start; the updated
 normal CLI/broker refuse that home until the owner explicitly clears it with `wigwag rehearsal clear` while stopped.
+Storage containment includes blob shards, archive databases and sidecars, migration backups, logs, sockets, locks,
+config and temporary files. Dynamic blob paths and explicit export destinations are checked again before I/O;
+exports outside the copy are refused even with the external-native-path override. Inline inspection remains available.
 Clearing the marker does not erase retained data or change config; a subsequent normal start may contact integrations
 and apply retained answers. Old binaries do not honor this marker. Rehearsal never makes or removes a live-data copy.
 

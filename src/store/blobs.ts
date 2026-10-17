@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 import { WigwagError } from '../errors.js';
 import { BLOB_REF_RE } from '../ids.js';
+import { assertRehearsalStoragePaths } from '../rehearsal.js';
 import { type Db, nowIso } from './db.js';
 import type { Scope } from './links.js';
 
@@ -33,10 +34,11 @@ export function putBlob(
   }
   const ref = `sha256:${createHash('sha256').update(data).digest('hex')}`;
   const path = blobPath(home, ref);
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  assertRehearsalStoragePaths(home, [path, tmp]);
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-    writeFileSync(tmp, data, { mode: 0o600 });
+    writeFileSync(tmp, data, { mode: 0o600, flag: 'wx' });
     renameSync(tmp, path);
   }
   db.prepare(
@@ -50,6 +52,7 @@ export const getBlobMeta = (db: Db, ref: string) =>
 
 export function readBlob(home: string, ref: string): Buffer {
   const path = blobPath(home, ref);
+  assertRehearsalStoragePaths(home, [path]);
   if (!existsSync(path)) throw new WigwagError('not_found', `Blob not found: ${ref}`);
   const data = readFileSync(path);
   const actual = `sha256:${createHash('sha256').update(data).digest('hex')}`;

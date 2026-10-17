@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Contain all rehearsal storage through one shared inventory, including blobs,
+  archive/SQLite sidecars, backups, logs, sockets and managed temporary files.
+  Recheck dynamic blob and export paths before I/O; outside exports are refused
+  even with the external-native-path override. Hooks remain fail-open without
+  writing through escaped log paths.
+
 - Ignore stale reconnect hints for every MCP when the earlier conversation split
   could not record a complete verified process identity; a later successful
   capture cannot expose the previous conversation’s mailbox before a trusted hook.

@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { BrokerLock } from './broker/lock.js';
@@ -79,8 +79,57 @@ export function assertRehearsalHome(home: string): void {
   if (defaults.some((p) => canonical(p) === actual))
     throw new WigwagError('config', 'Rehearsal refuses the default live home; use a separate copied WIGWAG_HOME.');
 }
+/** Every implicit writable root/file. Dynamic leaves must also use assertRehearsalStoragePaths before I/O. */
+export const REHEARSAL_STORAGE_PATHS: readonly string[] = Object.freeze([
+  'config.json',
+  'rehearsal.json',
+  'update-check.json',
+  'broker.lock',
+  'broker.sock',
+  'logs',
+  'logs/broker.log',
+  'logs/hooks.log',
+  'blobs',
+  'blobs/sha256',
+  'archive',
+  ...['state.db', 'broker.mutex'].flatMap((file) => [file, `${file}-wal`, `${file}-shm`, `${file}-journal`]),
+  ...[3, 4].map((version) => `state.db.pre-v${version}.bak`),
+]);
+function containedStorage(home: string, path: string): void {
+  if (!isAbsolute(path)) throw new WigwagError('config', 'Rehearsal storage requires absolute paths');
+  const rel = relative(canonical(home), canonical(path));
+  if (isAbsolute(rel) || rel === '..' || rel.startsWith('../'))
+    throw new WigwagError('config', `Rehearsal storage ${path} is outside WIGWAG_HOME`);
+}
+/** Include current temporary names and leftover managed temp/archive entries, without traversing the blob store. */
+export function rehearsalStoragePaths(home: string): string[] {
+  const paths = new Set(REHEARSAL_STORAGE_PATHS.map((name) => join(home, name)));
+  for (const name of [
+    `config.json.${process.pid}.tmp`,
+    `broker.lock.${process.pid}.tmp`,
+    ...[3, 4].map((version) => `state.db.pre-v${version}.${process.pid}.tmp`),
+  ])
+    paths.add(join(home, name));
+  for (const directory of [home, join(home, 'archive')]) {
+    containedStorage(home, directory);
+    try {
+      for (const name of readdirSync(directory))
+        if (
+          directory !== home ||
+          /^(?:config\.json\.\d+\.tmp|broker\.lock\.\d+\.tmp|state\.db\.pre-v\d+(?:\.\d+\.tmp|\.bak))$/.test(name)
+        ) {
+          const file = join(directory, name);
+          paths.add(file);
+          if (directory !== home && name.endsWith('.db'))
+            for (const suffix of ['-wal', '-shm', '-journal']) paths.add(file + suffix);
+        }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+  }
+  return [...paths];
+}
 export function assertRehearsalStorage(home: string): void {
-  const root = canonical(home);
   try {
     if (lstatSync(sockPath(home)).isSymbolicLink())
       throw new WigwagError(
@@ -90,20 +139,17 @@ export function assertRehearsalStorage(home: string): void {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
   }
-  // External-native-path overrides never permit state/mutex/log writes or broker socket probes outside the copy.
-  for (const name of [
-    'state.db',
-    'broker.mutex',
-    'broker.lock',
-    'broker.sock',
-    'logs',
-    'logs/broker.log',
-    'rehearsal.json',
-  ]) {
-    const rel = relative(root, canonical(join(home, name)));
-    if (isAbsolute(rel) || rel === '..' || rel.startsWith('../'))
-      throw new WigwagError('config', `Rehearsal storage ${name} is outside WIGWAG_HOME`);
-  }
+  // Validate roots before listing any archive directory, so a copied symlink cannot even route inspection outside.
+  for (const name of REHEARSAL_STORAGE_PATHS) containedStorage(home, join(home, name));
+  for (const path of rehearsalStoragePaths(home)) containedStorage(home, path);
+}
+/** Validate actual blob/temp/export leaves again at I/O time; the external-native-path override never applies. */
+export function assertRehearsalStoragePaths(home: string, paths: string[]): void {
+  const mode = homeRehearsalMode(home);
+  assertRehearsalAccess(home, mode);
+  if (!mode.enabled) return;
+  assertRehearsalHome(home);
+  for (const path of paths) containedStorage(home, path);
 }
 /** Used by every owner CLI connection before any socket probe or autospawn. */
 export function assertRehearsalClientPaths(home: string, config: Config): RehearsalMode {

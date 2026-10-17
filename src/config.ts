@@ -1,9 +1,9 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { WigwagError } from './errors.js';
-import { assertRehearsalAccess, rehearsalMode } from './rehearsal.js';
+import { assertRehearsalAccess, assertRehearsalStoragePaths, rehearsalMode } from './rehearsal.js';
 
 export function resolveHome(env: NodeJS.ProcessEnv = process.env): string {
   if (env.WIGWAG_HOME) return env.WIGWAG_HOME;
@@ -113,6 +113,7 @@ function fillMissing(existing: Record<string, unknown>, defaults: Record<string,
 /** Temp file + rename, mode 0600. */
 function writeConfigAtomic(path: string, cfg: unknown): void {
   const tmp = `${path}.${process.pid}.tmp`;
+  assertRehearsalStoragePaths(dirname(path), [path, tmp]);
   try {
     writeFileSync(tmp, `${JSON.stringify(cfg, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, path);
@@ -133,6 +134,7 @@ function writeConfigAtomic(path: string, cfg: unknown): void {
  */
 export function initHome(home: string, codexBinary: string): { path: string; created: boolean; added: string[] } {
   assertRehearsalAccess(home);
+  assertRehearsalStoragePaths(home, [configPath(home), join(home, 'logs')]);
   mkdirSync(home, { recursive: true, mode: 0o700 });
   chmodSync(home, 0o700);
   mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });

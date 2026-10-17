@@ -231,6 +231,11 @@ vitest, linted with biome.
   broker's socket home. Before DB open, native socket/binary and effective CODEX_HOME/CLAUDE_CONFIG_DIR paths
   must resolve inside that home unless the explicit external-path override is set. Storage, mutex, logs and
   broker socket paths cannot escape even with that override. Ping/doctor display mode and a loud override warning.
+  One shared storage inventory covers blobs/sha256, archive files and SQLite sidecars, migration backups,
+  state/mutex sidecars, config/lock temporary files, logs, markers and sockets. Existing managed temporaries
+  and archive entries are checked before startup. Dynamic blob, log, config and export leaves are checked again
+  at I/O; explicit blob.get dest_path exports must also resolve inside the copy. Inline blob inspection works.
+  A marked-home hook failure stays fail-open without logging through an escaped path.
   Owner CLI connections validate storage before socket probes/autospawn, reject all broker.sock symlinks, and require
   a ping reporting rehearsal.enabled=true/native_io=false on that same connection before owner actions. Missing,
   normal or inconsistent evidence fails closed, including broker start/stop/restart and doctor; legacy status fallback

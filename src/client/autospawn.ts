@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Config } from '../config.js';
 import { WigwagError } from '../errors.js';
-import { assertRehearsalClientPaths } from '../rehearsal.js';
+import { assertRehearsalClientPaths, assertRehearsalStoragePaths } from '../rehearsal.js';
 import { connectOwner } from './owner.js';
 
 /** Poll granularity while waiting for a freshly spawned broker; not a tunable. */
@@ -61,6 +61,7 @@ export async function ensureBroker(home: string, config: Config, entry: string, 
   if (await reachable()) return;
   if (signal?.aborted) throw cancelled();
   const logPath = join(home, 'logs', 'broker.log');
+  assertRehearsalStoragePaths(home, [join(home, 'logs'), logPath]);
   mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
   let failure: WigwagError | null = null;
   let child: ChildProcess;
@@ -90,7 +91,10 @@ export async function ensureBroker(home: string, config: Config, entry: string, 
     );
   });
   child.unref();
-  if (child.pid !== undefined) appendFileSync(logPath, `${new Date().toISOString()} spawned broker pid=${child.pid}\n`);
+  if (child.pid !== undefined) {
+    assertRehearsalStoragePaths(home, [logPath]);
+    appendFileSync(logPath, `${new Date().toISOString()} spawned broker pid=${child.pid}\n`);
+  }
 
   const deadline = Date.now() + config.broker.start_timeout_ms;
   try {
