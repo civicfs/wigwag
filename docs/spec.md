@@ -141,16 +141,235 @@ vitest, linted with biome.
   registering another name or going offline, or `codex.name_wait_ms`. Only a live-holder refusal waits; an
   out-of-scope offline holder still refuses for good. No hook is used: Codex 0.160.1 lists a `sessionEnd` hook event, but the MCP
   connection closing already marks the thread's end (a hook would add nothing the broker does not see).
-- **Messages follow a rename.** When a session leaves the provisional name the broker gave it (by `register`, an applied
-  launch intent, or a handed-over launcher name), its `pending`, `held`, `stuck` and `failed` deliveries addressed to the
-  old name move to the new name in one transaction, because inbox and unread look up only the current name. Messages stay
-  append-only (`to_target` keeps the old name); each moved delivery gets a delivery event `forwarded from <old>`. A delivery
-  is not moved when the new name could not receive it under §17 (never across a scope boundary), when its push is in
-  flight, or when the message already has a delivery to the new name (an `all` broadcast that reached both). Pending and
-  failed deliveries are dispatched again, and the session is announced so held backlog is swept and delivered. Leaving a
-  name the session chose itself does not forward.
+- **Messages follow a rename (W2a, 0.3.0).** Whenever a session's name changes (`register`, an applied launch intent, a
+  handed-over launcher name, native-name adoption, or resume recovery), its `pending`, `held`, `stuck` and `failed`
+  deliveries addressed to the old name move to the new name in one transaction. Messages stay append-only
+  (`to_target` keeps the old name); each moved delivery gets a delivery
+  event `forwarded from <old>`. A delivery is not moved when the new name could not receive it under §17, or when the
+  message already has a delivery to the new name (an `all` broadcast that reached both). A delivery whose push is in
+  flight records its destination session ID durably in `deliveries.forward_to`, including a chunk already pushed
+  while its transport is still running. Inbox, reads, acknowledgements, attachment access, unread and recovery
+  counts resolve that stable owner; a new holder of the source name cannot read or take those exact rows. The
+  physical key moves to the owner's current name when the push settles or at next broker start. Recovery transfers
+  that ownership in its adoption transaction. Primary-key collisions retain the owner until they can settle.
+  Only the renamed session's own active subscriptions and mutes
+  move with its name. Other sessions' subscriptions or mutes targeting the old name stay at that name, as do existing
+  throttle pairs involving it; these rules do not follow the renamed session in 0.3.0. The rename is recorded in
+  `session_renames`, live sessions in scope get a low-priority `session renamed: <old> → <new>` notice (not sent when
+  the old name was an unused provisional name), and owners get the session. Pending and failed deliveries are
+  dispatched again, and the session is announced so held backlog is swept and delivered.
+- **Parent liveness limits (0.3.0).** A Codex assignment alone no longer holds a relay subscription. The turn-start hook
+  awaits attachment before returning. Busy turns and pending/answered native questions keep it attached; after idle
+  with no outstanding questions, a configurable grace (`questions.codex_idle_grace_ms`, optional, default 2000 ms,
+  range 0–30000) ends with thread/unsubscribe and connection close. Retry reconciliation attaches only for active
+  demand, after metadata proves the thread is loaded; unloaded/unknown demand waits and appears in whoami/recovery.
+  Shutdown cancels timers and awaits bounded unsubscribe cleanup. Active turns, pending questions and the daemon's
+  native unload delay still prevent instant TUI-close detection.
+  Before an assigned Codex queue attempt, reserve and await the question relay attachment, with metadata-loaded
+  preflight, then perform fresh push-trust verification after that I/O. Any failure holds without queuing; inbox
+  remains available. Release the reservation in finally on every path, including failure and shutdown. Busy-turn
+  notifications/hooks and pending relays retain normal demand; otherwise idle grace unsubscribes. In pinned Codex
+  0.162.1, queued user input runs UserPromptSubmit before model work, and thread/resume replays pending ordinary
+  server requests. A queued turn starting after grace reattaches through its trusted prompt hook. Failed native
+  reattachment logs a warning; captured questions stay in the relay store and `questions`.
+  Codex pushes now require a connected MCP link plus fresh loaded-root evidence. Disconnected links hold as
+  disconnected, unloaded/unknown identities hold as codex-untrusted, and non-live slots hold offline. Reattachment
+  or a hook boundary can deliver the backlog. Native loaded/link evidence may outlast the TUI itself. macOS identities
+  use UTC `ps lstart` plus uid with one-second resolution, so same-uid PID reuse within a
+  second cannot be distinguished.
 - **Rename**: `register(name)` tool. Rejected if a *live* session holds it. If the holder is offline, the new
   session takes the name and inherits its undelivered backlog (delivered as one digest on first wake).
+- **Native names (W2, 0.3.0).** `sessions.name_source` is `provisional`, `native` or `custom`. Claude: the hook's
+  `session_title`, then `<transcript dir>/<session_id>/custom-title.json`, then (SessionStart only) the newest
+  `custom-title` record for the session in the last 256 KiB of the transcript; refreshed at SessionStart,
+  UserPromptSubmit and PostToolUse, and by a sidecar watcher plus a 15 s reconcile. Codex: `thread.name` from a
+  metadata-only `thread/read` on a dedicated app-server connection (never `thread/resume`, never `title`), refreshed on
+  bind, on `thread/name/updated`, and every 30 s; the last 64 KiB of `session_index.jsonl` when the app-server is
+  unreachable may supply the first native name only; it never changes an existing native name. Display titles have
+  control characters removed and are capped at 200 characters before storage. Titles are lowercased, folded to
+  `[a-z0-9-]`, prefixed with the agent when they start with a digit, and
+  capped at 43 characters; a name held by any other session or reserved gets `-2`…`-9`, then a random suffix. Unusable
+  titles keep the current name. `register` sets `custom`; `register` with `native=true` reverts.
+- **Version compatibility.** Hello and welcome carry the existing protocol version, required schema version and
+  package version. Both ends reject protocol/schema incompatibility before a session is created or RPCs are authorized,
+  with restart advice for an older broker or update/reload advice for an older client. Package versions only warn.
+  Compatible whoami/ping/doctor calls show recent compatibility warnings. Lifecycle and QuestionReady hooks exit zero
+  without context/decisions on skew; supervised question PreToolUse retains its existing denial, including the
+  actionable compatibility error, to prevent silently asking the human directly. Protocol/schema mismatches reject
+  before session creation; package versions alone warn and remain connected. Unstamped same-protocol 0.2 mcp/hook/owner
+  clients are accepted in degraded mode, shown in whoami/doctor/TUI as `legacy client 0.2: reload plugin for new features`.
+  A legacy MCP reconnect preserves a slot only with its explicit resume_session_id, matching agent/workspace and an
+  unretired offline/disconnected slot; it never follows retirement links or takes over by parent identity. Its compatibility
+  observation persists in session_lineage without a schema change. A genuinely stamped valid reconnect to that same
+  slot clears it. After plugin reload, a stamped Claude MCP plus a stamped trusted hook may also adopt exactly one
+  eligible legacy slot for the same native ID/workspace through the transactional recovery gates, retaining name,
+  mail, assignments and pending/answered relays and recording stamped-client. Legacy clients themselves never
+  adopt; a still-connected 0.2 MCP stays degraded. Ambiguity preserves the old slots and flags the new one. Relays
+  preserved by this legacy-upgrade exception still follow assignment-release cancellation and are also cancelled
+  by a later captured Claude question with a different tool_use_id; general parallel captures and G5 are unchanged.
+  Legacy clients cannot capture parent identity, recover/adopt either side of a slot handoff or establish
+  Codex push trust; liveness stays unverified. A missing package stamp stays degraded even with a matching schema stamp.
+  New clients still reject unstamped old brokers with restart advice. The question-hook fail-open/deny distinction remains.
+  Doctor probes without autospawn and opens an existing database read-only without migrations. Clean closed databases use immutable URI mode; existing WAL/shm uses ordinary read-only
+  access so committed WAL content is visible. Unsupported URI support falls back to ordinary read-only access with
+  a diagnostic. Every ordinary read-only path warns that SQLite may update `-shm` or create missing bookkeeping
+  sidecars; database content is never changed or copied. It reports schema,
+  pre-v3/v4 backup presence/modes, disconnected/unknown live slots, missing Claude process identities, unresolved
+  recovery flags, duplicate group/slot counts and Codex push-untrusted reasons. State findings and recent rejected-peer
+  history are warnings; an actual incompatible broker/client handshake is an error. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
+  verification; that path exposes no general RPC client.
+  The old 0.2 CLI/broker has no newer-schema rejection and can open an upgraded v3/v4 file without complaint.
+  Never run those binaries against upgraded state.db; the new protocol checks do not protect old direct file opens.
+  Downgrading requires a separate compatible database, with later state reconciled separately. Successful upgrades
+  retain mode-0600 pre-v3/pre-v4 snapshots. A crash after publishing a backup but before committing that migration
+  leaves a pre-existing file that blocks the next migration/start until the operator inspects and moves/removes it.
+  Confirmed rollback removes only this attempt's redundant backup; unknown outcomes preserve it. Completed
+  migrations skip their old snapshots at startup; a retained successful backup alone does not block startup.
+- **Owner-only upgrade rehearsal.** Config `rehearsal.enabled`/`rehearsal.allow_external_paths` default false;
+  `WIGWAG_REHEARSAL=1` and `WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS=1` force them on. CLI use requires an explicit
+  absolute WIGWAG_HOME distinct from account-home/.wigwag (userInfo, independent of HOME), HOME/.wigwag,
+  configured XDG state home and default .local/state/wigwag paths. Native realpath plus device/inode identity
+  rejects case/firmlink aliases; missing leaves use nearest-existing-parent identity plus case-folded names.
+  Startup refuses any existing broker.sock entry, including stale sockets/files, before probing or DB open;
+  a prepared database/config copy contains no socket. An arbitrary former XDG path cannot be rediscovered once
+  unset; socket refusal and the sticky marker remain the backstops. Before DB open, native socket/binary and effective CODEX_HOME/CLAUDE_CONFIG_DIR paths
+  must resolve inside that home unless the explicit external-path override is set. Storage, mutex, logs and
+  broker socket paths cannot escape even with that override. Ping/doctor display mode and a loud override warning.
+  One shared storage inventory covers blobs/sha256, archive files and SQLite sidecars, migration backups,
+  state/mutex sidecars, config/lock temporary files, logs, markers and sockets. Existing managed temporaries
+  and archive entries are checked before startup. Dynamic blob, log, config and export leaves are checked again
+  at I/O; explicit blob.get dest_path exports must also resolve inside the copy. Inline blob inspection works.
+  A marked-home hook failure stays fail-open without logging through an escaped path.
+  Raw parent (`..`) components are refused before lexical normalization. Storage/export I/O uses the returned
+  canonical paths, with no-follow/exclusive leaf opens and descriptor checks before writes/truncation.
+  Inventoried regular files with nlink>1 or a corresponding known-live-home device/inode are refused, including
+  config/logs/blobs/archive/backups/SQLite files; recheck immediately before open. SQLite's generated auxiliary
+  filenames must themselves be canonical. Rehearsal homes nested within a known live home are also refused.
+  Owner CLI connections validate storage before socket probes/autospawn, reject all broker.sock symlinks, and require
+  a ping reporting rehearsal.enabled=true/native_io=false on that same connection before owner actions. Missing,
+  normal or inconsistent evidence fails closed, including broker start/stop/restart and doctor; legacy status fallback
+  cannot bypass this check.
+  Native readers, app-server/question adapters, title watchers and liveness intervals are never constructed;
+  the process probe is fixed unknown and injected native factories/transports cannot enable I/O. Native pushes
+  are held; retained assignments/answered relays cannot submit answers. MCP/hook hello is refused before identity
+  creation, leaving owner inspection/migration RPCs available. Native launch/install/uninstall/update/MCP commands
+  are refused; native hooks fail open without discovery; update notices skip network and cache writes; doctor
+  skips native executable probes. On first start a mode-0600 rehearsal.json marker is written under the mutex
+  before state.db is opened. Normal updated broker/CLI refuse this marked home. The explicit owner command
+  `wigwag rehearsal clear` requires a stopped broker and removes only that marker under the mutex. Config/environment
+  mode must also be disabled before normal use, which may contact integrations and apply retained answers.
+  This guard cannot constrain old binaries and does not copy source data or confer live-upgrade authorization.
+- **Resume recovery (W7, 0.3.0).** Recovery runs on the first trusted Claude hook bind, never from the internal
+  `session.bind` tool path for Claude. A raw Claude internal bind cannot change a non-null native ID or target any
+  other unretired canonical slot, including an offline one; it must use a trusted hook instead.
+  Positive untrusted-binding proof is the latest `session_lineage` row with reason `binding-origin` for the exact
+  slot/native pair, whose `evidence_json.origin` is `raw-bind` or `legacy-unverified`. The V4 default
+  `sessions.bind_origin='unverified'` alone is never proof. Such bindings are never adopted by recovery. A trusted
+  Claude hook or verified Codex hook may detach a positively stamped live squatter in the same workspace: its old
+  offline slot keeps its name, mail, assignments and relays, clears its untrusted native ID, and its connection gets
+  a fresh provisional unbound slot. No retained work moves to the trusted caller. Historical unstamped holders
+  remain protected; a conflicting hook refuses and records `binding-origin-unknown` with guidance in doctor/recovery.
+  Only that historical holder's own matching trusted hook upgrades it to `hook-verified`.
+  Exactly one eligible offline or MCP-disconnected, unretired slot of the same
+  agent, native ID and workspace is canonical. An empty provisional/unnamed slot is excluded unless it retains an
+  active assignment, pending/held/failed/stuck mail, or active subscriptions/mutes. A refused-resume shell needs that
+  retained work even if it has a native/custom name; historical refusal keeps an empty shell excluded after its
+  display flag is resolved. Several meaningful candidates flag ambiguity without adopting.
+  In one transaction the live connection takes the canonical slot's identity, work and a new connection generation;
+  incoming process fields replace stale ones, and the new slot retires into it. Readiness is cleared. Synchronous
+  questions remain intact when the incoming Claude parent matches the canonical pid/start identity and both are
+  verified live; otherwise stale synchronous relays are cancelled. An explicit custom launch/register name on the
+  new slot is applied to the canonical slot through the normal claim/rename pipeline, with forwarding and notices.
+  If refused, the canonical name stays and lineage evidence records the requested name and refusal reason.
+  Native/provisional names never override it.
+  A trusted Claude hook changing conversations within one MCP process splits the slot: the old slot keeps its
+  native binding, name, held mail, assignments, relays, subscriptions, mutes and parent identity, but becomes
+  offline/link-disconnected. The connection takes a fresh provisional slot without the old launch/custom name
+  or native metadata, then uses the normal unique-candidate recovery gates. A live holder or ambiguity leaves
+  that fresh slot unbound and flagged, including on later retries; it cannot read the previous conversation's mail.
+  Switching back uses the same gates. An internal session.identity event updates the MCP's remembered resume hint.
+  Durable switch lineage records source/target slots, workspace and verified MCP pid/start when available. A hint
+  most recently switched away from by that exact verified process is ignored (including its old launch name),
+  forcing a fresh slot and trusted hook binding; there are no switch redirects or chains. When process capture or
+  verification fails, a hint most recently switched away from is also ignored: its mailbox cannot become push-ready
+  before a trusted hook identifies the conversation. A split recorded with a null/missing pid or start identity
+  applies to every reconnecting MCP, even after a successful new capture. The newest applicable switch record
+  still governs, so a verified later switch back can restore the original slot. Verified different MCP processes
+  keep the existing reattach rules only when the earlier record has a complete different verified identity, and a later differing trusted hook still splits before delivery. A differing hook while MCP is disconnected
+  refuses until reconnect allows the split; it never overwrites the old slot's native binding.
+  Codex automatic recovery is unavailable in 0.3.0: its hook presents a shared tree-root ID, not a trusted concrete
+  thread ID. The production `trustedThreadId` provider returns null; a future trusted concrete ID must match the
+  binding and pass metadata root verification. A narrow MCP reattachment exception requires both old/new
+  hook-verified concrete identities for the same root, both host versions currently trusted, exactly one matching
+  same-workspace unretired non-offline/link-disconnected slot, and fresh metadata confirming the root is loaded.
+  Generation, identity, host trust, workspace, retirement and switch-away lineage are rechecked after I/O; the existing
+  adoption transaction keeps name/mail/assignment/forward ownership. This never revives a retired or switched-away
+  slot and does not enable general Codex resume recovery. This verified MCP handover preserves pending/answered
+  synchronous Codex relays, then replaces the question subscription and requires fresh pending-request replay for
+  the exact thread, native invocation, question payload and known request ID before submitting. Already-sent answers
+  are never resent; native resolutions or ended turns cancel stale relays. Unavailable/mismatched replay retains the
+  relay with a visible waiting reason and submits nothing. General adoption still cancels synchronous relays.
+  Untrusted binds preserve offline canonical bindings and record
+  `codex-thread-id-untrusted`; non-offline holders refuse. Codex queue pushes require metadata evidence that the presented ID is a loaded root and no other loaded thread
+  shares its sessionId, plus a current connected MCP link and non-offline slot, all revalidated after I/O. The
+  metadata-only reader checks bind, probes and each queue push (fresh before dispatch),
+  reads at most 256 loaded threads in batches of eight, and caches non-push checks for 2 s. Unavailable/malformed
+  evidence fails closed. Reasons are shared-root, root-not-loaded, descendant-loaded or app-server-unavailable;
+  deliveries hold as codex-untrusted and remain accessible through hooks/inbox. Public session/capability/TUI/recovery
+  diagnostics show the reason, including `too-many-loaded` for over 256 loaded threads and `unreadable-loaded`
+  when a loaded thread's metadata cannot be read or lacks sessionId. The transport may reuse only this push's
+  fresh engine verdict for less than one second; binding, generation, host, duplicate holders and MCP link are
+  rechecked for every chunk. Bind-time cached evidence is never a push proof. Claude liveness verdicts apply
+  before the probe awaits Codex I/O. This gate does not enable automatic Codex slot recovery.
+  Pushes additionally require `bind_origin='hook-verified'`. All internal MCP hook tools advertise
+  `_meta.ui.visibility=['app']`; the server derives origin only from initialized host identity and request
+  metadata, never tool arguments. Model `callId`, missing metadata or sessionId/threadId disagreement refuses
+  binding. The broker independently validates the origin envelope against the connection's observed host.
+  Verified host versions are an explicit code allow-list (codex-mcp-client 0.162.1, source-audited; 0.163.0,
+  owner-approved without a separate source audit), extended only by owner
+  config `codex.trusted_host_versions` (default []). Structurally valid hooks from unsupported versions bind
+  unverified and retain digest/turn/inbox delivery, but never push; diagnostics name the unsupported host and
+  point to README. Legacy/pre-guard bindings migrate unverified and require plugin reload/session restart
+  for push. who/whoami/doctor expose bind_origin and host_client_name/version. This is a pinned host contract,
+  not cryptographic origin proof; real hook metadata remains unverified until throwaway-session acceptance.
+  A future use of concrete hook metadata for recovery is explicitly deferred. V4 includes nullable
+  deliveries.forward_to (destination session ID) for durable in-flight rename ownership.
+  `unverified-bind` is the push-hold reason for legacy/pre-guard/unsupported-host bindings. who/whoami/doctor show
+  "reload the Wigwag plugin / restart this Codex session to enable push; inbox delivery works". Reload the plugin or
+  restart the session; unsupported hosts additionally require verification under the documented host allow-list.
+  `unverified-root` is a flagged recovery refusal when a trusted concrete-ID provider exists but thread/read does
+  not verify a root; there is no adoption. The operator should inspect wigwag recovery and native thread metadata,
+  retaining inbox delivery. This path does not enable shipped Codex recovery: its production provider still returns
+  null, with capability reason codex-thread-id-untrusted.
+  `whoami.capabilities` reports recovery unavailable with that reason. `wigwag recovery` reports duplicate slot
+  names, name sources, times, state/link, active assignment IDs/roles, held/pending counts and total undelivered counts.
+  `owner.retire_slot` refuses an active assignment or any of the four undelivered mail states unless `force:true`
+  (`wigwag recovery retire <id> --force`). Related flags resolve on retirement or adoption; resolving a display flag
+  does not erase its history or revive an empty shell. Moving work or rebinding an assignment between distinct
+  native IDs remains manual in 0.3.0, including after an in-process Claude conversation switch.
+- **Parent liveness (W8, 0.3.0).** `sessions.link` (`connected | disconnected`) is separate from `parent_state`
+  (`live | gone | unknown`). A Claude hook bind records the agent pid and its start identity (Linux: boot id, start
+  ticks, uid; macOS: UTC `ps lstart` to the second, uid). On MCP disconnect and at broker start the parent is verified:
+  Claude by pid plus start identity, Codex by `thread/loaded/list` on the metadata-only app-server connection. A live
+  parent keeps the session `online-*` with `link: disconnected`, its name claim and its assignments; pushes for both agents are
+  held as `disconnected` and delivered at the next hook boundary or MCP re-attach. Codex queue pushes additionally
+  require fresh loaded-root trust; active throttles keep their throttled hold reason ahead of disconnected holds.
+  An immediate probe and an extra check about 2 s after disconnect catch exits promptly; a 10 s probe loop
+  continues checking and marks the session offline once the parent is gone. Each Codex pass shares one bounded
+  metadata snapshot across slots (at most 256 thread reads, batches of eight), with a per-pass deadline and a final
+  loaded-set recheck. New unread threads fail closed until the next pass. Claude probes run independently on every
+  kick; a slow Codex pass cannot delay them. Shutdown cancels snapshot deadlines and ignores late results.
+  No recorded evidence at
+  disconnect (Claude without identity, Codex without app-server) keeps the 0.2 behavior; an unverifiable parent (probe
+  error, legacy row at broker start) goes offline after 3 consecutive unknown probes and 60 s. A new MCP process under
+  the same verified Claude parent re-attaches to a disconnected slot. Replacing an older connected MCP additionally
+  requires its own recorded process identity to be verified gone; a live or unverifiable older MCP keeps its slot.
+- **Known 0.3.0 limitation; 0.4.0 follow-up.** A historical/unverified Codex slot can block a new verified MCP from
+  rebinding its still-loaded native ID. `wigwag recovery --json` inspects the slot, mail counts and assignment.
+  Its held mail and active assignment remain on that old slot; no existing command safely releases or rehomes
+  that work. `wigwag recovery retire <id>` accepts only an offline slot and refuses retained work without `--force`;
+  forced retirement excludes the slot from recovery but does not deliver its mail or transfer/release its assignment.
+  Do not treat retirement as work recovery. Add an explicit owner-reviewed resolution operation in 0.4.0.
 - **Binding the MCP connection to the agent session:**
   - Codex: the plugin declares `SessionStart` / `Stop` / `Interrupt` hooks of `type: "mcp_tool"` calling the
     plugin's own server (`session_bind`, `turn_ended`) with `${session_id}` — same pattern the bundled `browser`
@@ -545,7 +764,16 @@ recovery may read its own assigned thread history internally (transport limit
 
 On reconnect, async history is replayed before buffered live events and answer
 submission; interrupted turns and existing human replies cancel stale answers.
-An acknowledgement timeout after async submission is ambiguous, so Wigwag marks
-it failed and does not blindly retry. Claude has a separate bounded wait deadline
+Before either Codex reply kind performs native I/O, a single SQL update atomically claims the answered relay with
+`submission_state='unknown'`. The dedicated column is part of unshipped V4; pre-V4 answered Codex relays migrate
+conservatively to unknown, while applied relays become confirmed. MCP reattach and broker restart never repeat an
+unknown submission. The original acknowledgement or matching native history may mark it confirmed/applied;
+missing evidence or a rejected async acknowledgement keeps it answered/unknown with a visible reason in
+question.list, question.details and whoami's question wait status. Late responses cannot revive cancelled relays,
+and stopped adapters never access the closed DB. The owner-only owner.resolve_question RPC and
+`wigwag questions resolve <relay-id> --cancel|--delivered` explicitly resolve an unknown answered relay after
+inspection: cancel excludes it from retries while retaining the unknown native outcome, delivered records an owner
+confirmation. Neither action submits input; model clients cannot call this RPC. A second resolution refuses.
+ Claude has a separate bounded wait deadline
 (default 300 seconds). Timeout/failure returns a visible pending/error result and
 keeps the durable question available for explicit status inspection.

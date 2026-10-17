@@ -23,6 +23,90 @@ const msg: MessageRow = {
 };
 
 describe('tui components', () => {
+  it('shows a legacy client reload warning in the session row', () => {
+    const f =
+      render(
+        <SessionsPane
+          sessions={[
+            {
+              id: 's',
+              name: 'old-worker',
+              agent: 'claude',
+              state: 'online-idle',
+              cwd: '/',
+              workspace: '/',
+              workspace_label: '/',
+              bound: true,
+              unread: 0,
+              last_seen_at: '',
+              ...{ compatibility_warning: 'legacy client 0.2: reload plugin for new features' },
+            },
+          ]}
+          selected={0}
+          focused
+          width={120}
+        />,
+      ).lastFrame() ?? '';
+    expect(f).toContain('legacy client 0.2: reload plugin for new features');
+  });
+  it('shows why a Codex queue push is held', () => {
+    const text = 'Codex push held: thread identity unverified (descendant-loaded)';
+    const f =
+      render(
+        <SessionsPane
+          sessions={[
+            {
+              id: 's',
+              name: 'worker',
+              agent: 'codex',
+              state: 'online-idle',
+              cwd: '/',
+              workspace: '/',
+              workspace_label: '/',
+              bound: true,
+              unread: 0,
+              last_seen_at: '',
+              codex_push: text,
+            },
+          ]}
+          selected={0}
+          focused
+          width={120}
+        />,
+      ).lastFrame() ?? '';
+    expect(f).toContain(text);
+  });
+  it('sessions pane says when the parent is open but the MCP is disconnected (W8)', () => {
+    const base = {
+      agent: 'claude' as const,
+      state: 'online-idle' as const,
+      cwd: '/',
+      workspace: '/',
+      workspace_label: '/',
+      bound: true,
+      unread: 0,
+      last_seen_at: '',
+    };
+    const f =
+      render(
+        <SessionsPane
+          sessions={[
+            { ...base, id: 'ses-1', name: 'open-one', liveness: 'parent open, MCP disconnected' },
+            {
+              ...base,
+              id: 'ses-2',
+              name: 'unsure-one',
+              liveness: 'parent unverified, MCP disconnected; goes offline after a grace period',
+            },
+          ]}
+          selected={0}
+          focused
+          width={120}
+        />,
+      ).lastFrame() ?? '';
+    expect(f).toContain('parent open, MCP disconnected');
+    expect(f).toContain('parent unverified');
+  });
   it('sessions pane shows name, state and unread for empty / one / many', () => {
     expect(render(<SessionsPane sessions={[]} selected={0} focused />).lastFrame()).toMatch(/no sessions yet/);
     const many = ['alpha-one', 'beta-one', 'gamma-one'].map((name, i) => ({
@@ -108,6 +192,7 @@ describe('tui components', () => {
             {
               message_id: 'msg-9',
               recipient: 'codex-merger',
+              forward_to: null,
               state: 'stuck',
               hold_reason: null,
               attempts: 8,

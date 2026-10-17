@@ -1,6 +1,6 @@
 # Wigwag privacy notice
 
-Updated October 13, 2026. This notice describes the self-hosted Wigwag CLI and local Claude Code/Codex plugins.
+Updated October 16, 2026. This notice describes the self-hosted Wigwag CLI and local Claude Code/Codex plugins.
 It does not describe a hosted service, and it does not replace your inference provider's privacy policy or your
 organization's obligations. Read it before installing or sharing content through the plugin.
 
@@ -19,7 +19,7 @@ organization-managed installation, contact the organization operating that host.
 
 | Data | Purpose |
 |---|---|
-| Session names and IDs, agent type, working directory and repository paths, process identifiers, state, and timestamps | Bind tools and hooks to the correct session, show availability, and determine workspace scope |
+| Session names and native titles/IDs, transcript reference paths, agent type, working directory and repository paths, process identifiers/start identities, state, and timestamps | Bind tools and hooks to the correct session, show availability, and determine workspace scope |
 | Message subjects and bodies, sender and recipient metadata, requests and responses, attachment references, and delivery history | Route messages, retry delivery, provide inboxes and the owner feed, and match responses |
 | Submitted files or text blobs, hashes, names, media types, and creation metadata | Store and retrieve attachments |
 | Shared key/value data and history, stream schemas and records | Coordinate explicitly shared state and notifications |
@@ -28,6 +28,20 @@ organization-managed installation, contact the organization operating that host.
 
 Paths and message contents can identify people or contain confidential information. Wigwag has no provider-login
 flow and does not read provider credential stores or forward agent conversation transcripts. Native Codex question recovery can read the assigned thread history locally to match questions and existing answers; that history is not relayed to other agents.
+Native naming reads local Claude title sidecars and bounded transcript tails, or Codex thread metadata and bounded
+session-index tails. It stores the display title and transcript reference path; it does not relay conversation
+transcripts for naming. Resume lineage records keep native IDs, slot IDs, provenance, recovery outcomes, explicit
+name choices and claim refusal reasons. Claude conversation-switch records also retain source/target slot IDs,
+workspace and the MCP process's verified pid/start identity when available, to ignore stale reconnect hints without
+redirecting them. Owner recovery reports include names, name sources, timestamps, connection
+state, assignment IDs/roles and undelivered-mail counts. Codex automatic slot recovery is disabled because the hook's
+shared tree-root ID does not establish a concrete conversation identity.
+Codex bind diagnostics also retain the MCP host client name/version and whether
+the bind supplied verified hook-origin metadata. These are local metadata, not
+provider credentials or cryptographic attestations. Legacy/pre-guard bindings
+keep messaging while queue pushes wait for a verified reload.
+In-flight rename forwarding stores a destination session ID with the exact
+delivery rows, so reusing the source name does not expose that deferred mail.
 Tools process the snippets, data, and file paths supplied to them; a blob upload reads the specified file.
 
 Do not send passwords, API keys, authentication tokens, protected health information, or payment-card data through
@@ -45,6 +59,27 @@ other sidecar files can contain that content too. Blob files and logs are also
 unencrypted. The home directory and socket use OS permissions; those permissions
 restrict access but do not encrypt stored data. Processes running as the same OS
 user, host administrators, and backups with sufficient access can read it.
+Before each schema v3/v4 upgrade, an existing database is copied to
+`state.db.pre-v3.bak` or `state.db.pre-v4.bak` with mode 0600. This backup contains the same clear-text data
+and remains after a successful upgrade or when the migration outcome cannot be
+confirmed. A confirmed rollback removes only the backup created by that attempt.
+A pre-existing backup is never overwritten or removed by migration and blocks
+an upgrade until the operator inspects and moves or removes it. Include retained
+migration backups in your storage and deletion procedures.
+If a crash leaves a backup before its migration commits, the next required
+migration/start refuses that pre-existing file until the operator inspects and
+moves or removes it. A retained snapshot of a completed migration does not block
+normal startup. Never use a 0.2 CLI or broker on an upgraded v3/v4 database:
+those binaries do not check for a newer schema. A downgrade needs a separate
+compatible database and separate reconciliation of later messages or assignments.
+
+Running 0.2 MCP sessions keep messaging in degraded mode after a broker upgrade.
+After plugin reload, a stamped Claude MCP and trusted hook may reclaim the unique
+eligible legacy slot for the same native conversation/workspace, keeping its
+name, held mail, assignments and pending/answered relays. The compatibility and
+handoff evidence remains in local lineage history; ambiguous slots keep their
+work for operator inspection rather than silently merging it.
+
 Host-level disk or backup encryption is a separate operator control and does not
 protect against a process already running with your OS-user access.
 
@@ -70,14 +105,17 @@ maintainer has no access to your local installation to sell, inspect, or delete 
 Wigwag currently has no automatic retention period or per-message erasure feature. Messages, stream records, and
 key/value history are append-only and remain until the operator removes the installation's stored data. Expiring a
 request, acknowledging a message, deleting a current key/value entry, or unlinking workspaces does not erase history.
-Unlinking restricts subsequent scoped access; it cannot recall copies already received.
+Unlinking restricts subsequent scoped access; it cannot recall copies already received. Retiring a slot or resolving
+a recovery flag affects eligibility and active diagnostics; neither action erases stored messages, assignments or
+lineage history. Forced retirement can exclude slots that still hold work.
 
 `wigwag uninstall` removes plugin registrations and retains the home directory. To remove local stored data:
 
 1. Close all connected Claude Code and Codex sessions so they cannot restart the broker.
 2. Run `wigwag broker stop`.
 3. Identify the home directory using the precedence above, then manually delete that directory. This permanently
-   removes its configuration, database and SQLite sidecar files, history, logs, and blobs. Reinitialize before reuse.
+   removes its configuration, database, SQLite sidecar files and any `state.db.pre-v3.bak` / `state.db.pre-v4.bak` backups, history, logs,
+   and blobs. Reinitialize before reuse.
 4. Separately address exports, destination files written by `blob_get`, backups, and provider-held copies. Deleting
    the Wigwag home directory does not delete those copies or agent conversation history.
 
@@ -87,3 +125,21 @@ You control plugin installation, the sessions you launch, messages and attachmen
 subscriptions, and mutes. Normal muted traffic waits; urgent traffic bypasses a mute. A mute is not revocation of
 workspace data access. Unsubscribe or unlink when appropriate, and uninstall the plugin to stop future registration.
 Choose your providers' data settings separately; Wigwag does not change them.
+
+## Isolated upgrade rehearsal
+
+A rehearsal home is a separate private copy, including retained messages, assignments, relays, blobs and migration
+backups. Rehearsal disables native integration reads, pushes and answer submissions, refuses native clients, and
+skips update network/cache work. Owner inspection and migrations still read/write the copy. The external-native-path
+override never enables native I/O. A mode-0600 `rehearsal.json` marker records the first rehearsal start; the updated
+normal CLI/broker refuse that home until the owner explicitly clears it with `wigwag rehearsal clear` while stopped.
+Storage containment includes blob shards, archive databases and sidecars, migration backups, logs, sockets, locks,
+config and temporary files. Dynamic blob paths and explicit export destinations are checked again before I/O;
+exports outside the copy are refused even with the external-native-path override. Inline inspection remains available.
+Clearing the marker does not erase retained data or change config; a subsequent normal start may contact integrations
+and apply retained answers. Old binaries do not honor this marker. Rehearsal never makes or removes a live-data copy.
+
+Native Codex question relays retain a local submission state before sending an answer. Unknown outcomes are not
+automatically repeated after reload or restart. The original acknowledgement, matching native history or an explicit
+owner confirmation resolves them; cancellation prevents retry and keeps the unknown outcome in history.
+`wigwag questions resolve` changes only local relay status and never sends another answer.

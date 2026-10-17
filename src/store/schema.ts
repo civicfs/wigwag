@@ -210,3 +210,130 @@ CREATE TABLE question_relays (
   UNIQUE(assignment_id, native_session_id, tool_use_id)
 );
 `;
+
+/**
+ * 0.3.0 W2/W7. name_source: where the current name came from (a custom name wins over native adoption). native_ref:
+ * the Claude transcript path the trusted hook reported. conn_generation: bumped whenever a connection takes the slot,
+ * so a stale connection's disconnect cannot mark it offline. retired_*: a slot handed over to its canonical slot
+ * (retired_into) or retired by the owner (retired_into NULL). Existing named rows that do not have the provisional
+ * shape <agent>-<slug>-<4 base32> are treated as custom.
+ * W8: link (MCP connection up or down, meaningful while state <> 'offline'), parent_state (the agent process or
+ * thread), agent_pid/agent_start (the Claude parent's process identity, src/proc/identity.ts), parent_checked_at.
+ * Existing rows get link 'connected' and parent_state 'unknown'; the broker-start verification (Task 10) resolves them.
+ * deliveries is rebuilt (SQLite cannot alter a CHECK) so hold_reason accepts 'disconnected'; rows are copied as is.
+ */
+export const SCHEMA_V3 = `
+ALTER TABLE sessions ADD COLUMN name_source TEXT NOT NULL DEFAULT 'provisional'
+  CHECK (name_source IN ('provisional', 'native', 'custom'));
+ALTER TABLE sessions ADD COLUMN native_name TEXT;
+ALTER TABLE sessions ADD COLUMN native_ref TEXT;
+ALTER TABLE sessions ADD COLUMN conn_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN retired_at TEXT;
+ALTER TABLE sessions ADD COLUMN retired_into TEXT REFERENCES sessions (id);
+ALTER TABLE sessions ADD COLUMN link TEXT NOT NULL DEFAULT 'connected' CHECK (link IN ('connected', 'disconnected'));
+ALTER TABLE sessions ADD COLUMN parent_state TEXT NOT NULL DEFAULT 'unknown'
+  CHECK (parent_state IN ('live', 'gone', 'unknown'));
+ALTER TABLE sessions ADD COLUMN agent_pid INTEGER;
+ALTER TABLE sessions ADD COLUMN agent_start TEXT;
+ALTER TABLE sessions ADD COLUMN parent_checked_at TEXT;
+
+CREATE TABLE deliveries_v3 (
+  message_id TEXT NOT NULL REFERENCES messages (id),
+  recipient TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'held', 'pushed', 'failed', 'stuck', 'read')),
+  hold_reason TEXT CHECK (hold_reason IN ('offline', 'unbound', 'low', 'muted', 'throttled', 'disconnected')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  transport TEXT,
+  next_attempt_at TEXT,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (message_id, recipient)
+);
+INSERT INTO deliveries_v3 (message_id, recipient, state, hold_reason, attempts, last_error, transport, next_attempt_at,
+  updated_at)
+  SELECT message_id, recipient, state, hold_reason, attempts, last_error, transport, next_attempt_at, updated_at
+  FROM deliveries;
+DROP TABLE deliveries;
+ALTER TABLE deliveries_v3 RENAME TO deliveries;
+CREATE INDEX deliveries_recipient_state ON deliveries (recipient, state);
+CREATE INDEX deliveries_state ON deliveries (state);
+UPDATE sessions SET name_source = 'custom'
+  WHERE name IS NOT NULL AND NOT (
+    (name GLOB 'claude-?*-????' OR name GLOB 'codex-?*-????')
+    AND substr(name, -5, 1) = '-'
+    AND substr(name, -4) GLOB '[a-z2-7][a-z2-7][a-z2-7][a-z2-7]'
+  );
+CREATE INDEX sessions_agent_native ON sessions (agent, agent_session_id);
+
+CREATE TABLE session_lineage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT NOT NULL CHECK (agent IN ('claude', 'codex')),
+  native_id TEXT NOT NULL,
+  previous_native_id TEXT,
+  workspace TEXT NOT NULL,
+  session_id TEXT NOT NULL REFERENCES sessions (id),
+  canonical_session_id TEXT REFERENCES sessions (id),
+  cause TEXT NOT NULL CHECK (cause IN ('resume', 'fork', 'switch', 'continuation')),
+  outcome TEXT NOT NULL CHECK (outcome IN ('adopted', 'flagged', 'observed')),
+  reason TEXT,
+  evidence_json TEXT NOT NULL,
+  generation INTEGER,
+  handoff_state TEXT CHECK (handoff_state IN ('pending', 'consumed', 'expired')),
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
+CREATE INDEX session_lineage_native ON session_lineage (agent, native_id);
+
+CREATE TABLE session_renames (
+  session_id TEXT NOT NULL REFERENCES sessions (id),
+  from_name TEXT,
+  to_name TEXT NOT NULL,
+  cause TEXT NOT NULL CHECK (cause IN ('register', 'native', 'launch', 'recovery')),
+  name_source TEXT NOT NULL CHECK (name_source IN ('provisional', 'native', 'custom')),
+  mail_moved INTEGER NOT NULL,
+  subscriptions_moved INTEGER NOT NULL,
+  mutes_moved INTEGER NOT NULL,
+  at TEXT NOT NULL
+);
+${appendOnly('session_renames')}
+`;
+
+/** Metadata-derived Codex push evidence is refreshed at bind/probe and immediately before queueing. */
+export const SCHEMA_V4 = `
+ALTER TABLE question_relays ADD COLUMN submission_state TEXT NOT NULL DEFAULT 'unsent'
+  CHECK (submission_state IN ('unsent', 'unknown', 'confirmed'));
+UPDATE question_relays SET submission_state='confirmed' WHERE state='applied' AND kind IN ('codex', 'codex_async');
+-- Pre-guard answers may already have reached Codex; never automatically repeat them after upgrade.
+UPDATE question_relays SET submission_state='unknown',
+  error=COALESCE(error, 'Native submission outcome unknown after upgrade; inspect native thread and resolve with wigwag questions resolve.')
+  WHERE state='answered' AND kind IN ('codex', 'codex_async');
+ALTER TABLE sessions ADD COLUMN codex_push_reason TEXT DEFAULT 'unverified-bind'
+  CHECK (codex_push_reason IN ('shared-root', 'root-not-loaded', 'descendant-loaded', 'app-server-unavailable',
+    'unverified-bind', 'too-many-loaded', 'unreadable-loaded'));
+ALTER TABLE sessions ADD COLUMN bind_origin TEXT NOT NULL DEFAULT 'unverified'
+  CHECK (bind_origin IN ('unverified', 'hook-verified'));
+ALTER TABLE sessions ADD COLUMN host_client_name TEXT;
+ALTER TABLE sessions ADD COLUMN host_client_version TEXT;
+CREATE TABLE deliveries_v4 (
+  message_id TEXT NOT NULL REFERENCES messages (id),
+  recipient TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'held', 'pushed', 'failed', 'stuck', 'read')),
+  hold_reason TEXT CHECK (hold_reason IN ('offline', 'unbound', 'low', 'muted', 'throttled', 'disconnected', 'codex-untrusted')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  transport TEXT,
+  next_attempt_at TEXT,
+  updated_at TEXT NOT NULL,
+  forward_to TEXT REFERENCES sessions (id),
+  PRIMARY KEY (message_id, recipient)
+);
+INSERT INTO deliveries_v4 (message_id, recipient, state, hold_reason, attempts, last_error, transport, next_attempt_at,
+  updated_at)
+  SELECT message_id, recipient, state, hold_reason, attempts, last_error, transport, next_attempt_at, updated_at
+  FROM deliveries;
+DROP TABLE deliveries;
+ALTER TABLE deliveries_v4 RENAME TO deliveries;
+CREATE INDEX deliveries_recipient_state ON deliveries (recipient, state);
+CREATE INDEX deliveries_state ON deliveries (state);
+CREATE INDEX deliveries_forward_to ON deliveries (forward_to) WHERE forward_to IS NOT NULL;
+`;

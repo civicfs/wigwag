@@ -13,6 +13,21 @@ export interface CommandHelp {
 /** The single source for `--help`, `help`, and every usage error. */
 export const COMMANDS: CommandHelp[] = [
   {
+    name: 'questions',
+    summary: 'inspect relays or resolve an unknown native submission',
+    usage: ['wigwag questions [--json]', 'wigwag questions resolve <relay-id> --cancel|--delivered'],
+    flags: [
+      ['--cancel', 'cancel without retry; native delivery may already have happened'],
+      ['--delivered', 'mark delivered only after inspecting the native thread'],
+    ],
+  },
+  {
+    name: 'rehearsal',
+    summary: 'explicitly remove a stopped copied home’s rehearsal marker',
+    usage: ['wigwag rehearsal clear'],
+    flags: [],
+  },
+  {
     name: 'update',
     summary: 'check for updates, or explicitly apply one',
     usage: ['wigwag update [--check | --apply] [--json]'],
@@ -172,6 +187,16 @@ export const COMMANDS: CommandHelp[] = [
     summary: 'list links',
     usage: ['wigwag links'],
     flags: [],
+  },
+  {
+    name: 'recovery',
+    summary: 'show resume-recovery flags and duplicate session slots',
+    usage: ['wigwag recovery [--json]', 'wigwag recovery retire <session-id> [--force]'],
+    flags: [
+      ['--json', 'print the raw report'],
+      ['retire <session-id>', 'exclude an offline slot from automatic resume recovery'],
+      ['--force', 'retire despite active assignments or undelivered mail'],
+    ],
   },
   {
     name: 'tui',

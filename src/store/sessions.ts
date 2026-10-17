@@ -6,6 +6,19 @@ import { scopeOf } from './links.js';
 
 export type Agent = 'claude' | 'codex';
 export type SessionState = 'online-busy' | 'online-idle' | 'offline';
+export type CodexPushReason =
+  | 'shared-root'
+  | 'root-not-loaded'
+  | 'descendant-loaded'
+  | 'app-server-unavailable'
+  | 'unverified-bind'
+  | 'too-many-loaded'
+  | 'unreadable-loaded';
+export type NameSource = 'provisional' | 'native' | 'custom';
+/** W8: the MCP link; meaningful only while state <> 'offline'. */
+export type Link = 'connected' | 'disconnected';
+/** W8: the agent process (Claude) or loaded thread (Codex) behind the session. */
+export type ParentState = 'live' | 'gone' | 'unknown';
 
 export interface SessionRow {
   id: string;
@@ -23,6 +36,27 @@ export interface SessionRow {
   launch_json: string | null;
   created_at: string;
   last_seen_at: string;
+  /** Where `name` came from: a custom name (register, WIGWAG_NAME, launch intent) is never replaced by a native one. */
+  name_source: NameSource;
+  /** The agent's own display name as last read (raw, trimmed, at most 200 characters). */
+  native_name: string | null;
+  /** Claude: the transcript path the trusted hook reported (title sidecar and transcript fallback live next to it). */
+  native_ref: string | null;
+  conn_generation: number;
+  retired_at: string | null;
+  /** The canonical slot this one was handed over to by a resume recovery. */
+  retired_into: string | null;
+  link: Link;
+  parent_state: ParentState;
+  /** Claude: the agent process the hook ran under (agentAncestor); Codex: null (the shared daemon is not one thread). */
+  agent_pid: number | null;
+  /** Process start identity of agent_pid at bind (src/proc/identity.ts); null when it could not be captured. */
+  agent_start: string | null;
+  parent_checked_at: string | null;
+  codex_push_reason: CodexPushReason | null;
+  bind_origin: 'unverified' | 'hook-verified';
+  host_client_name: string | null;
+  host_client_version: string | null;
 }
 
 type Raw = Omit<SessionRow, 'pid_chain'> & { pid_chain: string };
@@ -97,7 +131,13 @@ export const assignedNames = (db: Db): string[] =>
  */
 export type ClaimResult = { ok: true } | { ok: false; holder: SessionRow; reason: 'live' | 'scope' };
 
-export function claimName(db: Db, sessionId: string, name: string): ClaimResult {
+export function claimName(
+  db: Db,
+  sessionId: string,
+  name: string,
+  source?: NameSource,
+  beforeCommit?: (from: string | null) => void,
+): ClaimResult {
   return tx(db, (): ClaimResult => {
     const live = liveHolder(db, name);
     if (live && live.id !== sessionId) return { ok: false, holder: live, reason: 'live' };
@@ -113,18 +153,78 @@ export function claimName(db: Db, sessionId: string, name: string): ClaimResult 
       sessionId,
     );
     db.prepare('UPDATE sessions SET name = NULL WHERE name = ? AND id <> ?').run(name, sessionId);
-    db.prepare('UPDATE sessions SET name = ?, last_seen_at = ? WHERE id = ?').run(name, at, sessionId);
+    db.prepare(
+      'UPDATE sessions SET name = ?, name_source = COALESCE(?, name_source), last_seen_at = ? WHERE id = ?',
+    ).run(name, source ?? null, at, sessionId);
     db.prepare('INSERT INTO name_claims (name, session_id, claimed_at, released_at) VALUES (?, ?, ?, NULL)').run(
       name,
       sessionId,
       at,
     );
+    beforeCommit?.(claimant?.name ?? null);
     return { ok: true as const };
   });
 }
 
 export function setState(db: Db, id: string, state: SessionState): void {
   db.prepare('UPDATE sessions SET state = ?, last_seen_at = ? WHERE id = ?').run(state, nowIso(), id);
+}
+
+export function setNameSource(db: Db, id: string, source: NameSource): void {
+  db.prepare('UPDATE sessions SET name_source = ? WHERE id = ?').run(source, id);
+}
+
+export function setNativeName(db: Db, id: string, nativeName: string | null): void {
+  db.prepare('UPDATE sessions SET native_name = ? WHERE id = ?').run(nativeName, id);
+}
+
+export function setNativeRef(db: Db, id: string, ref: string | null): void {
+  db.prepare('UPDATE sessions SET native_ref = ? WHERE id = ?').run(ref, id);
+}
+
+/** A connection takes the slot: returns the new generation, which that connection keeps for its disconnect. */
+export function attachConnection(db: Db, id: string): number {
+  const r = db
+    .prepare(
+      "UPDATE sessions SET conn_generation = conn_generation + 1, link = 'connected' WHERE id = ? RETURNING conn_generation",
+    )
+    .get(id) as { conn_generation: number } | undefined;
+  if (!r) throw new Error(`no session ${id}`);
+  return r.conn_generation;
+}
+
+/** Marks the slot offline only if `generation` is still its current one (W7: a handed-over slot ignores stale closes). */
+export function markOfflineIfCurrent(db: Db, id: string, generation: number): boolean {
+  return (
+    Number(
+      db
+        .prepare(`UPDATE sessions SET state = 'offline', last_seen_at = ? WHERE id = ? AND conn_generation = ?`)
+        .run(nowIso(), id, generation).changes,
+    ) === 1
+  );
+}
+
+/** W8: the MCP link of the current generation dropped but the parent is (or may be) alive: keep state and name. */
+export function markDisconnectedIfCurrent(db: Db, id: string, generation: number, parent: ParentState): boolean {
+  const at = nowIso();
+  return (
+    Number(
+      db
+        .prepare(
+          `UPDATE sessions SET link = 'disconnected', parent_state = ?, parent_checked_at = ?, last_seen_at = ?
+           WHERE id = ? AND conn_generation = ? AND state <> 'offline'`,
+        )
+        .run(parent, at, at, id, generation).changes,
+    ) === 1
+  );
+}
+
+export function setParentState(db: Db, id: string, state: ParentState): void {
+  db.prepare('UPDATE sessions SET parent_state = ?, parent_checked_at = ? WHERE id = ?').run(state, nowIso(), id);
+}
+
+export function setAgentIdentity(db: Db, id: string, pid: number | null, start: string | null): void {
+  db.prepare('UPDATE sessions SET agent_pid = ?, agent_start = ? WHERE id = ?').run(pid, start, id);
 }
 
 export function bindAgentSession(db: Db, id: string, agentSessionId: string): void {
@@ -194,4 +294,15 @@ export function provisionalName(agent: Agent, cwd: string, rand4: string): strin
     .replace(/^-+|-+$/g, '')
     .slice(0, 40 - agent.length);
   return [agent, slug || 'session', rand4].join('-');
+}
+
+/** Owner resolution (W7): an offline slot is excluded from automatic resume recovery and duplicate diagnostics. */
+export function retireSlot(db: Db, id: string): boolean {
+  return (
+    Number(
+      db
+        .prepare(`UPDATE sessions SET retired_at = ? WHERE id = ? AND state = 'offline' AND retired_at IS NULL`)
+        .run(nowIso(), id).changes,
+    ) === 1
+  );
 }

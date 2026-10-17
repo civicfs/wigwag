@@ -1,16 +1,28 @@
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { type ChildProcess, execFileSync, type SpawnOptions, spawn, spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { vi } from 'vitest';
-import { startBroker } from '../src/broker/assemble.js';
+import { startBroker as assembleBroker } from '../src/broker/assemble.js';
 import type { Broker } from '../src/broker/server.js';
 import { sockPath } from '../src/client/autospawn.js';
 import { Client } from '../src/client/client.js';
 import { configPath, initHome, loadConfig } from '../src/config.js';
+import { CodexNames, codexIndexPath } from '../src/native/codex-names.js';
+import { noProcesses } from '../src/proc/identity.js';
 import { frameLimit } from '../src/protocol/frame.js';
-import type { Hello, PushData } from '../src/protocol/rpc.js';
+import type { Hello, MethodName, PushData } from '../src/protocol/rpc.js';
+import { listSessions } from '../src/store/sessions.js';
+import { tsChildArgs } from './fixtures/ts-child-loader.mjs';
+
+export { tsChildArgs };
+
+/** Spawn a fixture that installs ts-child-loader before importing source modules; Node 24/26 compatible. */
+export function spawnTsChild(entry: string, args: string[] = [], options: SpawnOptions = {}): ChildProcess {
+  return spawn(process.execPath, tsChildArgs(entry, args), options);
+}
 
 export const FAKE_CODEX = resolve(import.meta.dirname, 'fixtures/fake-codex.mjs');
 export const STARTED_PRELOAD = resolve(import.meta.dirname, 'fixtures/started.mjs');
@@ -27,13 +39,59 @@ export function tmpHome(): string {
   // against them.
   cfg.broker.start_timeout_ms = 30000;
   cfg.hooks.deadline_ms = 30000;
-  cfg.questions.app_server_socket = join(home, 'codex-app-server.sock');
+  cfg.questions.app_server_socket = join(home, 'app-server-control', 'fixture.sock');
   writeFileSync(configPath(home), JSON.stringify(cfg, null, 2));
   return home;
 }
 
+/** All test broker starts validate native paths and default to a fake process table, including restarts. */
+export async function startBroker(
+  home: string,
+  opts: NonNullable<Parameters<typeof assembleBroker>[1]> = {},
+): Promise<Broker> {
+  const socket = loadConfig(home).questions.app_server_socket;
+  for (const path of [socket, codexIndexPath(socket)]) {
+    const rel = relative(resolve(home), path);
+    if (isAbsolute(rel) || rel === '..' || rel.startsWith('../'))
+      throw new Error('test broker native path is outside its fixture home');
+  }
+  return assembleBroker(home, { processProbe: noProcesses, ...opts });
+}
+
 export async function startTestBroker(home = tmpHome()): Promise<{ home: string; broker: Broker }> {
-  return { home, broker: await startBroker(home) };
+  // W8: a probe that knows no process, so no session records a parent and a closed MCP client goes offline at once,
+  // as before. Liveness tests pass their own probe to startBroker.
+  let broker: Broker | undefined;
+  const names = fixtureCodexNames(home, () =>
+    broker
+      ? listSessions(broker.db).flatMap((s) =>
+          s.agent === 'codex' && s.state !== 'offline' && s.link === 'connected' && s.agent_session_id
+            ? [s.agent_session_id]
+            : [],
+        )
+      : [],
+  );
+  broker = await startBroker(home, { processProbe: noProcesses, codexNames: names });
+  return { home, broker };
+}
+
+/** Transport tests explicitly model independent loaded roots. Push-identity tests inject their own sharing/outage evidence. */
+export function fixtureCodexNames(home: string, ids: () => string[]): CodexNames {
+  class Metadata extends EventEmitter {
+    async connect() {}
+    async call(method: string, p: { threadId?: string }) {
+      return method === 'thread/loaded/list'
+        ? { data: [...new Set(ids())] }
+        : {
+            thread: { id: p.threadId, sessionId: p.threadId, source: 'cli', parentThreadId: null, name: null },
+          };
+    }
+    send() {}
+    close() {
+      this.emit('disconnected');
+    }
+  }
+  return new CodexNames({ factory: () => new Metadata(), indexPath: join(home, 'missing-index') });
 }
 
 export async function ownerClient(home: string): Promise<Client> {
@@ -96,7 +154,9 @@ export async function killSpawnedBrokers(home: string, timeoutMs: number): Promi
     { timeout: timeoutMs },
   );
 }
-export async function mcpClient(home: string, extra: Partial<Hello> = {}) {
+/** Codex RPC fixtures model native hook envelopes by default; pass hookCalls=false to test missing/forged origin. */
+export async function mcpClient(home: string, extra: Partial<Hello> = {}, hookCalls = true) {
+  const legacy = Object.hasOwn(extra, 'version') && extra.version === undefined;
   const hello: Hello = {
     protocol: 1,
     role: 'mcp',
@@ -106,6 +166,7 @@ export async function mcpClient(home: string, extra: Partial<Hello> = {}) {
     mcp_ppid: 2,
     ...extra,
   };
+  if (hello.agent === 'codex' && !legacy) hello.host_client ??= { name: 'codex-mcp-client', version: '0.162.1' };
   const pushes: PushData[] = [];
   const { client, welcome } = await Client.connect(
     sockPath(home),
@@ -115,6 +176,21 @@ export async function mcpClient(home: string, extra: Partial<Hello> = {}) {
       if (name === 'push') pushes.push(data as PushData);
     },
   );
+  if (hello.agent === 'codex' && !legacy && hookCalls) {
+    const call = client.call.bind(client);
+    let native: string | null = null;
+    client.call = async <T = unknown>(method: MethodName, params: unknown = {}): Promise<T> => {
+      let input = params;
+      if (['session.bind', 'session.turn', 'session.digest'].includes(method) && params && typeof params === 'object') {
+        const p = params as Record<string, unknown>;
+        const id = method === 'session.bind' ? p.agent_session_id : native;
+        if (!Object.hasOwn(p, 'hook_origin')) input = { ...p, hook_origin: { ...hello.host_client, thread_id: id } };
+      }
+      const result = await call<T>(method, input);
+      if (method === 'session.bind') native = (params as { agent_session_id: string }).agent_session_id;
+      return result;
+    };
+  }
   return { client, welcome: welcome as { session_id: string; name: string }, pushes };
 }
 

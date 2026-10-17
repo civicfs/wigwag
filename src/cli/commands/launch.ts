@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { loadConfig, resolveHome } from '../../config.js';
 import { NAME_RE, RESERVED_NAMES } from '../../ids.js';
+import { assertNativeAllowed } from '../../rehearsal.js';
 import { notifyUpdate } from '../../update/update.js';
 import { ownerConnect, UsageError } from '../util.js';
 
@@ -64,6 +65,7 @@ function needsCodexPrompt(args: string[]): boolean {
 
 /** Runs the agent in THIS terminal (not session spawning, spec §16). Adds the channel flag for Claude. */
 export async function cmdLaunch(agent: 'claude' | 'codex', args: string[]): Promise<void> {
+  assertNativeAllowed(resolveHome(), `launching ${agent}`);
   let name: string | undefined;
   const rest: string[] = [];
   for (let i = 0; i < args.length; i++) {

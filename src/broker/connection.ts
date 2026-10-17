@@ -1,4 +1,5 @@
 import type { Socket } from 'node:net';
+import type { ProcessIdentity } from '../proc/identity.js';
 import { encode } from '../protocol/frame.js';
 import type { Hello, WireError } from '../protocol/rpc.js';
 
@@ -9,6 +10,12 @@ export class Connection {
   /** Set only once the hello handshake has fully succeeded; `role` (and so all access) derives from it. */
   hello: Hello | null = null;
   sessionId: string | null = null;
+  /** W7: the slot's conn_generation when this connection took it; a stale connection's close leaves the slot alone. */
+  generation = 0;
+  /** Captured at hello; an older connected MCP may be replaced only after this process is gone. */
+  mcpIdentity: ProcessIdentity | null = null;
+  /** An unstamped client retains 0.2 messaging but cannot provide new identity/recovery evidence. */
+  legacy = false;
   /**
    * E-3: whether this MCP client can take channel pushes (hello.channel); undefined for a peer that did not say. Set during
    * hello, before the session is announced: `hello` itself is published only after the welcome is written.
@@ -47,7 +54,7 @@ export class Connection {
     this.write({ id, error });
   }
 
-  event(name: 'push' | 'feed', data: unknown): boolean {
+  event(name: 'push' | 'feed' | 'session.identity', data: unknown): boolean {
     return this.write({ event: name, data });
   }
 

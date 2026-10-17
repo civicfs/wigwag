@@ -3,13 +3,21 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { type Db, openDb } from '../../src/store/db.js';
 import {
   assignedNames,
+  attachConnection,
   bindAgentSession,
   claimName,
   createSession,
   findByAgentSessionId,
   getSession,
   markAllOffline,
+  markDisconnectedIfCurrent,
+  markOfflineIfCurrent,
   provisionalName,
+  setAgentIdentity,
+  setNameSource,
+  setNativeName,
+  setNativeRef,
+  setParentState,
   setState,
 } from '../../src/store/sessions.js';
 import { tmpHome } from '../helpers.js';
@@ -74,4 +82,55 @@ describe('provisionalName', () => {
       }
     },
   );
+});
+
+describe('v3 session fields', () => {
+  it('claimName writes the name source when given and keeps it otherwise', () => {
+    const a = mk();
+    claimName(db, a.id, 'claude-x-abcd', 'provisional');
+    expect(getSession(db, a.id)?.name_source).toBe('provisional');
+    claimName(db, a.id, 'role-name', 'custom');
+    expect(getSession(db, a.id)?.name_source).toBe('custom');
+    claimName(db, a.id, 'other-name');
+    expect(getSession(db, a.id)?.name_source).toBe('custom');
+  });
+  it('stores the native name, native ref and name source', () => {
+    const a = mk();
+    setNativeName(db, a.id, 'Node refactor');
+    setNativeRef(db, a.id, '/p/sid.jsonl');
+    setNameSource(db, a.id, 'native');
+    expect(getSession(db, a.id)).toMatchObject({
+      native_name: 'Node refactor',
+      native_ref: '/p/sid.jsonl',
+      name_source: 'native',
+    });
+  });
+  it('connection generations: attach increments; only the current generation marks offline', () => {
+    const a = mk();
+    const g1 = attachConnection(db, a.id);
+    const g2 = attachConnection(db, a.id);
+    expect(g2).toBe(g1 + 1);
+    expect(markOfflineIfCurrent(db, a.id, g1)).toBe(false);
+    expect(getSession(db, a.id)?.state).toBe('online-idle');
+    expect(markOfflineIfCurrent(db, a.id, g2)).toBe(true);
+    expect(getSession(db, a.id)?.state).toBe('offline');
+  });
+  it('W8 link, parent state and agent identity', () => {
+    const a = mk();
+    const g = attachConnection(db, a.id);
+    setAgentIdentity(db, a.id, 4242, 'darwin:Thu Oct 15 08:47:53 2026:501');
+    setParentState(db, a.id, 'live');
+    expect(getSession(db, a.id)).toMatchObject({
+      link: 'connected',
+      agent_pid: 4242,
+      agent_start: 'darwin:Thu Oct 15 08:47:53 2026:501',
+      parent_state: 'live',
+    });
+    expect(getSession(db, a.id)?.parent_checked_at).not.toBeNull();
+    expect(markDisconnectedIfCurrent(db, a.id, g - 1, 'live')).toBe(false);
+    expect(markDisconnectedIfCurrent(db, a.id, g, 'unknown')).toBe(true);
+    expect(getSession(db, a.id)).toMatchObject({ state: 'online-idle', link: 'disconnected', parent_state: 'unknown' });
+    attachConnection(db, a.id);
+    expect(getSession(db, a.id)?.link).toBe('connected');
+  });
 });

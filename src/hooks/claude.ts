@@ -1,10 +1,12 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { canConnect, sockPath } from '../client/autospawn.js';
 import { Client } from '../client/client.js';
 import { loadConfig, resolveHome } from '../config.js';
+import { WigwagError } from '../errors.js';
 import { agentAncestor, processChain } from '../proc/ancestors.js';
 import { frameLimit } from '../protocol/frame.js';
+import { assertRehearsalStoragePaths, writeStorageFile } from '../rehearsal.js';
 
 export type ClaudeHookEvent = 'SessionStart' | 'UserPromptSubmit' | 'PostToolUse' | 'Stop';
 const CONTEXT_EVENTS = new Set<ClaudeHookEvent>(['SessionStart', 'UserPromptSubmit', 'PostToolUse']);
@@ -32,11 +34,16 @@ function readStdin(maxBytes: number): Promise<string> {
 }
 
 function logError(home: string, event: string, e: unknown): void {
+  if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew')
+    process.stderr.write(`wigwag: ${e.message}\n`);
   try {
-    mkdirSync(join(home, 'logs'), { recursive: true, mode: 0o700 });
-    appendFileSync(
-      join(home, 'logs', 'hooks.log'),
+    const [logs, file] = assertRehearsalStoragePaths(home, [join(home, 'logs'), join(home, 'logs', 'hooks.log')]);
+    mkdirSync(logs, { recursive: true, mode: 0o700 });
+    writeStorageFile(
+      home,
+      file,
       `${new Date().toISOString()} claude ${event}: ${e instanceof Error ? e.message : String(e)}\n`,
+      'a',
     );
   } catch {
     // never fail the agent session
@@ -62,7 +69,13 @@ export async function runClaudeHook(event: ClaudeHookEvent): Promise<void> {
     const work = (async () => {
       const raw = await readStdin(config.hooks.max_stdin_bytes);
       if (raw.trim() === '') throw new Error('empty hook input');
-      const input = JSON.parse(raw) as { session_id?: string; cwd?: string };
+      const input = JSON.parse(raw) as {
+        session_id?: string;
+        cwd?: string;
+        session_title?: unknown;
+        transcript_path?: unknown;
+        source?: unknown;
+      };
       if (!input.session_id) throw new Error('hook input has no session_id');
       if (!(await canConnect(sockPath(home), ac.signal))) return;
       const connected = await Client.connect(
@@ -83,6 +96,15 @@ export async function runClaudeHook(event: ClaudeHookEvent): Promise<void> {
         // Spec §4: the hook's own agent is its nearest ancestor that is not a shell or launcher; an outer claude
         // further up (a nested `claude -p` run from a session's shell tool) is never this hook's session.
         agent_pid: agentAncestor(chain),
+        ...(typeof input.session_title === 'string' && input.session_title.trim()
+          ? { session_title: input.session_title.trim().slice(0, 200) }
+          : {}),
+        ...(typeof input.transcript_path === 'string' &&
+        input.transcript_path.startsWith('/') &&
+        input.transcript_path.length <= 4096
+          ? { transcript_path: input.transcript_path }
+          : {}),
+        ...(typeof input.source === 'string' ? { source: input.source.slice(0, 32) } : {}),
       });
       if (r.additional_context && CONTEXT_EVENTS.has(event)) {
         process.stdout.write(

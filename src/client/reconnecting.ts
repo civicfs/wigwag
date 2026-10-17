@@ -3,7 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { Config } from '../config.js';
 import { WigwagError } from '../errors.js';
 import { frameLimit } from '../protocol/frame.js';
-import type { Hello, MethodName } from '../protocol/rpc.js';
+import { type Hello, type MethodName, SessionIdentityZ } from '../protocol/rpc.js';
 import { ensureBroker, sockPath } from './autospawn.js';
 import { Client } from './client.js';
 
@@ -23,6 +23,7 @@ export class ReconnectingClient extends EventEmitter {
   private readonly abort = new AbortController();
   /** Why the last connection attempt failed; cleared on success. Reported to calls that time out waiting. */
   private lastError: string | null = null;
+  private versionError: WigwagError | null = null;
 
   constructor(private readonly o: { home: string; config: Config; entry: string | null; hello: () => Hello }) {
     super();
@@ -51,15 +52,25 @@ export class ReconnectingClient extends EventEmitter {
       const budget = this.o.config.broker.start_timeout_ms;
       const helloTimeout = AbortSignal.timeout(budget);
       try {
-        return this.install(
-          await Client.connect(
-            sockPath(this.o.home),
-            hello,
-            frameLimit(this.o.config),
-            (name, data) => this.emit('event', name, data),
-            AbortSignal.any([signal, helloTimeout]),
-          ),
+        // A welcome and a later slot handoff can arrive in one read, before connect() resolves. Keep the
+        // newest identity for this attempt so the caller cannot overwrite it with the older welcome.
+        let latestIdentity: string | null = null;
+        const connected = await Client.connect(
+          sockPath(this.o.home),
+          hello,
+          frameLimit(this.o.config),
+          (name, data) => {
+            if (name === 'session.identity') {
+              const parsed = SessionIdentityZ.safeParse(data);
+              if (parsed.success) latestIdentity = parsed.data.session_id;
+            }
+            this.emit('event', name, data);
+          },
+          AbortSignal.any([signal, helloTimeout]),
         );
+        if (latestIdentity && connected.welcome && typeof connected.welcome === 'object')
+          connected.welcome = { ...connected.welcome, session_id: latestIdentity };
+        return this.install(connected);
       } catch (e) {
         if (helloTimeout.aborted && !this.stopped) {
           throw new WigwagError('transport', `broker did not answer hello within ${budget} ms`);
@@ -67,7 +78,17 @@ export class ReconnectingClient extends EventEmitter {
         throw e;
       }
     } catch (e) {
-      if (!this.stopped) this.lastError = e instanceof Error ? e.message : String(e);
+      if (!this.stopped) {
+        this.lastError = e instanceof Error ? e.message : String(e);
+        if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew') {
+          this.versionError = e;
+          for (const w of this.waiters) {
+            clearTimeout(w.timer);
+            w.reject(e);
+          }
+          this.waiters.clear();
+        }
+      }
       throw e;
     }
   }
@@ -79,6 +100,7 @@ export class ReconnectingClient extends EventEmitter {
     }
     this.client = client;
     this.lastError = null;
+    this.versionError = null;
     client.on('close', () => {
       if (this.client !== client) return;
       this.client = null;
@@ -113,6 +135,7 @@ export class ReconnectingClient extends EventEmitter {
 
   async call<T = unknown>(method: MethodName, params: unknown = {}): Promise<T> {
     if (this.stopped) throw stoppedError();
+    if (!this.client && this.versionError) throw this.versionError;
     const client = this.client ?? (await this.waitConnected());
     return client.call<T>(method, params);
   }

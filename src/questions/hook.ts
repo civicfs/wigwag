@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { sockPath } from '../client/autospawn.js';
 import { Client } from '../client/client.js';
 import { loadConfig, resolveHome } from '../config.js';
+import { WigwagError } from '../errors.js';
 import { agentAncestor, processChain } from '../proc/ancestors.js';
 import { frameLimit } from '../protocol/frame.js';
 import { claudeAnswer, normalizeNative, peerNote } from './native.js';
@@ -177,7 +178,9 @@ export async function runQuestionHook(agent: 'claude' | 'codex', event: 'Questio
       );
     else if (event === 'QuestionReady' || isQuestion)
       process.stderr.write(
-        'wigwag: native question integration is not ready; inspect broker status and plugin trust.\n',
+        e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew'
+          ? `wigwag: ${e.message}\n`
+          : 'wigwag: native question integration is not ready; inspect broker status and plugin trust.\n',
       );
   } finally {
     clearTimeout(timer);

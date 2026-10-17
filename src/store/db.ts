@@ -1,5 +1,8 @@
+import { chmodSync, linkSync, lstatSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { SCHEMA_V1, SCHEMA_V2 } from './schema.js';
+import { WigwagError } from '../errors.js';
+import { SCHEMA_VERSION } from '../version.js';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4 } from './schema.js';
 
 export type Db = DatabaseSync;
 
@@ -57,6 +60,38 @@ function retryBusy<T>(db: Db, fn: () => T): T {
 const schemaVersion = (db: Db): number =>
   (db.prepare('SELECT max(version) AS v FROM schema_version').get() as { v: number | null }).v ?? 0;
 
+export { SCHEMA_VERSION } from '../version.js';
+/** Clear-text snapshots taken before the corresponding migration, kept after success. */
+export const preV4BackupPath = (file: string): string => `${file}.pre-v4.bak`;
+export const preV3BackupPath = (file: string): string => `${file}.pre-v3.bak`;
+
+const removeQuietly = (path: string): void => {
+  try {
+    rmSync(path, { force: true });
+  } catch {
+    // e.g. a directory in the way; the caller already reports the failure
+  }
+};
+
+/**
+ * A consistent snapshot (VACUUM INTO reads committed WAL content, no checkpoint needed) at a per-process temporary
+ * path, mode 0600. VACUUM cannot run inside a transaction, so the snapshot precedes the write lock; openDb publishes it
+ * under the lock only if the migration is still needed.
+ */
+function snapshotBeforeMigration(db: Db, file: string, version: number): string {
+  const tmp = `${file}.pre-v${version}.${process.pid}.tmp`;
+  try {
+    db.prepare('VACUUM INTO ?').run(tmp);
+    chmodSync(tmp, 0o600);
+    return tmp;
+  } catch (e) {
+    removeQuietly(tmp);
+    throw new Error(
+      `wigwag: could not back up ${file} before the schema v${version} migration (${(e as Error).message}); not migrating. Free space or fix permissions in that directory, then start wigwag again.`,
+    );
+  }
+}
+
 export function openDb(file: string): Db {
   const db = new DatabaseSync(file);
   // Set first: several processes may open a fresh file at once (concurrent autospawn).
@@ -64,6 +99,15 @@ export function openDb(file: string): Db {
   retryBusy(db, () => db.exec('PRAGMA journal_mode = WAL;'));
   db.exec('PRAGMA foreign_keys = ON; PRAGMA recursive_triggers = ON;');
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
+  // A database that already held data (v1/v2) is backed up before v3; a fresh file has nothing to lose.
+  const initialVersion = schemaVersion(db);
+  if (initialVersion > SCHEMA_VERSION) {
+    db.close();
+    throw new WigwagError(
+      'schema',
+      `client is older than the broker database (schema ${initialVersion}, supported ${SCHEMA_VERSION}): update/reload the plugin and update the CLI before starting the broker`,
+    );
+  }
   if (schemaVersion(db) < 1) {
     tx(db, () => {
       // Re-read under the write lock: another process may have migrated since the check above.
@@ -78,6 +122,52 @@ export function openDb(file: string): Db {
       db.exec(SCHEMA_V2);
       db.prepare('INSERT INTO schema_version (version) VALUES (2)').run();
     });
+  }
+  for (const [version, schema] of [
+    [3, SCHEMA_V3],
+    [4, SCHEMA_V4],
+  ] as const) {
+    if (schemaVersion(db) >= version) continue;
+    const snapshot = initialVersion >= 1 ? snapshotBeforeMigration(db, file, version) : null;
+    let createdBackup = false;
+    try {
+      tx(db, () => {
+        // Re-read under the write lock: another process may have migrated (and backed up) meanwhile.
+        if (schemaVersion(db) >= version) return;
+        if (snapshot) {
+          const bak = `${file}.pre-v${version}.bak`;
+          try {
+            linkSync(snapshot, bak); // never overwrites: an existing backup refuses the migration
+            createdBackup = true;
+          } catch (e) {
+            throw new Error(
+              (e as NodeJS.ErrnoException).code === 'EEXIST'
+                ? `wigwag: ${bak} already exists (left by an earlier migration attempt); not migrating. Check it, move or delete it, then start wigwag again.`
+                : `wigwag: could not back up ${file} before the schema v${version} migration (${(e as Error).message}); not migrating.`,
+            );
+          }
+        }
+        db.exec(schema);
+        db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(version);
+      });
+    } catch (e) {
+      // Remove only our redundant snapshot after a confirmed rollback. Unknown/committed outcomes keep it.
+      if (createdBackup && snapshot) {
+        try {
+          if (!db.isTransaction && schemaVersion(db) < version) {
+            const bak = `${file}.pre-v${version}.bak`;
+            const own = lstatSync(snapshot);
+            const published = lstatSync(bak);
+            if (own.dev === published.dev && own.ino === published.ino) removeQuietly(bak);
+          }
+        } catch {
+          // If the version or file ownership cannot be confirmed, preserve the backup for inspection.
+        }
+      }
+      throw e;
+    } finally {
+      if (snapshot) removeQuietly(snapshot);
+    }
   }
   return db;
 }

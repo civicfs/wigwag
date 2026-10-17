@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readFileSync, realpathSync, writeFileSync } from
 import { join } from 'node:path';
 import { whichBin } from '../cli/commands/init.js';
 import { loadConfig, resolveHome } from '../config.js';
+import { assertNativeAllowed, assertRehearsalAccess, homeRehearsalMode } from '../rehearsal.js';
 import { VERSION } from '../version.js';
 
 const PACKAGE = '@civicfs/wigwag';
@@ -48,6 +49,7 @@ const newer = (a: string, b: string) => {
   return false;
 };
 export async function checkUpdate(readLatest: () => Promise<string> = latest): Promise<UpdateStatus> {
+  assertNativeAllowed(resolveHome(), 'update checks');
   const available = await readLatest();
   if (!/^\d+\.\d+\.\d+$/.test(available)) throw new Error('Invalid release version');
   return { current: VERSION, source: 'npm', available, update_available: newer(available, VERSION) };
@@ -66,6 +68,7 @@ export async function applyUpdate(
   hasCli: (name: string) => boolean = (name) => whichBin(name) !== null,
   codexBinary = configuredCodex(),
 ): Promise<void> {
+  assertNativeAllowed(resolveHome(), 'updates');
   if (!status.update_available || !status.available) return;
   if (existsSync(join(root, '.git')))
     throw new Error(
@@ -109,6 +112,13 @@ export function describeUpdate(s: UpdateStatus): string {
 /** Best-effort human notice, at most daily; never called by MCP or native hooks. */
 export async function notifyUpdate(home: string, readLatest?: () => Promise<string>): Promise<void> {
   if (!existsSync(home)) return;
+  const mode = homeRehearsalMode(home);
+  if (mode.enabled) return;
+  try {
+    assertRehearsalAccess(home, mode);
+  } catch {
+    return;
+  }
   const path = join(home, 'update-check.json');
   try {
     const cache = JSON.parse(readFileSync(path, 'utf8')) as {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Broker } from '../../src/broker/server.js';
 import type { Capture } from '../../src/questions/schema.js';
 import type { Assignment } from '../../src/questions/service.js';
+import { bindAgentSession } from '../../src/store/sessions.js';
 import { addThrottle } from '../../src/store/subs.js';
 import { mcpClient, ownerClient, startTestBroker, until } from '../helpers.js';
 
@@ -15,11 +16,16 @@ afterEach(async () => {
   for (const c of clients.splice(0)) c.close();
   await broker.stop();
 });
-async function join(name: string, cwd = '/w/myproject', agent: 'claude' | 'codex' = 'claude') {
+async function join(
+  name: string,
+  cwd = '/w/myproject',
+  agent: 'claude' | 'codex' = 'claude',
+  native = `native-${name}`,
+) {
   const c = await mcpClient(home, { requested_name: name, cwd, agent });
   clients.push(c.client);
-  await c.client.call('session.bind', { agent_session_id: `native-${name}` });
-  broker.questions.markReady(c.welcome.session_id, `native-${name}`);
+  await c.client.call('session.bind', { agent_session_id: native });
+  broker.questions.markReady(c.welcome.session_id, native);
   return c;
 }
 const task = (to = 'worker-one', key = 'task-1') => ({
@@ -83,7 +89,7 @@ describe('native question orchestration', () => {
       kind: 'claude',
       questions: qs,
     });
-    const replacement = await join('lead-one');
+    const replacement = await join('lead-one', '/w/myproject', 'claude', 'native-replacement-lead');
     await broker.engine?.dispatchMessage(q.message_id);
     expect(replacement.pushes.some((p) => p.content.includes(q.id))).toBe(false);
     const inbox = JSON.stringify(await replacement.client.call('msg.inbox', { include_read: true }));
@@ -300,7 +306,8 @@ describe('native question orchestration', () => {
       kind: 'claude',
       questions: qs,
     });
-    await w.client.call('session.bind', { agent_session_id: 'replacement-native-id' });
+    // Fault injection: raw Claude rebinding is now refused; still exercise defensive stale-row checks.
+    bindAgentSession(broker.db, w.welcome.session_id, 'replacement-native-id');
     await expect(
       lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['Blue'] } }),
     ).rejects.toMatchObject({ code: 'conflict' });

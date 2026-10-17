@@ -36,12 +36,31 @@ Sessions in a Git repository and its worktrees share a workspace automatically.
 Other workspaces need an owner-created link. Wigwag runs on one host; it does not
 currently spawn replacement agents or transfer tasks after a worker fails.
 
+## Parent liveness limits in 0.3.0
+
+An idle Codex assignment no longer pins its thread. The question relay attaches at
+turn start and before queue pushes to an assigned worker, stays through queue
+execution and outstanding questions, then unsubscribes after a short
+grace (`questions.codex_idle_grace_ms`, optional, default 2000 ms). It never resumes
+an unloaded or unknown thread merely to maintain an assignment. Active native
+turns, pending questions and the daemon's unload delay still prevent instant
+TUI-close detection. Codex pushes require both a connected MCP link and fresh
+loaded-root evidence; disconnected or unloaded sessions hold mail for reattachment,
+a hook boundary or inbox. A TUI may close before those native signals change.
+An assigned push waits if relay attachment or the following fresh trust check
+fails; inbox delivery still works. A queued turn starting after idle grace uses
+its trusted prompt hook to reattach before model work. Captured questions remain
+visible through `questions` if the native subscription is unavailable.
+On macOS, parent identity uses `ps lstart` in UTC plus uid, with one-second
+resolution; PID reuse within the same second by the same uid cannot be distinguished.
+
 ## Install
 
-Version **0.2.0** is the first public source release. GitHub releases and npm
+The current source release is **0.3.0**. GitHub releases and npm
 packages are published separately; check the [npm package page](https://www.npmjs.com/package/@civicfs/wigwag)
-for registry availability. Live native-question tests used macOS, Claude Code
-**2.1.296**, and Codex **0.162.1**. Automated CI passes on macOS and Linux; real
+for registry availability. Live native-question tests (0.2.0) used macOS, Claude Code
+**2.1.296**, and Codex **0.162.1**; 0.3.0's new behaviour is covered by automated tests
+with fake native hosts and has not had a separate live acceptance pass. Automated CI passes on macOS and Linux; real
 provider integration on Linux has not been tested end to end. See the
 [verification report](docs/native-question-relay-2026-10-13.md).
 
@@ -104,7 +123,210 @@ still required.
 
 Names use lowercase letters, digits, and hyphens, start with a letter, and contain
 2–48 characters. `owner`, `all`, and `wigwag` are reserved. Without `--as`, Wigwag
-assigns a provisional name; an agent can change it with `register`.
+assigns a provisional name and then adopts the session's native name (Claude
+`/rename` or Codex thread name), sanitized and suffixed on collision. A name set
+with `register` stays until `register` with `native=true`.
+
+Resuming Claude through its hooks reclaims exactly one eligible offline or
+MCP-disconnected slot for that native ID and workspace. Empty provisional slots
+and empty refused-resume shells do not make recovery ambiguous. An explicit
+launch or register name on the new slot is kept when it can be claimed; otherwise
+the canonical name stays and lineage records the reason. Native and provisional
+names do not replace the canonical name.
+
+An in-process Claude `/resume` leaves the previous conversation's slot offline
+with its name, mail, assignments and question relays intact. The MCP connection
+moves to a fresh provisional slot and may reclaim the resumed conversation's
+unique canonical slot. Ambiguous or live-held destinations leave it unbound.
+The MCP remembers the new slot ID. After a crash, a stale hint from the same
+verified MCP process is ignored until a trusted hook binds the conversation;
+switch records never redirect a connection to another slot. If the earlier split
+could not record a complete verified MCP identity, its old hint is ignored for
+every reconnecting MCP, even if identity capture later succeeds.
+If its MCP link is disconnected, a hook reporting a different conversation is
+refused until the MCP reconnects. The old conversation keeps its mailbox; the
+next trusted hook performs the split after reconnect.
+
+A raw Claude `session.bind` cannot change an existing native ID or claim another
+canonical slot. Trusted hooks provide that identity. In the same workspace, a
+trusted hook can detach a holder positively recorded as a raw or legacy binding:
+the holder's connection gets a fresh unbound slot, and its own name, mail,
+assignments and relays remain on its old offline slot. None of that work transfers
+to the trusted caller. Missing historical origin evidence is protected instead;
+doctor reports `binding-origin-unknown`. Run a trusted hook in the original
+Claude session, or inspect `wigwag recovery --json` before retiring an offline
+duplicate. A missing stamp alone never authorizes displacement.
+
+Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
+a shared tree-root ID. `whoami` reports `unavailable` with reason
+`codex-thread-id-untrusted`. A future trusted concrete thread ID must also pass
+root verification. Codex queue pushes require a connected MCP link and a loaded root with no other
+loaded thread sharing its root ID. Metadata is rechecked before each push;
+the transport reuses that same push's verdict for less than one second while
+rechecking current binding, generation, host, duplicate holders and MCP link.
+More than 256 loaded threads hold with `too-many-loaded`; an unreadable loaded
+thread holds with `unreadable-loaded`, distinct from an unavailable listing.
+unavailable or ambiguous evidence
+holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
+(<reason>)`. This push check does not enable automatic slot recovery.
+
+A restarted Codex MCP can reattach without its remembered Wigwag slot ID only when
+both bindings have verified host-origin identity for the same concrete root thread,
+both host versions are currently trusted, exactly one matching slot is disconnected,
+and fresh metadata confirms the root is still loaded. Its name, mail and assignment
+stay with that slot. Pending native questions require fresh request replay before
+any answer is submitted; unavailable evidence keeps the relay visible and waiting.
+Connected, retired, switched-away or ambiguous slots refuse.
+Historical unverified slots remain protected; inspect `wigwag recovery --json`.
+Their held mail and active assignment remain on the old slot. No existing command
+safely rehomes that work; explicit owner resolution is a 0.4.0 follow-up.
+
+Codex pushes also require a verified hook-origin bind. Internal hook tools are
+hidden from the model; host-generated `threadId` must match the hook's session ID,
+and calls with model `callId` metadata or argument-supplied origin are refused.
+The built-in verified hosts are `codex-mcp-client` 0.162.1 (source-audited) and
+0.163.0 (owner-approved; not separately source-audited). An unknown host version with
+valid hook metadata keeps inbox and hook delivery, but pushes are held:
+`Codex host <name> <version> not in the verified list: pushes held, inbox delivery works; see README`.
+After checking a newer Codex host, the owner may add its version to
+`codex.trusted_host_versions` in config (empty by default), restart the broker and
+reload the plugin to bind again. `whoami`, `who` and doctor expose `bind_origin`,
+`host_client_name` and `host_client_version`.
+
+Legacy and pre-guard Codex bindings deliberately lose push until reloaded:
+`reload the Wigwag plugin / restart this Codex session to enable push`.
+Reload cannot automatically reclaim an unverified historical slot holding work;
+the diagnostic above applies when that slot blocks binding.
+Messaging remains available. This guard relies on the host's metadata contract,
+not cryptographic attestation. Hook-origin `threadId` behavior is **unverified in
+a live throwaway Codex session** until acceptance testing confirms it. Using it
+to enable automatic Codex recovery is a possible follow-up, not implemented.
+
+`wigwag recovery` shows duplicate slots with names, name sources, last-seen times,
+state/link, assignment IDs and roles, and held/pending and total undelivered mail
+counts. Retiring an offline slot with an active assignment or undelivered mail
+requires `--force`; resolved flags disappear from the report while historical
+records remain. A resolved empty refused shell remains excluded from candidates.
+
+Mail already in flight during a rename keeps its owning session ID in the
+database. Reclaiming the old name cannot read that mail; it follows the owner's
+current name when the push settles or the broker next starts, including after
+resume adoption. The original message address remains in history.
+
+A plugin reload, MCP crash or broker restart keeps a session's name while its
+parent remains open. `who` shows "parent open, MCP disconnected"; Claude messages
+wait for the next prompt or tool call. Codex pushes also wait for the MCP link;
+reattachment releases the backlog only after fresh thread-identity verification.
+
+Hello checks protocol and schema before registering a session. Incompatible
+versions report `wigwag broker stop` then retry for an older broker, or
+update/reload advice for an older client. Package-version differences alone are
+accepted with a soft warning in whoami/ping/doctor: restart/reload when convenient.
+An unstamped 0.2 client using the same protocol keeps messaging in degraded mode;
+whoami, doctor and the TUI show `legacy client 0.2: reload plugin for new features`.
+Only a valid explicit remembered session ID preserves its name, mail and assignments
+on reconnect. Legacy slots have no parent identity or Codex push trust and cannot
+recover/adopt or take over another slot by parent identity. Their durable degraded
+marker clears on a valid stamped reconnect to that slot, or after plugin reload
+when a stamped Claude MCP and trusted hook reclaim the unique eligible legacy
+slot for the same native conversation and workspace. That handoff preserves its
+name, mail, assignments and pending/answered relays. An MCP still running 0.2
+stays degraded; ambiguous candidates are flagged and keep their work. A new
+client against an unstamped old broker still requires a restart.
+Stop/restart retain a read-only
+hello/ping fallback to verify the old broker PID; normal RPCs stay gated. `whoami` and `doctor` expose recent
+compatibility warnings. Doctor reads existing state without starting a broker or
+migrating the database; clean closed files use immutable URI reads. Where normal
+read-only SQLite access is required, doctor warns that SQLite may update `-shm`
+or create missing bookkeeping sidecars while
+database contents remain unchanged; it reports schema/backup modes, disconnected and unknown
+parents, missing Claude identities, recovery counts and Codex push holds. Lifecycle/QuestionReady hooks exit zero on skew. A
+supervised question PreToolUse hook retains its denial with the actionable error,
+so it cannot silently fall back to a direct human prompt.
+
+After upgrading `state.db` to schema v3/v4, **never run a 0.2 CLI or broker against
+that database**. The 0.2 binaries do not reject newer schemas; the new hello checks
+cannot protect an old program that opens the file directly. Keep the updated CLI
+and broker together. A downgrade requires a separately preserved compatible
+database and loses any later state unless separately reconciled.
+
+Successful migrations retain mode-0600 `state.db.pre-v3.bak` and
+`state.db.pre-v4.bak` snapshots. If a crash leaves a snapshot before its migration
+commits, the next attempt refuses to overwrite it and does not start the broker.
+Use the updated doctor to check schema/backup permissions, inspect the backup
+separately, then have the operator move or remove the exact blocking backup
+before retrying. Migration
+never removes a pre-existing backup automatically. A retained backup from an
+already-completed migration does not block normal startup.
+
+### Upgrade rehearsal on an isolated copy
+
+Prepare a separate, private copy of the Wigwag home while its source is safely
+quiescent; this command does not copy live state. Use the updated CLI only:
+
+```sh
+export WIGWAG_HOME=/absolute/path/to/private-copy
+export WIGWAG_REHEARSAL=1
+# Prefer native socket, binary, CODEX_HOME and CLAUDE_CONFIG_DIR paths inside this copy.
+# If retaining external paths from the copied config, explicitly opt in:
+export WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS=1
+wigwag broker run
+# In another shell with the same environment:
+wigwag doctor
+wigwag recovery --json
+```
+
+Rehearsal accepts owner clients only. Owner CLI connections validate storage
+before probing, refuse every broker-socket symlink, and require that the same
+connection reports rehearsal mode with native I/O disabled before sending work
+or controlling a broker. A normal or unknown broker is refused, even at a custom home. It can migrate and inspect the copy, but
+creates no native app-server reader, question adapter, title watcher or process
+probe loop, sends no native pushes/answers, and skips update checks. Native
+MCP/hook clients and launch/install/update commands are refused. Retained mail,
+assignments and answered relays remain available for owner inspection. Doctor
+skips Claude/Codex executable probes. Config keys `rehearsal.enabled` and
+`rehearsal.allow_external_paths` provide the same controls; environment values
+of `1` force them on. External paths require the explicit override and a loud
+ping/doctor warning; native I/O stays disabled. Without the override, native
+socket/binary and effective Codex/Claude home paths must be absolute and resolve
+inside the copy. Storage paths must always stay inside it, including symlinks:
+blobs, archive databases and sidecars, migration backups, logs, sockets, locks,
+config and temporary files share one containment inventory. Blob paths and
+temporary leaves are checked again before I/O. Explicit blob exports also stay
+inside the copy; inline inspection remains available. The external-native-path
+override never permits storage or exports outside the copy.
+Rehearsal rejects `..` path components and uses the exact validated canonical
+path for I/O. Writes use exclusive/no-follow opens and check regular-file link
+counts before writing. Hard-linked storage and aliased SQLite sidecars are
+refused; make independent database/config copies. A rehearsal home must also
+be outside every known live home, including its subdirectories.
+
+Rehearsal compares native paths and filesystem device/inode identity against
+the account home (independent of `$HOME`), `$HOME`, configured XDG state home,
+and default `.local/state/wigwag` paths. Case and firmlink aliases are refused;
+missing leaves are conservatively compared through their nearest existing parent.
+Broker startup also refuses every existing `broker.sock` entry, including stale
+sockets and regular files. A prepared database/config copy contains no socket;
+remove a recorded entry deliberately only after confirming its broker is stopped.
+An arbitrary former XDG state path cannot be rediscovered after its variable is
+unset; the socket refusal and sticky marker are the remaining backstops.
+It writes `rehearsal.json` with mode 0600 under
+the broker lock before opening the database, even if migration later fails.
+The updated normal broker and CLI refuse a marked home. To deliberately release
+a stopped copy, use `WIGWAG_HOME=/absolute/path/to/private-copy wigwag rehearsal clear`.
+This removes only the marker; also disable the config mode/unset the environment
+switch before normal use. A later normal start may contact native integrations
+and apply retained answers. The marker cannot protect against old 0.2 binaries;
+never use those against the copy after migration.
+
+`unverified-bind` holds Codex push and shows "reload the Wigwag plugin / restart
+this Codex session to enable push; inbox delivery works". Reload legacy/pre-guard
+sessions; for an unsupported host version, also check the verified-version
+instructions above. `unverified-root` is a recovery refusal in lineage/recovery
+diagnostics: metadata did not prove a root, so no adoption occurs. Inspect
+`wigwag recovery` and native thread metadata while retaining inbox delivery.
+This latter path requires a trusted concrete-ID provider; shipped 0.3.0 keeps
+automatic Codex recovery unavailable (`codex-thread-id-untrusted`).
 
 ## Delegate work and answer questions
 
@@ -251,7 +473,7 @@ retain their existing response formats and are not covered by this page budget.
 
 | Tools | Purpose |
 |---|---|
-| `register`, `whoami`, `who` | Name, binding, roles, and sessions in scope; `who` pages 25 by default, up to 50, using `offset`; `include_offline` adds history |
+| `register`, `whoami`, `who` | Name (custom, or the native title with `register native=true`), binding, roles, capabilities, and sessions in scope; `who` pages 25 by default, up to 50, using `offset`; `include_offline` adds history |
 | `send`, `reply` | Send a body with optional subject and priority, or reply by message ID |
 | `inbox`, `read_message`, `ack` | Bounded inbox pages, full-message chunks, acknowledgements |
 | `mute`, `unmute` | Hold traffic from a sender or stream |
@@ -270,6 +492,8 @@ tool boundary.
 
 ```sh
 wigwag who
+wigwag recovery [--json]
+wigwag recovery retire <session-id> [--force]
 wigwag send test-worker --subject "Status check" --body "Report progress and blockers."
 wigwag tail -f --name test-worker
 wigwag deliveries --stuck
@@ -360,15 +584,24 @@ your existing values.
 | Claude does not receive pushes | Launch with `wigwag claude`; plain Claude holds messages for the next boundary |
 | Routine traffic is throttled | Wait for the cooldown or use `wigwag release-throttle <from> <to>` |
 | A native question remains pending | Inspect `questions` and `question_details`; the lead should yield its turn while waiting for workers |
+| A Codex answer has an unknown submission outcome | Inspect the native thread, then use `wigwag questions resolve <relay-id> --cancel` or `--delivered`; neither sends another answer |
 | New tools are missing after an upgrade | Reload Claude plugins or restart Codex and trust changed hooks |
 | Broker/delivery errors | Read `~/.wigwag/logs/broker.log` |
 | Claude hook errors | Read `~/.wigwag/logs/hooks.log` |
 
 Claude question timeouts leave a visible pending relay ID instead of opening a
-second human question. Ambiguous Codex async submissions fail visibly instead of
-automatically sending a potentially duplicate answer; inspect the native thread
-before retrying. Broker recovery rechecks identities, scope, cancellation, and
+second human question. Both Codex reply kinds claim a durable submission before
+native I/O. An unknown outcome stays held across MCP reloads and broker restarts,
+without automatic resubmission; `questions`, `question_details` and
+`wigwag questions --json` show its submission state and reason. After inspecting
+the native thread, the owner can run `wigwag questions resolve <relay-id> --cancel`
+or `--delivered`. Cancellation prevents retry and retains the unknown native
+outcome in history; confirmation records delivery. Neither command resends an answer. Broker recovery rechecks identities, scope, cancellation, and
 human answers before applying a saved relay answer.
+On upgrade to V4, already-answered Codex sync/async relays conservatively become
+`submission_state=unknown`: the old database cannot prove whether native input
+was sent. Already-applied relays become `confirmed`. Inspect each unknown outcome
+before using the resolution commands; upgrading never retries it automatically.
 
 ## Limitations
 
@@ -381,7 +614,8 @@ human answers before applying a saved relay answer.
   `--as` matching ambiguous. Use `register` if the provisional name remains.
   Launch from the intended directory; `codex -C <dir>` can miss the name handoff.
 - Closing a Codex TUI can leave its thread live for roughly a minute, or longer
-  during an active turn. Messages in that interval can reach the closed thread.
+  during an active turn or outstanding question. If its MCP link and loaded-root
+  evidence remain valid, messages can still reach that thread before native unload.
   A fresh launcher waits for the previous name holder; it never takes a live name.
 - Codex API failures can leave a session shown as busy until the daemon unloads
   it. The global plugin also registers Codex threads not launched by Wigwag.

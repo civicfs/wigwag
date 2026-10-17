@@ -1,9 +1,75 @@
 import { z } from 'zod';
-import type { ErrorCode } from '../errors.js';
+import { type ErrorCode, WigwagError } from '../errors.js';
 import { BLOB_REF_RE, NAME_RE } from '../ids.js';
 import { AnswersZ } from '../questions/schema.js';
+import { SCHEMA_VERSION, VERSION } from '../version.js';
+import { HookOriginZ, HostClientZ } from './codex-hook.js';
 
 export const PROTOCOL_VERSION = 1 as const;
+export const HANDSHAKE_VERSIONS = {
+  protocol: PROTOCOL_VERSION,
+  schema_version: SCHEMA_VERSION,
+  version: VERSION,
+} as const;
+export const BROKER_OLDER = 'broker is older than this client: restart it with `wigwag broker stop` then retry';
+export const CLIENT_OLDER =
+  'client is older than the broker: update/reload the plugin (and update the CLI), then retry';
+
+export const LEGACY_CLIENT_WARNING = 'legacy client 0.2: reload plugin for new features';
+
+/** Protocol/schema are compatibility gates; package releases only advise a convenient reload. */
+export function assertPeerVersions(
+  raw: unknown,
+  peer: 'broker' | 'client',
+): { legacy: boolean; warning: string | null } {
+  const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  for (const field of ['protocol', 'schema_version'] as const) {
+    const value = p[field];
+    if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0))
+      throw new WigwagError(
+        'schema',
+        `invalid ${field} from ${peer}: expected a nonnegative integer; ${peer === 'broker' ? 'update/restart the broker' : 'update/reload the plugin and CLI'}, then retry`,
+        {
+          kind: 'invalid-version',
+          peer,
+          expected: HANDSHAKE_VERSIONS,
+          received: { protocol: p.protocol, schema_version: p.schema_version, version: p.version },
+        },
+      );
+  }
+  const oldRole = p.role === 'mcp' || p.role === 'hook' || p.role === 'owner';
+  if (
+    peer === 'client' &&
+    p.protocol === PROTOCOL_VERSION &&
+    p.schema_version === undefined &&
+    p.version === undefined &&
+    oldRole
+  )
+    return { legacy: true, warning: LEGACY_CLIENT_WARNING };
+  const order = [
+    typeof p.protocol === 'number' ? p.protocol - PROTOCOL_VERSION : -1,
+    typeof p.schema_version === 'number' ? p.schema_version - SCHEMA_VERSION : -1,
+  ].find((n) => n !== 0);
+  if (order === undefined) {
+    if (peer === 'client' && p.version === undefined) return { legacy: true, warning: LEGACY_CLIENT_WARNING };
+    const client = peer === 'client' ? p.version : VERSION;
+    const broker = peer === 'broker' ? p.version : VERSION;
+    return {
+      legacy: false,
+      warning:
+        p.version === VERSION
+          ? null
+          : `client ${client ?? 'unknown'} differs from broker ${broker ?? 'unknown'}; restart/reload when convenient`,
+    };
+  }
+  const brokerOlder = peer === 'broker' ? order < 0 : order > 0;
+  throw new WigwagError('schema', brokerOlder ? BROKER_OLDER : CLIENT_OLDER, {
+    kind: 'version-skew',
+    peer,
+    expected: HANDSHAKE_VERSIONS,
+    received: { protocol: p.protocol, schema_version: p.schema_version, version: p.version },
+  });
+}
 
 export const PriorityZ = z.enum(['urgent', 'normal', 'low']);
 export const NameZ = z.string().regex(NAME_RE, 'name must match ^[a-z][a-z0-9-]{1,47}$');
@@ -23,6 +89,8 @@ export const KV_LIST_LIMIT_MAX = 1000;
 export const HelloZ = z
   .object({
     protocol: z.literal(PROTOCOL_VERSION),
+    schema_version: z.number().int().nonnegative().optional(),
+    version: z.string().min(1).max(100).optional(),
     role: z.enum(['mcp', 'hook', 'owner']),
     agent: z.enum(['claude', 'codex']).optional(),
     // final m-2: the workspace is computed from cwd; a relative one would resolve against the broker's own cwd
@@ -34,9 +102,20 @@ export const HelloZ = z
     // older or non-Claude peer, which the broker treats as capable.
     channel: z.boolean().optional(),
     resume_session_id: z.string().optional(),
+    host_client: HostClientZ.optional(),
   })
   .strict();
 export type Hello = z.infer<typeof HelloZ>;
+
+/** Broker-only event: the MCP process remembers its current slot without exposing it to the model. */
+export const SessionIdentityZ = z
+  .object({
+    session_id: z
+      .string()
+      .regex(/^ses-[a-z0-9-]+$/)
+      .max(100),
+  })
+  .strict();
 
 export type Access = 'any' | 'session' | 'hook' | 'owner' | 'session+owner';
 
@@ -52,13 +131,25 @@ const NativeHookZ = z.object({
 export const METHODS = {
   'sys.ping': m('any', z.object({})),
 
-  'session.register': m('session', z.object({ name: NameZ })),
+  'session.register': m(
+    'session',
+    z
+      .object({
+        name: NameZ.optional(),
+        native: z.literal(true).optional().describe('Follow the native session title again instead of a custom name.'),
+      })
+      .refine((p) => (p.name === undefined) !== (p.native === undefined), 'pass exactly one of name or native'),
+  ),
   'assignment.delegate': m(
     'session',
     z.object({ to: NameZ, subject: Subject, body: z.string(), idempotency_key: z.string().min(1).max(200) }).strict(),
   ),
   'assignment.release': m('session+owner', z.object({ assignment_id: z.string().min(1) })),
   'question.answer': m('session', z.object({ relay_id: z.string().min(1), answers: AnswersZ })),
+  'owner.resolve_question': m(
+    'owner',
+    z.object({ relay_id: z.string().min(1), outcome: z.enum(['cancel', 'delivered']) }).strict(),
+  ),
   'question.list': m(
     'session+owner',
     z.object({
@@ -99,10 +190,16 @@ export const METHODS = {
   ),
   'session.bind': m(
     'session',
-    z.object({ agent_session_id: z.string().min(1), question_relay_version: z.literal(1).optional() }),
+    z
+      .object({
+        agent_session_id: z.string().min(1),
+        question_relay_version: z.literal(1).optional(),
+        hook_origin: HookOriginZ.optional(),
+      })
+      .strict(),
   ),
-  'session.turn': m('session', z.object({ phase: z.enum(['started', 'ended']) })),
-  'session.digest': m('session', z.object({})),
+  'session.turn': m('session', z.object({ phase: z.enum(['started', 'ended']), hook_origin: HookOriginZ.optional() })),
+  'session.digest': m('session', z.object({ hook_origin: HookOriginZ.optional() })),
   // Iteration-2 provisions (spec §16 P3): reserved, no handler in v1.
   // E-1: `wigwag codex --as <name>` tells the broker which name the Codex session it is about to start should take.
   'launch.intend': m(
@@ -126,6 +223,10 @@ export const METHODS = {
       pid_chain: z.array(z.number().int()),
       // The hook's nearest `claude` ancestor (its own agent process), or null when it has none.
       agent_pid: z.number().int().nullable(),
+      // W2/W7 (S-B, S-E): Claude's optional custom title, transcript location and SessionStart source.
+      session_title: z.string().max(1000).optional(),
+      transcript_path: z.string().startsWith('/').max(4096).optional(),
+      source: z.string().max(32).optional(),
     }),
   ),
 
@@ -265,6 +366,9 @@ export const METHODS = {
   'owner.link': m('owner', z.object({ a: z.string().min(1), b: z.string().min(1) })),
   'owner.unlink': m('owner', z.object({ a: z.string().min(1), b: z.string().min(1) })),
   'owner.links': m('owner', z.object({})),
+  // W7: resume-recovery flags and duplicate slots; retiring excludes an offline slot from automatic recovery.
+  'owner.recovery': m('owner', z.object({ limit: z.number().int().positive().max(200).default(50) })),
+  'owner.retire_slot': m('owner', z.object({ session_id: z.string().min(1), force: z.boolean().default(false) })),
 } as const;
 
 export type MethodName = keyof typeof METHODS;

@@ -1,10 +1,13 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { Broker } from '../../src/broker/server.js';
+import { sockPath } from '../../src/client/autospawn.js';
 import { ReconnectingClient } from '../../src/client/reconnecting.js';
 import { configPath, loadConfig } from '../../src/config.js';
-import { tmpHome } from '../helpers.js';
+import { encode } from '../../src/protocol/frame.js';
+import { HANDSHAKE_VERSIONS } from '../../src/protocol/rpc.js';
+import { startBroker, tmpHome } from '../helpers.js';
 
 // Cleanup is registered as each resource is created, so a failing assertion leaks nothing.
 const cleanups: Array<() => unknown> = [];
@@ -28,6 +31,26 @@ const ownerRc = (home: string) =>
   );
 
 describe('ReconnectingClient', () => {
+  it('does not let a welcome overwrite an identity event in the same socket read', async () => {
+    const home = tmpHome();
+    const server = createServer((s) =>
+      s.once('data', () =>
+        s.write(
+          encode({ id: 1, result: { ...HANDSHAKE_VERSIONS, session_id: 'ses-old' } }) +
+            encode({ event: 'session.identity', data: { session_id: 'ses-current' } }),
+        ),
+      ),
+    );
+    await new Promise<void>((resolve) => server.listen(sockPath(home), resolve));
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    const rc = ownerRc(home);
+    const events: unknown[] = [];
+    rc.on('event', (name, data) => {
+      if (name === 'session.identity') events.push(data);
+    });
+    expect(await rc.start()).toMatchObject({ session_id: 'ses-current' });
+    expect(events).toEqual([{ session_id: 'ses-current' }]);
+  });
   it('reconnects after the broker restarts and calls work again', async () => {
     const home = tmpHome();
     const broker = track(await startBroker(home));

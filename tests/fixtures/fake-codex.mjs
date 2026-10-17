@@ -9,6 +9,7 @@ if (process.env.FAKE_CODEX_MODE === 'fail') {
   process.stderr.write('fake-codex: simulated failure\n');
   process.exit(3);
 }
+if (process.env.FAKE_CODEX_STARTED_LOG) appendFileSync(process.env.FAKE_CODEX_STARTED_LOG, 'started\n');
 if (process.env.FAKE_CODEX_SLEEP_MS) {
   await new Promise((r) => setTimeout(r, Number(process.env.FAKE_CODEX_SLEEP_MS)));
 }

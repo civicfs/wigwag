@@ -4,6 +4,7 @@ import type { OwnerDelivery } from '../../broker/handlers/owner.js';
 import type { PublicSession } from '../../broker/registry.js';
 import { FEED_LIMIT_MAX, type FeedData, KV_LIST_LIMIT_MAX, STREAM_READ_LIMIT_MAX } from '../../protocol/rpc.js';
 import type { MessageRow } from '../../store/messages.js';
+import type { DuplicateGroup } from '../../store/recovery.js';
 import { resolveWorkspace, workspaceLabel } from '../../workspace.js';
 import { usageError } from '../help.js';
 import { formatMessage, out, ownerConnect, parseCli, parseCount, table } from '../util.js';
@@ -43,7 +44,7 @@ export const cmdWho = () =>
           x.role ?? 'peer',
           x.orchestration?.orchestrator_name ?? '-',
           x.workers?.map((w) => w.name ?? w.session_id).join(', ') || '-',
-          x.state,
+          [x.state, x.liveness, x.codex_push].filter(Boolean).join(' · '),
           String(x.unread),
           x.bound ? 'yes' : 'no',
           x.last_seen_at,
@@ -286,5 +287,110 @@ export async function cmdLinks(args: string[]): Promise<void> {
         ? table([['WORKSPACE A', 'WORKSPACE B', 'SINCE'], ...links.map((l) => [l.a_label, l.b_label, l.created_at])])
         : 'no links',
     );
+  });
+}
+
+type RecoveryReport = {
+  flags: Array<{
+    id: number;
+    agent: string;
+    native_id: string;
+    session_id: string;
+    reason: string | null;
+    created_at: string;
+  }>;
+  duplicates: DuplicateGroup[];
+  codex_push_untrusted?: Array<{ session_id: string; name: string | null; codex_push: string }>;
+};
+
+export async function cmdRecovery(args: string[]): Promise<void> {
+  if (args[0] === 'retire') {
+    const { positionals, values } = parseCli({
+      args: args.slice(1),
+      allowPositionals: true,
+      options: { force: { type: 'boolean' } },
+    });
+    if (positionals.length !== 1 || !positionals[0]) throw usageError('recovery');
+    await withOwner(async (c) => {
+      await c.call('owner.retire_slot', { session_id: positionals[0], force: values.force ?? false });
+      out(`retired ${positionals[0]}`);
+    });
+    return;
+  }
+  if (args.some((a) => a !== '--json')) throw usageError('recovery');
+  await withOwner(async (c) => {
+    const r = await c.call<RecoveryReport>('owner.recovery', {});
+    if (args.includes('--json')) return out(JSON.stringify(r, null, 2));
+    const parts: string[] = [];
+    if (r.codex_push_untrusted?.length)
+      parts.push(
+        table([
+          ['SLOT', 'NAME', 'CODEX PUSH'],
+          ...r.codex_push_untrusted.map((s) => [s.session_id, s.name ?? '-', s.codex_push]),
+        ]),
+      );
+    if (r.flags.length)
+      parts.push(
+        table([
+          ['FLAG', 'AGENT', 'NATIVE ID', 'NEW SLOT', 'REASON', 'AT'],
+          ...r.flags.map((f) => [String(f.id), f.agent, f.native_id, f.session_id, f.reason ?? '', f.created_at]),
+        ]),
+      );
+    if (r.duplicates.length)
+      parts.push(
+        table([
+          [
+            'AGENT',
+            'NATIVE ID',
+            'WORKSPACE',
+            'SLOT',
+            'NAME',
+            'SOURCE',
+            'LAST SEEN',
+            'STATE/LINK',
+            'ASSIGNMENT/ROLE',
+            'HELD/PENDING',
+            'UNDELIVERED',
+          ],
+          ...r.duplicates.flatMap((d) =>
+            d.slots.map((s) => [
+              d.agent,
+              d.native_id,
+              workspaceLabel(d.workspace),
+              s.session_id,
+              s.name ?? '-',
+              s.name_source,
+              s.last_seen_at,
+              `${s.state}/${s.link}`,
+              s.assignments.map((a) => `${a.id}/${a.role}`).join(' ') || '-',
+              String(s.held_pending),
+              String(s.undelivered),
+            ]),
+          ),
+        ]),
+      );
+    out(parts.length ? parts.join('\n\n') : 'nothing to resolve');
+  });
+}
+
+export async function cmdQuestions(args: string[]): Promise<void> {
+  if (args[0] === 'resolve') {
+    const { positionals, values } = parseCli({
+      args: args.slice(1),
+      allowPositionals: true,
+      options: { cancel: { type: 'boolean' }, delivered: { type: 'boolean' } },
+    });
+    if (positionals.length !== 1 || !!values.cancel === !!values.delivered) throw usageError('questions');
+    return withOwner(async (c) => {
+      const result = await c.call('owner.resolve_question', {
+        relay_id: positionals[0],
+        outcome: values.cancel ? 'cancel' : 'delivered',
+      });
+      out(JSON.stringify(result));
+    });
+  }
+  if (args.some((a) => a !== '--json')) throw usageError('questions');
+  return withOwner(async (c) => {
+    out(JSON.stringify(await c.call('question.list', { include_history: false, limit: 10 }), null, 2));
   });
 }

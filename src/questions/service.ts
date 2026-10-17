@@ -33,6 +33,7 @@ export interface Relay {
   message_id: string;
   state: 'pending' | 'answered' | 'applied' | 'cancelled' | 'failed';
   error: string | null;
+  submission_state: 'unsent' | 'unknown' | 'confirmed';
 }
 type StoredRelay = Omit<Relay, 'questions' | 'answers'> & { questions_json: string; answers_json: string | null };
 const relay = (r: unknown): Relay | undefined => {
@@ -43,7 +44,18 @@ const relay = (r: unknown): Relay | undefined => {
 
 export class QuestionService extends EventEmitter {
   /** Adapter preflight: assigned Codex threads must attach before delegation commits. */
+  readonly codexWaiting = new Map<
+    string,
+    | 'thread-not-loaded'
+    | 'app-server-unavailable'
+    | 'native-request-unverified'
+    | 'question-revalidation-unavailable'
+    | 'submission-outcome-unknown'
+  >();
+  revalidateCodexMcp: ((session: SessionRow) => void) | null = null;
+  turnCodex: ((session: SessionRow, phase: 'started' | 'ended') => Promise<void>) | null = null;
   prepareCodex: ((session: SessionRow) => Promise<void>) | null = null;
+  reserveCodexPush: ((session: SessionRow) => Promise<() => void>) | null = null;
   constructor(readonly broker: Broker) {
     super();
     this.setMaxListeners(0);
@@ -238,6 +250,7 @@ export class QuestionService extends EventEmitter {
     }
     let m!: MessageRow;
     const q = tx(db, () => {
+      if (input.kind === 'claude') this.cancelPreservedLegacyRelays(workerId, a.id, input);
       const id = newId('req');
       m = this.message(
         pair.worker,
@@ -266,6 +279,35 @@ export class QuestionService extends EventEmitter {
     this.announce(m);
     this.emit('changed');
     return q;
+  }
+  /** A new Claude invocation retires only the exact relays carried across an unverified legacy upgrade. */
+  private cancelPreservedLegacyRelays(workerId: string, assignmentId: string, input: Capture): void {
+    const db = this.broker.db;
+    const rows = db
+      .prepare(`SELECT id,evidence_json FROM session_lineage
+      WHERE canonical_session_id=? AND outcome='adopted'
+        AND json_type(evidence_json,'$.legacy_upgrade_relay_ids')='array'`)
+      .all(workerId) as Array<{ id: number; evidence_json: string }>;
+    const cancel =
+      db.prepare(`UPDATE question_relays SET state='cancelled',error='Legacy-upgrade question superseded by a new native invocation',updated_at=?
+      WHERE id=? AND assignment_id=? AND native_session_id=? AND kind='claude'
+        AND tool_use_id<>? AND state IN ('pending','answered')`);
+    for (const row of rows) {
+      const evidence = JSON.parse(row.evidence_json) as Record<string, unknown>;
+      const preserved = evidence.legacy_upgrade_relay_ids as unknown[];
+      const cancelled = preserved.filter(
+        (id): id is string =>
+          typeof id === 'string' &&
+          Number(cancel.run(nowIso(), id, assignmentId, input.native_session_id, input.tool_use_id).changes) > 0,
+      );
+      if (!cancelled.length) continue;
+      const prior = Array.isArray(evidence.legacy_upgrade_cancellations) ? evidence.legacy_upgrade_cancellations : [];
+      evidence.legacy_upgrade_cancellations = [
+        ...prior,
+        { tool_use_id: input.tool_use_id, count: cancelled.length, relay_ids: cancelled },
+      ];
+      db.prepare('UPDATE session_lineage SET evidence_json=? WHERE id=?').run(JSON.stringify(evidence), row.id);
+    }
   }
   get(id: string): Relay | undefined {
     return relay(this.broker.db.prepare('SELECT * FROM question_relays WHERE id=?').get(id));
@@ -297,9 +339,57 @@ export class QuestionService extends EventEmitter {
     if (!q || !a || a.worker_session_id !== workerId || !this.participants(a) || q.state !== 'answered') return null;
     return q;
   }
+  /** One durable SQL claim, committed before native I/O. An unknown outcome is never automatically retried. */
+  claimSubmission(id: string, workerId: string): boolean {
+    const q = this.answerFor(id, workerId);
+    if (!q || !['codex', 'codex_async'].includes(q.kind)) return false;
+    const claimed = this.broker.db
+      .prepare(
+        "UPDATE question_relays SET submission_state='unknown',error=?,updated_at=? WHERE id=? AND state='answered' AND submission_state='unsent'",
+      )
+      .run(
+        `Native submission outcome unknown; no automatic retry. Inspect the native thread, then use wigwag questions resolve ${id} --cancel or --delivered.`,
+        nowIso(),
+        id,
+      );
+    if (claimed.changes) this.emit('changed');
+    return !!claimed.changes;
+  }
+  unknownSubmission(id: string, reason: string): void {
+    this.broker.db
+      .prepare(
+        "UPDATE question_relays SET error=?,updated_at=? WHERE id=? AND state='answered' AND submission_state='unknown'",
+      )
+      .run(reason.slice(0, 500), nowIso(), id);
+    this.emit('changed');
+  }
+  resolveSubmission(id: string, outcome: 'cancel' | 'delivered'): Pick<Relay, 'id' | 'state' | 'submission_state'> {
+    const q = this.get(id);
+    if (!q) throw new WigwagError('not_found', 'Question relay not found');
+    if (q.state !== 'answered' || q.submission_state !== 'unknown')
+      throw new WigwagError('conflict', 'Only an answered relay with an unknown native submission can be resolved');
+    this.broker.db
+      .prepare(
+        "UPDATE question_relays SET state=?,submission_state=?,error=?,updated_at=? WHERE id=? AND state='answered' AND submission_state='unknown'",
+      )
+      .run(
+        outcome === 'cancel' ? 'cancelled' : 'applied',
+        outcome === 'cancel' ? 'unknown' : 'confirmed',
+        outcome === 'cancel'
+          ? 'Owner cancelled retry; native outcome remains unknown'
+          : 'Owner confirmed delivery after inspecting native thread',
+        nowIso(),
+        id,
+      );
+    this.emit('changed');
+    const resolved = this.get(id) as Relay;
+    return { id: resolved.id, state: resolved.state, submission_state: resolved.submission_state };
+  }
   applied(id: string): void {
     this.broker.db
-      .prepare("UPDATE question_relays SET state='applied',updated_at=? WHERE id=? AND state='answered'")
+      .prepare(
+        "UPDATE question_relays SET state='applied',submission_state=CASE WHEN kind IN ('codex','codex_async') THEN 'confirmed' ELSE submission_state END,error=NULL,updated_at=? WHERE id=? AND state='answered'",
+      )
       .run(nowIso(), id);
     this.emit('changed');
   }
@@ -357,6 +447,7 @@ export class QuestionService extends EventEmitter {
         state: q.state,
         question_count: q.questions.length,
         answer_available: q.answers !== null,
+        submission_state: q.submission_state,
         error: q.error,
       })),
       has_more: questions.length > page.length,
@@ -376,7 +467,15 @@ export class QuestionService extends EventEmitter {
       data += c;
       next += c.length;
     }
-    return { relay_id: id, state: q.state, data, offset, next_offset: next < source.length ? next : null };
+    return {
+      relay_id: id,
+      state: q.state,
+      submission_state: q.submission_state,
+      error: q.error,
+      data,
+      offset,
+      next_offset: next < source.length ? next : null,
+    };
   }
 }
 
@@ -395,6 +494,7 @@ export function installQuestions(broker: Broker): QuestionService {
     const q = service.answer(p.relay_id, conn.sessionId as string, p.answers);
     return { relay_id: q.id, state: q.state };
   });
+  broker.handle('owner.resolve_question', (_ctx, p) => service.resolveSubmission(p.relay_id, p.outcome));
   broker.handle('question.list', ({ conn }, p) => service.summaries(conn.role === 'owner' ? null : conn.sessionId, p));
   broker.handle('question.details', ({ conn }, p) =>
     service.details(p.relay_id, conn.role === 'owner' ? null : conn.sessionId, p.offset),

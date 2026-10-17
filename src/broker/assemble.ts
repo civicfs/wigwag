@@ -1,26 +1,48 @@
 import { loadConfig } from '../config.js';
-import { CodexQuestions } from '../questions/codex.js';
+import { ClaudeTitleWatcher } from '../native/claude-watch.js';
+import { CodexNames, codexIndexPath, installCodexNames } from '../native/codex-names.js';
+import type { ProcessProbe } from '../proc/identity.js';
+import { HANDSHAKE_VERSIONS } from '../protocol/rpc.js';
+import { AppServer } from '../questions/app-server.js';
+import { type AppConnection, CodexQuestions } from '../questions/codex.js';
 import { installQuestionHooks } from '../questions/hook-handlers.js';
 import { installQuestions } from '../questions/service.js';
+import { rehearsalMode, validateRehearsal } from '../rehearsal.js';
 import { ClaudeChannelTransport } from '../transports/claude-channel.js';
 import { CodexQueueTransport } from '../transports/codex-queue.js';
 import type { TransportRegistry } from '../transports/types.js';
-import { VERSION } from '../version.js';
+import { installCodexPushTrust } from './codex-push.js';
 import { DeliveryEngine } from './delivery.js';
 import { installData } from './handlers/data.js';
 import { installMessages } from './handlers/messages.js';
 import { installOwner } from './handlers/owner.js';
+import { installRecovery } from './handlers/recovery.js';
 import { installRequests } from './handlers/requests.js';
 import { installIdentity } from './identity.js';
+import { installLiveness, type LivenessOptions } from './liveness.js';
+import { installNaming } from './naming.js';
 import { Broker } from './server.js';
 
 function installSys(broker: Broker): void {
-  broker.handle('sys.ping', () => ({ pong: true, pid: process.pid, version: VERSION }));
+  broker.handle('sys.ping', () => ({
+    pong: true,
+    pid: process.pid,
+    ...HANDSHAKE_VERSIONS,
+    version_warnings: broker.versionWarnings,
+    rehearsal: broker.rehearsal,
+  }));
 }
 
-function installDelivery(broker: Broker, transports: TransportRegistry): DeliveryEngine {
+function installDelivery(broker: Broker, transports: TransportRegistry, now?: () => number): DeliveryEngine {
   const engine = new DeliveryEngine({
     db: broker.db,
+    now,
+    codexPushTrust: (s) => broker.checkCodexPush(s, true),
+    codexQuestionPush: async (s) => {
+      if (!broker.questions.activeAssignment(s.id)) return () => {};
+      if (!broker.questions.reserveCodexPush) throw new Error('Codex native question relay is unavailable');
+      return broker.questions.reserveCodexPush(s);
+    },
     config: broker.config,
     transports,
     emitFeed: (type, payload) => broker.broadcastOwner(type, payload),
@@ -38,25 +60,75 @@ function installDelivery(broker: Broker, transports: TransportRegistry): Deliver
   return engine;
 }
 
-export async function startBroker(home: string, opts: { transports?: TransportRegistry } = {}): Promise<Broker> {
+export async function startBroker(
+  home: string,
+  opts: {
+    transports?: TransportRegistry;
+    codexNames?: CodexNames;
+    codexNameRefreshMs?: number;
+    codexQuestionFactory?: () => AppConnection;
+    codexQuestionIdleGraceMs?: number;
+    codexPushNow?: () => number;
+    processProbe?: ProcessProbe;
+    trustedThreadId?: Broker['trustedThreadId'];
+    liveness?: LivenessOptions;
+  } = {},
+): Promise<Broker> {
   const config = loadConfig(home);
+  const mode = rehearsalMode(config);
+  await validateRehearsal(home, config, mode);
   const broker = new Broker(home, config);
-  const transports = opts.transports ?? {
-    claude: new ClaudeChannelTransport((id) => broker.connectionFor(id)),
-    codex: new CodexQueueTransport(config.codex.binary, config.codex.queue_timeout_ms),
+  if (!mode.enabled && opts.trustedThreadId) broker.trustedThreadId = opts.trustedThreadId;
+  if (!mode.enabled && opts.processProbe) broker.processProbe = opts.processProbe;
+  if (mode.enabled) broker.processProbe = () => null;
+  const disabled = {
+    async push() {
+      throw new Error('Rehearsal disables native pushes');
+    },
+    hasChannel: () => false,
   };
-  installSys(broker);
-  installIdentity(broker);
-  installDelivery(broker, transports);
-  installMessages(broker);
-  installData(broker);
-  installRequests(broker);
-  installOwner(broker);
-  const questions = installQuestions(broker);
-  installQuestionHooks(broker, questions);
-  const codexQuestions = new CodexQuestions(questions);
-  questions.prepareCodex = (session) => codexQuestions.attach(session);
-  broker.onStop.push(() => codexQuestions.stop());
+  const transports: TransportRegistry = mode.enabled
+    ? { claude: { ...disabled, kind: 'claude-channel' }, codex: { ...disabled, kind: 'codex-queue' } }
+    : (opts.transports ?? {
+        claude: new ClaudeChannelTransport((id) => broker.connectionFor(id)),
+        codex: new CodexQueueTransport(config.codex.binary, config.codex.queue_timeout_ms, (s, proof) =>
+          broker.checkCodexPush(s, true, true, proof),
+        ),
+      });
+  broker.onOpen.push(() => {
+    installSys(broker);
+    installIdentity(broker);
+    installNaming(broker);
+    installDelivery(broker, transports, opts.codexPushNow);
+    installMessages(broker);
+    installData(broker);
+    installRequests(broker);
+    installOwner(broker);
+    installRecovery(broker);
+    const questions = installQuestions(broker);
+    installQuestionHooks(broker, questions);
+    // Owner-only rehearsal never constructs native readers, watchers, probes or question adapters.
+    if (mode.enabled) return;
+    installCodexNames(
+      broker,
+      opts.codexNames ??
+        new CodexNames({
+          factory: () => new AppServer(config.questions.app_server_socket, config.questions.app_server_timeout_ms),
+          indexPath: codexIndexPath(config.questions.app_server_socket),
+          log: (l) => broker.log(l),
+        }),
+      opts.codexNameRefreshMs,
+    );
+    installCodexPushTrust(broker, opts.codexPushNow);
+    installLiveness(broker, opts.liveness);
+    const codexQuestions = new CodexQuestions(questions, opts.codexQuestionFactory, {
+      idleGraceMs: opts.codexQuestionIdleGraceMs,
+    });
+    questions.prepareCodex = (session) => codexQuestions.attach(session);
+    broker.onStop.push(() => codexQuestions.stop());
+    const claudeTitles = new ClaudeTitleWatcher(broker);
+    broker.onStop.push(() => claudeTitles.stop());
+  });
   await broker.start();
   return broker;
 }

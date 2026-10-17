@@ -2,7 +2,6 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import type { Broker } from '../../src/broker/server.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
@@ -12,7 +11,7 @@ import type { Hello } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { GIT_TIMEOUT_MS } from '../../src/workspace.js';
-import { fakeGitDir, ownerClient, startTestBroker } from '../helpers.js';
+import { fakeGitDir, mcpClient, ownerClient, startBroker, startTestBroker } from '../helpers.js';
 
 type Welcome = { session_id: string; name: string; agent: string; warning: string | null };
 const cleanup: Array<() => unknown> = [];
@@ -35,7 +34,7 @@ async function mcp(home: string, extra: Partial<Hello> = {}) {
     mcp_ppid: 400,
     ...extra,
   };
-  const { client, welcome } = await Client.connect(sockPath(home), hello, frameLimit(loadConfig(home)));
+  const { client, welcome } = await mcpClient(home, hello);
   cleanup.push(() => client.close());
   return { client, welcome: welcome as Welcome };
 }
@@ -250,7 +249,7 @@ describe('identity', () => {
       expect(getSession(broker.db, a.welcome.session_id)?.agent_session_id).toBe('thread-1');
     });
 
-    it('takes over from an offline holder and clears its stale binding', async () => {
+    it('binds a new untrusted Codex slot while preserving the offline holder binding', async () => {
       const { home, broker } = await boot();
       const a = await codex(home, { requested_name: 'codex-old', mcp_ppid: 10, pid_chain: [11, 10] });
       await a.client.call('session.bind', { agent_session_id: 'thread-2' });
@@ -260,7 +259,7 @@ describe('identity', () => {
       await b.client.call('session.bind', { agent_session_id: 'thread-2' });
       expect(getSession(broker.db, b.welcome.session_id)?.agent_session_id).toBe('thread-2');
       const old = getSession(broker.db, a.welcome.session_id);
-      expect(old?.agent_session_id).toBeNull();
+      expect(old?.agent_session_id).toBe('thread-2');
       expect(old?.name).toBe('codex-old');
     });
 
@@ -540,13 +539,13 @@ describe('undelivered messages follow a rename away from the provisional name', 
     expect(where(ids.read)).toBe(old);
   });
 
-  it('does not forward when the session leaves a name it registered itself', async () => {
+  it('also forwards when the session leaves a name it registered itself (W2a)', async () => {
     const { home, broker } = await boot();
     const a = await mcp(home);
     await a.client.call('session.register', { name: 'first-name' });
     const m = await ownerSend(home, 'first-name', 'to-first');
     await a.client.call('session.register', { name: 'second-name' });
-    expect(rows(broker, m.id)[0].recipient).toBe('first-name');
+    expect(rows(broker, m.id)[0].recipient).toBe('second-name');
   });
 
   it('a broadcast that reached both names keeps its old-name row; other messages still move', async () => {

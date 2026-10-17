@@ -1,7 +1,13 @@
-import { chmodSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { WigwagError } from '../errors.js';
+import {
+  assertRehearsalStoragePaths,
+  type RehearsalMode,
+  rehearsalSqlitePath,
+  writeStorageFile,
+} from '../rehearsal.js';
 
 const SQLITE_BUSY = 5;
 
@@ -25,9 +31,13 @@ export class BrokerLock {
     private readonly pidFile: string,
   ) {}
 
-  static acquire(home: string): BrokerLock {
-    const mutexPath = join(home, 'broker.mutex');
-    const pidFile = join(home, 'broker.lock');
+  static acquire(home: string, mode?: RehearsalMode): BrokerLock {
+    const mutexPath = rehearsalSqlitePath(home, join(home, 'broker.mutex'), false, mode);
+    const [pidFile, tmp] = assertRehearsalStoragePaths(
+      home,
+      [join(home, 'broker.lock'), join(home, `broker.lock.${process.pid}.tmp`)],
+      mode,
+    );
     const mutex = new DatabaseSync(mutexPath); // busy timeout 0: a held lock fails at once
     try {
       mutex.exec('BEGIN EXCLUSIVE');
@@ -40,8 +50,7 @@ export class BrokerLock {
     }
     try {
       chmodSync(mutexPath, 0o600);
-      const tmp = `${pidFile}.${process.pid}.tmp`;
-      writeFileSync(tmp, String(process.pid), { mode: 0o600 });
+      writeStorageFile(home, tmp, String(process.pid), 'w', mode);
       renameSync(tmp, pidFile); // replaces any pid file left by a dead broker
     } catch (e) {
       mutex.close(); // closing the connection ends the transaction and drops the lock

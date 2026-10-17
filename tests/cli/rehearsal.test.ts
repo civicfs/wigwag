@@ -1,0 +1,180 @@
+import { spawn } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { afterEach, expect, it, vi } from 'vitest';
+import { configPath } from '../../src/config.js';
+import { DIST_MAIN, fixtureCodexNames, mcpClient, startBroker, tmpHome } from '../helpers.js';
+
+function fixture() {
+  const home = tmpHome(),
+    bin = join(home, 'bin'),
+    called = join(home, 'native-called');
+  mkdirSync(bin);
+  for (const name of ['claude', 'codex']) {
+    writeFileSync(join(bin, name), `#!/bin/sh\ntouch '${called}'\nexit 0\n`);
+    chmodSync(join(bin, name), 0o755);
+  }
+  // Keep even a regression of the update guard offline; Yoga's embedded WASM uses a local data: fetch.
+  const networkCalled = join(home, 'network-called'),
+    preload = join(home, 'offline.mjs');
+  writeFileSync(
+    preload,
+    `import ${JSON.stringify(new URL('../fixtures/private-account-home.mjs', import.meta.url).href)}; import { appendFileSync } from 'node:fs'; const localFetch = globalThis.fetch; globalThis.fetch = async (input, options) => { if (String(input?.url ?? input).startsWith('data:')) return localFetch(input, options); appendFileSync(${JSON.stringify(networkCalled)}, 'called'); throw new Error('fixture forbids network'); };`,
+  );
+  const config = JSON.parse(readFileSync(configPath(home), 'utf8'));
+  config.codex.binary = join(bin, 'codex');
+  writeFileSync(configPath(home), JSON.stringify(config));
+  return {
+    home,
+    called,
+    networkCalled,
+    env: {
+      NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+      WIGWAG_HOME: home,
+      WIGWAG_REHEARSAL: '1',
+      WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS: '1',
+      CODEX_HOME: join(home, 'codex'),
+      CLAUDE_CONFIG_DIR: join(home, 'claude'),
+      PATH: `${bin}:${process.env.PATH}`,
+    },
+  };
+}
+function cli(args: string[], env: Record<string, string>, stdin = '') {
+  return new Promise<{ code: number | null; stdout: string; stderr: string }>((r) => {
+    const child = spawn(process.execPath, [DIST_MAIN, ...args], { env: { ...process.env, ...env } });
+    let stdout = '',
+      stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('close', (code) => r({ code, stdout, stderr }));
+    child.stdin.end(stdin);
+  });
+}
+it('doctor reports rehearsal and the external-path warning without running native executable probes or opening a new DB', async () => {
+  const f = fixture(),
+    result = await cli(['doctor'], f.env);
+  expect(result.stdout).toContain('rehearsal');
+  expect(result.stdout).toContain('WARNING: rehearsal allows external paths');
+  expect(result.stdout).toContain('native I/O disabled');
+  expect(existsSync(f.called)).toBe(false);
+  expect(existsSync(join(f.home, 'state.db'))).toBe(false);
+});
+it('normal CLI refuses a marked home before database inspection; explicit clear removes only the marker', async () => {
+  const f = fixture(),
+    marker = join(f.home, 'rehearsal.json');
+  writeFileSync(marker, '{"format":1}', { mode: 0o600 });
+  const normal = { ...f.env, WIGWAG_REHEARSAL: '0' };
+  const denied = await cli(['doctor'], normal);
+  expect(denied.code).not.toBe(0);
+  expect(denied.stderr).toMatch(/marked rehearsal.*rehearsal clear/i);
+  expect(denied.stdout).toBe('');
+  expect(existsSync(marker)).toBe(true);
+  const before = readFileSync(configPath(f.home));
+  const cleared = await cli(['rehearsal', 'clear'], normal);
+  expect(cleared.code).toBe(0);
+  expect(cleared.stdout).toContain('retained answers');
+  expect(existsSync(marker)).toBe(false);
+  expect(readFileSync(configPath(f.home))).toEqual(before);
+  expect(existsSync(join(f.home, 'state.db'))).toBe(false);
+  expect(existsSync(f.called)).toBe(false);
+});
+it.each([
+  ['claude'],
+  ['codex'],
+  ['install'],
+  ['uninstall'],
+  ['update', '--check'],
+  ['update', '--apply'],
+  ['mcp', '--agent', 'codex'],
+])('refuses native/update command %j before invoking it', async (...args) => {
+  const f = fixture(),
+    result = await cli(args, f.env);
+  expect(result.code).not.toBe(0);
+  expect(result.stderr).toMatch(/rehearsal.*disables/i);
+  expect(existsSync(f.called)).toBe(false);
+  expect(existsSync(join(f.home, 'update-check.json'))).toBe(false);
+  expect(existsSync(f.networkCalled)).toBe(false);
+});
+it('requires an explicit absolute WIGWAG_HOME for rehearsal CLI', async () => {
+  const f = fixture();
+  expect((await cli(['doctor'], { ...f.env, WIGWAG_HOME: '' })).stderr).toMatch(/rehearsal.*absolute WIGWAG_HOME/i);
+  expect((await cli(['doctor'], { ...f.env, WIGWAG_HOME: 'relative' })).stderr).toMatch(
+    /rehearsal.*absolute WIGWAG_HOME/i,
+  );
+});
+it('lifecycle hooks still fail open in a marked home', async () => {
+  const f = fixture();
+  writeFileSync(join(f.home, 'rehearsal.json'), '{}', { mode: 0o600 });
+  const result = await cli(['hook', 'claude', 'Stop'], { ...f.env, WIGWAG_REHEARSAL: '0' }, '{"session_id":"T"}');
+  expect(result.code).toBe(0);
+  expect(result.stdout).toBe('');
+  expect(result.stderr).toBe('');
+});
+
+it('explicit clear refuses a home with a running broker socket and keeps its marker', async () => {
+  const f = fixture(),
+    marker = join(f.home, 'rehearsal.json'),
+    server = createServer((s) => s.destroy());
+  writeFileSync(marker, '{}', { mode: 0o600 });
+  await new Promise<void>((r) => server.listen(join(f.home, 'broker.sock'), r));
+  try {
+    const result = await cli(['rehearsal', 'clear'], f.env);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('Stop the rehearsal broker');
+    expect(existsSync(marker)).toBe(true);
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+const cleanup: Array<() => unknown> = [];
+afterEach(async () => {
+  for (const f of cleanup.splice(0).reverse()) await f();
+});
+it('refuses rehearsal send to a normal custom-home broker before storing or pushing the message', async () => {
+  const f = fixture(),
+    push = vi.fn(async () => {});
+  const broker = await startBroker(f.home, {
+    codexNames: fixtureCodexNames(f.home, () => []),
+    transports: { claude: { kind: 'claude-channel', push }, codex: { kind: 'codex-queue', push } },
+  });
+  cleanup.push(() => broker.stop());
+  const worker = await mcpClient(f.home, { requested_name: 'worker-one', cwd: f.home, channel: true });
+  cleanup.push(() => worker.client.destroy());
+  const before = broker.db.prepare('SELECT count(*) AS n FROM messages').get();
+  const result = await cli(['send', 'worker-one', '--priority', 'urgent', '--body', 'rehearsal-only'], f.env);
+  expect(result.code).not.toBe(0);
+  expect(result.stderr).toMatch(/rehearsal.*broker/i);
+  expect(broker.db.prepare('SELECT count(*) AS n FROM messages').get()).toEqual(before);
+  expect(push).not.toHaveBeenCalled();
+});
+it.each(['outside', 'inside'])('refuses a %s-home broker socket symlink without connecting', async (where) => {
+  const f = fixture(),
+    outside = tmpHome(),
+    socket = join(where === 'inside' ? f.home : outside, 'target.sock');
+  let connections = 0;
+  const server = createServer((s) => {
+    connections++;
+    s.destroy();
+  });
+  await new Promise<void>((r) => server.listen(socket, r));
+  cleanup.push(() => new Promise<void>((r) => server.close(() => r())));
+  symlinkSync(socket, join(f.home, 'broker.sock'));
+  const result = await cli(['who'], f.env);
+  expect(result.code).not.toBe(0);
+  expect(result.stderr).toMatch(/rehearsal.*(symlink|storage)/i);
+  expect(connections).toBe(0);
+});
+
+it('marked-home hook failure stays fail-open without writing through an escaped hooks.log', async () => {
+  const f = fixture(),
+    outside = tmpHome(),
+    escaped = join(outside, 'outside-hooks.log');
+  writeFileSync(join(f.home, 'rehearsal.json'), '{}', { mode: 0o600 });
+  symlinkSync(escaped, join(f.home, 'logs', 'hooks.log'));
+  const result = await cli(['hook', 'claude', 'Stop'], { ...f.env, WIGWAG_REHEARSAL: '0' }, '{"session_id":"T"}');
+  expect(result).toMatchObject({ code: 0, stdout: '', stderr: '' });
+  expect(existsSync(escaped)).toBe(false);
+});

@@ -84,7 +84,8 @@ describe('Codex native question bridge', () => {
       },
     });
     await lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['A'] } });
-    await until(() => broker.questions.get(q.id)?.state === 'failed', 1000);
+    await until(() => broker.questions.get(q.id)?.error?.includes('acknowledgement unavailable') === true, 1000);
+    expect(broker.questions.get(q.id)).toMatchObject({ state: 'answered', submission_state: 'unknown' });
     broker.questions.emit('changed');
     expect(app.calls.filter((c) => c.method.startsWith('turn/'))).toHaveLength(1);
   });

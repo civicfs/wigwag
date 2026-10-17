@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Broker } from '../../src/broker/server.js';
@@ -426,6 +426,7 @@ describe('workspace scoping fix round 1 (R42): provenance authorization, takeove
 describe('workspace scoping security round 2 (R46)', () => {
   afterEach(() => {
     delete process.env.FAKE_CODEX_SLEEP_MS;
+    delete process.env.FAKE_CODEX_STARTED_LOG;
   });
   const offline = (sessionId: string) => until(() => getSession(broker.db, sessionId)?.state === 'offline');
   const inboxIds = async (c: { client: Client }) =>
@@ -459,21 +460,50 @@ describe('workspace scoping security round 2 (R46)', () => {
     return client;
   }
 
-  it('N1: a push that completes after its name changed hands stays stuck and grants nothing', async () => {
+  it('N1: a renamed in-flight push stays with its original owner and grants nothing to the new source holder', async () => {
     process.env.FAKE_CODEX_SLEEP_MS = '1200';
+    const started = join(home, 'codex-started.log');
+    process.env.FAKE_CODEX_STARTED_LOG = started;
     const w = await codex('worker-one', repoA, 'thread-a');
     const a = await join2('alpha-one', repoA);
     const { ref } = await a.client.call<{ ref: string }>('blob.put', { text: 'n1-secret', media_type: 'text/plain' });
     const sending = send(a, 'worker-one', { attachments: [ref] });
-    await until(() => deliveryTo('worker-one') !== undefined);
+    await until(() => existsSync(started));
     const id = (deliveryTo('worker-one') as { message_id: string }).message_id;
     await w.client.call('session.register', { name: 'worker-two' });
     const b = await join2('worker-one', repoB);
-    expect(stateOf(id, 'worker-one')?.state).toBe('stuck');
+    expect(stateOf(id, 'worker-one')?.forward_to).toBe(w.welcome.session_id);
+    await expect(b.client.call('msg.read', { msg_id: id })).rejects.toMatchObject({ code: 'not_found' });
     await sending;
-    expect(stateOf(id, 'worker-one')?.state).toBe('stuck');
+    await until(() => stateOf(id, 'worker-two')?.state === 'read');
+    expect(stateOf(id, 'worker-one')).toBeUndefined();
     expect(grants(ref)).toEqual([ws(repoA)]);
     await expect(b.client.call('blob.get', { ref })).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('N1: losing the owning destination scope wins over late push completion and keeps ownership private', async () => {
+    process.env.FAKE_CODEX_SLEEP_MS = '1200';
+    const started = join(home, 'codex-started.log');
+    process.env.FAKE_CODEX_STARTED_LOG = started;
+    const o = await owner();
+    await o.client.call('owner.link', { a: repoA, b: repoB });
+    const w = await codex('worker-one', repoB, 'thread-a');
+    const a = await join2('alpha-one', repoA);
+    const { ref } = await a.client.call<{ ref: string }>('blob.put', {
+      text: 'late-private',
+      media_type: 'text/plain',
+    });
+    await send(a, 'worker-one', { attachments: [ref] });
+    await until(() => existsSync(started));
+    const id = (deliveryTo('worker-one') as { message_id: string }).message_id;
+    await o.client.call('owner.unlink', { a: repoA, b: repoB });
+    await w.client.call('session.register', { name: 'worker-two' });
+    const b = await join2('worker-one', repoA);
+    expect(stateOf(id, 'worker-one')).toMatchObject({ state: 'stuck', forward_to: w.welcome.session_id });
+    await expect(b.client.call('msg.read', { msg_id: id })).rejects.toMatchObject({ code: 'not_found' });
+    await broker.engine?.drain(5000);
+    expect(stateOf(id, 'worker-one')).toMatchObject({ state: 'stuck', forward_to: w.welcome.session_id });
+    expect(grants(ref)).toEqual([ws(repoA)]);
   });
 
   it('N2 (after final I-7): respond/reply return before the slow push, so a later unlink cannot interleave with them', async () => {

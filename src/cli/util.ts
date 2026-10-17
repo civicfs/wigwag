@@ -1,9 +1,9 @@
 import { realpathSync } from 'node:fs';
 import { type ParseArgsConfig, parseArgs } from 'node:util';
-import { ensureBroker, sockPath } from '../client/autospawn.js';
-import { Client } from '../client/client.js';
+import { ensureBroker } from '../client/autospawn.js';
+import type { Client } from '../client/client.js';
+import { connectOwner } from '../client/owner.js';
 import { type Config, loadConfig, resolveHome } from '../config.js';
-import { frameLimit } from '../protocol/frame.js';
 import type { MessageRow } from '../store/messages.js';
 import { terminalText } from '../terminal.js';
 
@@ -27,7 +27,7 @@ export async function ownerConnect(
   const home = resolveHome();
   const config = loadConfig(home);
   await ensureBroker(home, config, cliEntry());
-  const { client } = await Client.connect(sockPath(home), { protocol: 1, role: 'owner' }, frameLimit(config), onEvent);
+  const { client } = await connectOwner(home, config, onEvent);
   return { client, home, config };
 }
 

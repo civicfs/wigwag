@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import { pendingAwaitCount, scheduleChunked } from '../../src/broker/handlers/requests.js';
 import type { Broker } from '../../src/broker/server.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
-import { mcpClient, startTestBroker, until } from '../helpers.js';
+import { mcpClient, startBroker, startTestBroker, until } from '../helpers.js';
 
 let home: string;
 let broker: Broker;

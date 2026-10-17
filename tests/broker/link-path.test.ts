@@ -15,6 +15,7 @@ it('link requires directories, including through symlinks, rather than creating 
   vi.spyOn(broker, 'handle').mockImplementation((method, handler) => {
     if (method === 'owner.link') link = handler as typeof link;
   });
+  await broker.start();
   installOwner(broker);
   const file = join(home, 'regular-file');
   const alias = join(home, 'file-alias');

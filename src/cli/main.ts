@@ -1,9 +1,19 @@
+import { isAbsolute } from 'node:path';
 import { parseArgs } from 'node:util';
+import { resolveHome } from '../config.js';
 import { WigwagError } from '../errors.js';
 import { type ClaudeHookEvent, runClaudeHook } from '../hooks/claude.js';
 import { install, packageRoot, uninstall } from '../install/install.js';
 import { runMcp } from '../mcp/server.js';
 import { runQuestionHook } from '../questions/hook.js';
+import {
+  assertNativeAllowed,
+  assertRehearsalAccess,
+  assertRehearsalHome,
+  assertRehearsalStorage,
+  clearRehearsal,
+  homeRehearsalMode,
+} from '../rehearsal.js';
 import { terminalText } from '../terminal.js';
 import { runTui } from '../tui/run.js';
 import { applyUpdate, checkUpdate, describeUpdate } from '../update/update.js';
@@ -17,6 +27,8 @@ import {
   cmdKv,
   cmdLink,
   cmdLinks,
+  cmdQuestions,
+  cmdRecovery,
   cmdReleaseThrottle,
   cmdSend,
   cmdShow,
@@ -40,6 +52,42 @@ async function main(argv: string[]): Promise<void> {
     (cmd === 'send' || cmd === 'claude' || cmd === 'codex' ? wantsHelp(sub ?? '') : tail.some(wantsHelp))
   )
     return out(commandHelp(cmd));
+  const noHome = cmd === undefined || ['--help', '-h', 'help', '--version'].includes(cmd);
+  // An explicit rehearsal hook does no home discovery; lifecycle hooks must stay fail-open even with a typo.
+  if (cmd === 'hook' && process.env.WIGWAG_REHEARSAL === '1') return;
+  if (
+    !noHome &&
+    cmd !== 'hook' &&
+    process.env.WIGWAG_REHEARSAL === '1' &&
+    (!process.env.WIGWAG_HOME || !isAbsolute(process.env.WIGWAG_HOME))
+  )
+    throw new UsageError('Rehearsal requires an explicit absolute WIGWAG_HOME');
+  if (!noHome && cmd !== 'hook') {
+    const home = resolveHome(),
+      mode = homeRehearsalMode(home);
+    if (cmd === 'rehearsal' && sub === 'clear' && rest.length === 0) {
+      if (!process.env.WIGWAG_HOME || !isAbsolute(process.env.WIGWAG_HOME))
+        throw new UsageError('wigwag rehearsal clear requires an explicit absolute WIGWAG_HOME');
+      const removed = await clearRehearsal(home);
+      out(
+        removed
+          ? 'Rehearsal marker removed. Normal starts may contact native integrations and apply retained answers. Disable rehearsal.enabled/unset WIGWAG_REHEARSAL before normal use.'
+          : 'No rehearsal marker; nothing removed.',
+      );
+      return;
+    }
+    assertRehearsalAccess(home, mode);
+    if (mode.enabled) {
+      if (!process.env.WIGWAG_HOME || !isAbsolute(process.env.WIGWAG_HOME))
+        throw new UsageError('Rehearsal requires an explicit absolute WIGWAG_HOME');
+      assertRehearsalHome(home);
+      assertRehearsalStorage(home);
+      if (['claude', 'codex', 'install', 'uninstall', 'update', 'mcp'].includes(cmd ?? ''))
+        assertNativeAllowed(home, cmd as string);
+    }
+  }
+  // Native hooks fail open without even process discovery in rehearsal; owners inspect the copy via owner RPCs.
+  if (cmd === 'hook' && homeRehearsalMode(resolveHome()).enabled) return;
   switch (cmd) {
     case undefined:
     case '--help':
@@ -126,6 +174,10 @@ async function main(argv: string[]): Promise<void> {
       return cmdUnlink(tail);
     case 'links':
       return cmdLinks(tail);
+    case 'questions':
+      return cmdQuestions(tail);
+    case 'recovery':
+      return cmdRecovery(tail);
     case 'tui':
       return runTui();
     case 'claude':

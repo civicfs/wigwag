@@ -1,12 +1,13 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { WigwagError } from '../../errors.js';
 import { readBoundedFile } from '../../files.js';
 import { isTextual } from '../../mime.js';
+import { assertRehearsalStoragePaths, writeStorageFile } from '../../rehearsal.js';
 import { addBlobScope, blobInScope, getBlobMeta, putBlob, readBlob } from '../../store/blobs.js';
 import { kvCas, kvGet, kvHistory, kvScan } from '../../store/kv.js';
 import { inScope, type Scope } from '../../store/links.js';
-import { getMessage } from '../../store/messages.js';
+import { deliveryForNameSql, getMessage } from '../../store/messages.js';
 import { getSession, holderOf, type SessionRow } from '../../store/sessions.js';
 import { appendRecord, createStream, getStream, listStreams, scanRecords } from '../../store/streams.js';
 import { addSubscription, subscribersFor } from '../../store/subs.js';
@@ -54,9 +55,9 @@ export function installData(broker: Broker): void {
       db
         .prepare(
           `SELECT DISTINCT m.id FROM deliveries d JOIN messages m ON m.id = d.message_id, json_each(m.attachments) j
-           WHERE d.recipient = ? AND d.state <> 'stuck' AND j.value = ?`,
+           WHERE ${deliveryForNameSql} AND d.state <> 'stuck' AND j.value = ?`,
         )
-        .all(name, ref) as Array<{ id: string }>
+        .all(name, name, ref) as Array<{ id: string }>
     ).some(({ id }) => {
       const m = getMessage(db, id);
       return m !== undefined && canSee(db, workspace, m);
@@ -133,16 +134,17 @@ export function installData(broker: Broker): void {
     const data = readBlob(broker.home, p.ref);
     if (p.dest_path !== undefined) {
       requireAbsolute(p.dest_path);
-      if (existsSync(p.dest_path)) throw new WigwagError('conflict', `Refusing to overwrite ${p.dest_path}`);
+      const [dest] = assertRehearsalStoragePaths(broker.home, [p.dest_path]);
+      if (existsSync(dest)) throw new WigwagError('conflict', `Refusing to overwrite ${p.dest_path}`);
       try {
-        writeFileSync(p.dest_path, data, { flag: 'wx', mode: 0o600 });
+        writeStorageFile(broker.home, dest, data, 'wx');
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
           throw new WigwagError('conflict', `Refusing to overwrite ${p.dest_path}`);
         }
         throw e;
       }
-      return { meta, written_to: p.dest_path };
+      return { meta, written_to: dest };
     }
     if (meta.size > limits.inline_blob_bytes || !isTextual(meta.media_type)) {
       throw new WigwagError(

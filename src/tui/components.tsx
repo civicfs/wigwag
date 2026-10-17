@@ -126,7 +126,7 @@ export function SessionsPane({
     const roleText = `${role}${lead ? ` ← ${lead}` : ''}`;
     const line2 = `${s.agent} · ${roleText}${s.bound ? '' : ' · unbound'}`;
     const wsLine = s.workspace_label ?? '';
-    const line3 = `seen ${relativeAge(s.last_seen_at, now)}${isThrottled ? ' · throttled' : ''}`;
+    const line3 = `seen ${relativeAge(s.last_seen_at, now)}${isThrottled ? ' · throttled' : ''}${s.liveness ? ` · ${s.liveness}` : ''}${s.codex_push ? ` · ${s.codex_push}` : ''}${s.compatibility_warning ? ` · ${s.compatibility_warning}` : ''}`;
     const active = focused && i === clampIndex(selected, sessions.length);
     return {
       key: s.id,
@@ -151,6 +151,9 @@ export function SessionsPane({
           <Text dimColor wrap="wrap">
             seen {relativeAge(s.last_seen_at, now)}
             {isThrottled ? <Text color={palette.warning}> · throttled</Text> : null}
+            {s.liveness ? <Text color={palette.warning}> · {s.liveness}</Text> : null}
+            {s.codex_push ? <Text color={palette.warning}> · {s.codex_push}</Text> : null}
+            {s.compatibility_warning ? <Text color={palette.warning}> · {s.compatibility_warning}</Text> : null}
           </Text>
         </>
       ),

@@ -7,9 +7,10 @@ import { loadConfig, resolveHome } from '../config.js';
 import { WigwagError } from '../errors.js';
 import { pidChain } from '../proc/ancestors.js';
 import { loadsWigwagChannel, processArgs } from '../proc/channel-flag.js';
-import type { Hello, PushData } from '../protocol/rpc.js';
+import { type Hello, type PushData, SessionIdentityZ } from '../protocol/rpc.js';
 import type { Agent } from '../store/sessions.js';
 import { VERSION } from '../version.js';
+import { hookOrigin } from './hook-origin.js';
 import { instructions } from './instructions.js';
 import { parseToolInput, toolsFor } from './tools.js';
 
@@ -46,6 +47,7 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
       name: t.name,
       description: t.description,
       inputSchema: z.toJSONSchema(t.input, { io: 'input' }) as { type: 'object' },
+      ...(t.hookOnly ? { _meta: { ui: { visibility: ['app'] } } } : {}),
     })),
   }));
 
@@ -59,7 +61,11 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
     if (!parsed.success) return errorResult(`bad_request: ${z.prettifyError(parsed.error)}`);
     try {
       const args = parsed.data as Record<string, unknown>;
-      const result = await rc.call(tool.method, tool.map ? tool.map(args) : args);
+      const origin = tool.hookOnly
+        ? hookOrigin(server.getClientVersion(), req.params._meta, req.params.arguments ?? {})
+        : null;
+      const mapped = tool.map ? tool.map(args) : args;
+      const result = await rc.call(tool.method, origin ? { ...(mapped as object), hook_origin: origin } : mapped);
       return {
         content: [{ type: 'text' as const, text: tool.format ? tool.format(result) : JSON.stringify(result, null, 2) }],
       };
@@ -114,6 +120,8 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
     );
   }
   let sessionId: string | null = null;
+  const observedHost = server.getClientVersion();
+  const hostClient = observedHost ? { name: observedHost.name, version: observedHost.version } : undefined;
   const hello = (): Hello => ({
     protocol: 1,
     role: 'mcp',
@@ -124,6 +132,7 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
     requested_name: process.env.WIGWAG_NAME || undefined,
     channel,
     resume_session_id: sessionId ?? undefined,
+    ...(agent === 'codex' ? { host_client: hostClient } : {}),
   });
 
   // Final review I-6: a failed first start no longer leaves the server dead for the whole agent session. With a
@@ -137,6 +146,11 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
       client = new ReconnectingClient({ home, config, entry, hello });
       pending = client;
       client.on('event', (name: string, data: unknown) => {
+        if (name === 'session.identity') {
+          const parsed = SessionIdentityZ.safeParse(data);
+          if (parsed.success) sessionId = parsed.data.session_id;
+          return;
+        }
         if (agent !== 'claude' || name !== 'push') return;
         sendPush(data as PushData);
       });

@@ -43,6 +43,7 @@ describe('tui reducer', () => {
     const d = {
       message_id: 'msg-1',
       recipient: 'b-b',
+      forward_to: null,
       state: 'held',
       hold_reason: 'low',
       attempts: 0,
@@ -71,6 +72,7 @@ describe('tui reducer', () => {
     const d = {
       message_id: 'msg-old',
       recipient: 'b-b',
+      forward_to: null,
       state: 'held' as const,
       hold_reason: 'low' as const,
       attempts: 0,

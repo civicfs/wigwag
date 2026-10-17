@@ -1,6 +1,5 @@
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startBroker } from '../../src/broker/assemble.js';
 import type { Broker } from '../../src/broker/server.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
@@ -8,7 +7,7 @@ import { loadConfig } from '../../src/config.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import { deliveriesOfMessage, insertMessage } from '../../src/store/messages.js';
 import { EMPTY, reduce } from '../../src/tui/state.js';
-import { mcpClient, readCodexCalls, startTestBroker, until } from '../helpers.js';
+import { mcpClient, readCodexCalls, startBroker, startTestBroker, until } from '../helpers.js';
 
 // Owner decision (Pass 2): a message counts as read once it is delivered into the model's context, by a channel push,
 // a codex queue call or a hook digest. Held, pending, stuck and failed items stay unread.

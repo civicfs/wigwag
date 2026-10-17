@@ -5,6 +5,8 @@ import {
   type DeliveryState,
   deliveriesFor,
   deliveriesOfMessage,
+  deliveryForRecipient,
+  deliveryRecipient,
   getMessage,
   insertMessage,
   type MessageKind,
@@ -124,9 +126,13 @@ export async function sendMessage(
 /** Mark a delivery read and tell the owner feed (unread counts). Returns false if it is not addressed to `me`. */
 export function markRead(broker: Broker, messageId: string, me: string): boolean {
   try {
+    const addressed = deliveryForRecipient(broker.db, messageId, me);
+    if (!addressed) return false;
     // The caller holds `me` (checked by the caller in the same tick), so its workspace receives the attachments.
-    const row = transition(broker.db, messageId, me, 'read', { grant_workspace: holderOf(broker.db, me)?.workspace });
-    broker.broadcastOwner('delivery', { ...row, recipient_unread: visibleUnreadCount(broker.db, me) });
+    const row = transition(broker.db, messageId, addressed.recipient, 'read', {
+      grant_workspace: holderOf(broker.db, me)?.workspace,
+    });
+    broker.broadcastOwner('delivery', { ...row, recipient: me, recipient_unread: visibleUnreadCount(broker.db, me) });
     return true;
   } catch (e) {
     if (e instanceof WigwagError && e.code === 'not_found') return false;
@@ -222,7 +228,7 @@ export function installMessages(broker: Broker): void {
     if (
       !m ||
       !connCanSee(db, conn, m) ||
-      (m.from_name !== me && !deliveriesOfMessage(db, m.id).some((d) => d.recipient === me))
+      (m.from_name !== me && !deliveriesOfMessage(db, m.id).some((d) => deliveryRecipient(db, d) === me))
     )
       throw new WigwagError('not_found', `Message not found: ${p.msg_id}`);
     if (p.body_offset > m.body.length || (p.body_offset > 0 && /[\uDC00-\uDFFF]/u.test(m.body[p.body_offset] ?? '')))

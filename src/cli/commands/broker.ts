@@ -2,33 +2,43 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { startBroker } from '../../broker/assemble.js';
 import { canConnect, ensureBroker, sockPath } from '../../client/autospawn.js';
-import { Client } from '../../client/client.js';
+import { readBrokerStatus } from '../../client/broker-status.js';
+import type { Client } from '../../client/client.js';
+import { connectOwner } from '../../client/owner.js';
 import { loadConfig, resolveHome } from '../../config.js';
 import { WigwagError } from '../../errors.js';
 import { frameLimit } from '../../protocol/frame.js';
+import { assertRehearsalClientPaths, assertRehearsalStoragePaths, homeRehearsalMode } from '../../rehearsal.js';
 import { usageError } from '../help.js';
 import { cliEntry, out, ownerConnect, parseCli } from '../util.js';
 
 /** The pid reported by a broker answering on this home's socket, or null when none answers (never autospawns). */
-async function liveStatus(home: string): Promise<{ pid: number; version?: string } | null> {
+export async function liveStatus(home: string): Promise<{ pid: number; version?: string } | null> {
   const config = loadConfig(home);
+  const mode = assertRehearsalClientPaths(home, config);
+  [home] = assertRehearsalStoragePaths(home, [home], mode);
   if (!(await canConnect(sockPath(home)))) return null;
   const signal = AbortSignal.timeout(config.broker.start_timeout_ms);
   let client: Client | undefined;
   try {
-    ({ client } = await Client.connect(
-      sockPath(home),
-      { protocol: 1, role: 'owner' },
-      frameLimit(config),
-      undefined,
-      signal,
-    ));
+    ({ client } = await connectOwner(home, config, undefined, signal));
     const ping = client.call<{ pid: number; version?: string }>('sys.ping');
     const timedOut = new Promise<never>((_, rej) =>
       signal.addEventListener('abort', () => rej(new Error('sys.ping timed out')), { once: true }),
     );
     return await Promise.race([ping, timedOut]);
-  } catch {
+  } catch (e) {
+    if (mode.enabled) throw e; // No legacy/status fallback may bypass rehearsal verification.
+    if (e instanceof WigwagError && (e.data as { kind?: string })?.kind === 'version-skew') {
+      try {
+        return await readBrokerStatus(
+          sockPath(home),
+          frameLimit(config),
+          signal,
+          (e.data as { peer?: string })?.peer === 'client' ? (e.data as { expected?: unknown }).expected : undefined,
+        );
+      } catch {}
+    }
     return null;
   } finally {
     client?.close();
@@ -57,7 +67,8 @@ export function signalBroker(
 }
 
 export async function cmdBroker(sub: string | undefined, args: string[] = []): Promise<void> {
-  const home = resolveHome();
+  const requested = resolveHome();
+  const [home] = assertRehearsalStoragePaths(requested, [requested], homeRehearsalMode(requested));
   if (sub === 'run') {
     try {
       const broker = await startBroker(home);

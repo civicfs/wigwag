@@ -23,9 +23,10 @@ const gate = () => {
   return { promise, release };
 };
 
-function setup(codex: Transport) {
+async function setup(codex: Transport) {
   const home = tmpHome();
   const broker = new Broker(home, loadConfig(home));
+  await broker.start();
   const logs: string[] = [];
   const engine = new DeliveryEngine({
     db: broker.db,
@@ -63,7 +64,7 @@ function setup(codex: Transport) {
 it('preserves sequential accepted-send order for one recipient while other recipients progress (final Codex I-7)', async () => {
   const first = gate();
   const started: string[] = [];
-  const { broker, engine, send } = setup({
+  const { broker, engine, send } = await setup({
     kind: 'codex-queue',
     push: async (_session, items) => {
       const body = items[0].msg.body;
@@ -87,7 +88,7 @@ it('preserves sequential accepted-send order for one recipient while other recip
 
 it('does not record a late transport completion after drain expires and the db closes (final Codex I-10)', async () => {
   const pending = gate();
-  const { broker, engine, logs, send } = setup({ kind: 'codex-queue', push: async () => pending.promise });
+  const { broker, engine, logs, send } = await setup({ kind: 'codex-queue', push: async () => pending.promise });
   broker.config.codex.queue_timeout_ms = 10;
   try {
     const message = await send('late');
@@ -108,7 +109,7 @@ it('does not record a late transport completion after drain expires and the db c
 });
 
 it('a bounded drain cancels active and later chunks, keeping already queued chunks pushed (final Codex I-10)', async () => {
-  const { broker, engine, logs } = setup(new CodexQueueTransport(FAKE_CODEX, 5000));
+  const { broker, engine, logs } = await setup(new CodexQueueTransport(FAKE_CODEX, 5000, async () => null));
   broker.config.codex.queue_timeout_ms = 100;
   const log = join(broker.home, 'calls.jsonl');
   process.env.FAKE_CODEX_LOG = log;
