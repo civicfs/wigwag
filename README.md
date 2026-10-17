@@ -142,6 +142,19 @@ verified MCP process is ignored until a trusted hook binds the conversation;
 switch records never redirect a connection to another slot. If the earlier split
 could not record a complete verified MCP identity, its old hint is ignored for
 every reconnecting MCP, even if identity capture later succeeds.
+If its MCP link is disconnected, a hook reporting a different conversation is
+refused until the MCP reconnects. The old conversation keeps its mailbox; the
+next trusted hook performs the split after reconnect.
+
+A raw Claude `session.bind` cannot change an existing native ID or claim another
+canonical slot. Trusted hooks provide that identity. In the same workspace, a
+trusted hook can detach a holder positively recorded as a raw or legacy binding:
+the holder's connection gets a fresh unbound slot, and its own name, mail,
+assignments and relays remain on its old offline slot. None of that work transfers
+to the trusted caller. Missing historical origin evidence is protected instead;
+doctor reports `binding-origin-unknown`. Run a trusted hook in the original
+Claude session, or inspect `wigwag recovery --json` before retiring an offline
+duplicate. A missing stamp alone never authorizes displacement.
 
 Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
 a shared tree-root ID. `whoami` reports `unavailable` with reason
@@ -564,6 +577,7 @@ your existing values.
 | Claude does not receive pushes | Launch with `wigwag claude`; plain Claude holds messages for the next boundary |
 | Routine traffic is throttled | Wait for the cooldown or use `wigwag release-throttle <from> <to>` |
 | A native question remains pending | Inspect `questions` and `question_details`; the lead should yield its turn while waiting for workers |
+| A Codex answer has an unknown submission outcome | Inspect the native thread, then use `wigwag questions resolve <relay-id> --cancel` or `--delivered`; neither sends another answer |
 | New tools are missing after an upgrade | Reload Claude plugins or restart Codex and trust changed hooks |
 | Broker/delivery errors | Read `~/.wigwag/logs/broker.log` |
 | Claude hook errors | Read `~/.wigwag/logs/hooks.log` |
@@ -577,6 +591,10 @@ the native thread, the owner can run `wigwag questions resolve <relay-id> --canc
 or `--delivered`. Cancellation prevents retry and retains the unknown native
 outcome in history; confirmation records delivery. Neither command resends an answer. Broker recovery rechecks identities, scope, cancellation, and
 human answers before applying a saved relay answer.
+On upgrade to V4, already-answered Codex sync/async relays conservatively become
+`submission_state=unknown`: the old database cannot prove whether native input
+was sent. Already-applied relays become `confirmed`. Inspect each unknown outcome
+before using the resolution commands; upgrading never retries it automatically.
 
 ## Limitations
 

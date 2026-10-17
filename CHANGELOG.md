@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Refuse raw Claude binds that change a native ID or claim another canonical
+  slot. Trusted same-workspace hooks detach only positively recorded raw/legacy
+  holders, preserving their work on the old offline slot. Protect unstamped
+  historical holders and show `binding-origin-unknown` in doctor/recovery.
+- Refuse Claude conversation changes reported while the MCP is disconnected;
+  reconnect and a later trusted hook split the slots without exposing old mail.
+- On V4 upgrade, mark answered Codex sync/async relays as submission unknown and
+  applied relays as confirmed. Inspect unknown outcomes with `wigwag questions`
+  and explicitly resolve them with `wigwag questions resolve <id> --cancel` or
+  `--delivered`; neither operation sends native input or permits automatic retry.
+
 - Refuse rehearsal through case/firmlink or HOME-override aliases by comparing
   account/default-home filesystem identity, including missing leaves. Startup
   rejects every recorded broker.sock entry before probing or migrating.
