@@ -56,10 +56,11 @@ resolution; PID reuse within the same second by the same uid cannot be distingui
 
 ## Install
 
-Version **0.2.0** is the first public source release. GitHub releases and npm
+The current source release is **0.3.0**. GitHub releases and npm
 packages are published separately; check the [npm package page](https://www.npmjs.com/package/@civicfs/wigwag)
-for registry availability. Live native-question tests used macOS, Claude Code
-**2.1.296**, and Codex **0.162.1**. Automated CI passes on macOS and Linux; real
+for registry availability. Live native-question tests (0.2.0) used macOS, Claude Code
+**2.1.296**, and Codex **0.162.1**; 0.3.0's new behaviour is covered by automated tests
+with fake native hosts and has not had a separate live acceptance pass. Automated CI passes on macOS and Linux; real
 provider integration on Linux has not been tested end to end. See the
 [verification report](docs/native-question-relay-2026-10-13.md).
 

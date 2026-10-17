@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-16
 
 - Add Codex host `codex-mcp-client` 0.163.0 to the built-in verified push list
   (owner-approved; 0.162.1 remains the source-audited version).
