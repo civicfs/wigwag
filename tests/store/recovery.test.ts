@@ -117,6 +117,23 @@ const assign = (worker: SessionRow, lead: SessionRow) => {
 };
 
 describe('recovery candidates', () => {
+  it('revalidates the canonical generation inside the Codex adoption transaction', () => {
+    const old = mk({ agent: 'codex', name: 'canonical', native: 'T', detached: true }),
+      fresh = mk({ agent: 'codex', name: 'new-worker' });
+    db.prepare('UPDATE sessions SET conn_generation=conn_generation+1 WHERE id=?').run(old.id);
+    expect(
+      adoptCanonical(db, {
+        provisionalId: fresh.id,
+        canonicalId: old.id,
+        native: 'T',
+        state: 'online-idle',
+        evidence: {},
+        codexReattach: { canonicalGeneration: old.conn_generation, provisionalGeneration: fresh.conn_generation },
+      }),
+    ).toEqual({ ok: false, reason: 'canonical-changed' });
+    expect(getSession(db, fresh.id)?.retired_into).toBeNull();
+    expect(getSession(db, old.id)?.name).toBe('canonical');
+  });
   it('only offline, unretired, same agent/native/workspace slots that are named or assigned', () => {
     const me = mk({ ppid: 600 });
     const good = mk({ name: 'worker-one', native: 'sid-1', offline: true });

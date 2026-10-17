@@ -17,6 +17,7 @@ async function boot() {
   const home = tmpHome();
   const state = {
     frontend: true,
+    loaded: ['worker'],
     unavailable: false,
     subscribers: 0,
     resumes: 0,
@@ -32,7 +33,7 @@ async function boot() {
     async call(method: string, p: { threadId?: string }) {
       if (state.unavailable) throw new Error('fixture metadata unavailable');
       return method === 'thread/loaded/list'
-        ? { data: state.frontend || state.subscribers ? ['worker'] : [] }
+        ? { data: state.frontend || state.subscribers ? state.loaded : [] }
         : { thread: { id: p.threadId, sessionId: p.threadId, source: 'cli', parentThreadId: null } };
     }
     send() {}
@@ -137,6 +138,60 @@ async function boot() {
   return { home, state, broker, lead, worker, capture, request };
 }
 describe('demand-driven Codex question subscriptions', () => {
+  it.each(['generation', 'offline', 'disconnected'])(
+    'rejects the queue reservation itself when %s changes during attachment',
+    async (change) => {
+      const f = await boot();
+      await until(() => f.state.subscribers === 0, 1000);
+      const queued = f.state.queueCalls;
+      const s = getSession(f.broker.db, f.worker.welcome.session_id);
+      if (!s) throw new Error('missing worker');
+      f.state.onResume = () => {
+        const clause =
+          change === 'generation'
+            ? 'conn_generation=conn_generation+1'
+            : change === 'offline'
+              ? "state='offline'"
+              : "link='disconnected'";
+        f.broker.db.prepare(`UPDATE sessions SET ${clause} WHERE id=?`).run(s.id);
+      };
+      if (!f.broker.questions.reserveCodexPush) throw new Error('missing reservation');
+      await expect(f.broker.questions.reserveCodexPush(s)).rejects.toThrow(
+        change === 'generation' ? /binding or assignment changed/ : change === 'offline' ? /offline/ : /disconnected/,
+      );
+      await until(() => f.state.subscribers === 0, 1000);
+      expect(f.state.queueCalls).toBe(queued);
+    },
+  );
+  it('does not revalidate another worker’s relay when duplicate native IDs exist', async () => {
+    const f = await boot();
+    f.state.loaded.push('other');
+    const other = await mcpClient(f.home, { agent: 'codex', requested_name: 'other-worker' });
+    cleanup.push(() => other.client.destroy());
+    await other.client.call('session.bind', { agent_session_id: 'other', question_relay_version: 1 });
+    await f.lead.client.call('assignment.delegate', {
+      to: 'other-worker',
+      subject: 'other task',
+      body: 'b',
+      idempotency_key: 'other',
+    });
+    const q = f.broker.questions.capture(other.welcome.session_id, {
+      native_session_id: 'other',
+      turn_id: 'other-turn',
+      tool_use_id: 'other-call',
+      kind: 'codex',
+      questions: [{ id: 'q', header: '', question: 'Other?', options: [], allowOther: true, multiSelect: false }],
+    });
+    if (!q) throw new Error('missing foreign relay');
+    // Fault-injected historical duplicate ID: ownership still comes from the assignment, never the shared UUID.
+    f.broker.db.prepare("UPDATE question_relays SET native_session_id='worker' WHERE id=?").run(q.id);
+    const worker = getSession(f.broker.db, f.worker.welcome.session_id);
+    if (!worker) throw new Error('missing worker');
+    f.broker.questions.codexWaiting.delete(worker.id);
+    f.broker.questions.revalidateCodexMcp?.(worker);
+    expect(f.broker.questions.codexWaiting.has(worker.id)).toBe(false);
+    expect(f.broker.questions.get(q.id)?.state).toBe('pending');
+  });
   it('reattaches at a queued turn’s trusted prompt hook after the prior busy turn and idle grace, relaying exactly once', async () => {
     const { state, broker, lead, worker, capture, request } = await boot();
     await worker.client.call('session.turn', { phase: 'started' });

@@ -7,6 +7,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { startBroker as assemble } from '../../src/broker/assemble.js';
 import { configPath, loadConfig } from '../../src/config.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
+import { getSession } from '../../src/store/sessions.js';
+import type { TransportRegistry } from '../../src/transports/types.js';
 import { fixtureCodexNames, mcpClient, ownerClient, startBroker, tmpHome, until } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
@@ -116,6 +118,15 @@ it('never constructs native adapters, probes, watchers or pushes with retained a
   expect(push).not.toHaveBeenCalled();
   expect(refresh).not.toHaveBeenCalled();
   expect(connections).toBe(0);
+  // Exercise the transports themselves: a missing push-trust verdict must not mask an enabled native transport.
+  const slot = getSession(broker.db, worker.welcome.session_id);
+  if (!slot) throw new Error('missing copied slot');
+  const registry = (broker.engine as unknown as { d: { transports: TransportRegistry } }).d.transports;
+  for (const transport of Object.values(registry)) {
+    await expect(transport.push(slot, [])).rejects.toThrow(/rehearsal disables native pushes/i);
+    expect(transport.hasChannel?.(slot)).toBe(false);
+  }
+  expect(push).not.toHaveBeenCalled();
 });
 it.each(['mcp', 'hook'] as const)(
   'accepts owners only (refuses %s), before any native identity or session is created',

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { capabilitiesFor } from '../../src/broker/capabilities.js';
 import { CodexNames } from '../../src/native/codex-names.js';
-import { deliveriesOfMessage } from '../../src/store/messages.js';
+import { deliveriesOfMessage, insertMessage } from '../../src/store/messages.js';
 import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { addThrottle } from '../../src/store/subs.js';
 import { mcpClient, ownerClient, startBroker, tmpHome, until } from '../helpers.js';
@@ -74,6 +74,112 @@ async function boot() {
   return { home, app, broker, pushes, pushedMail, o, c, send };
 }
 describe('Codex push trust at bind, probe and dispatch', () => {
+  it.each(['hold', 'push'])(
+    'rechecks delivery ownership after trust I/O before a %s, including a forwarded ride-along',
+    async (mode) => {
+      const f = await boot();
+      await f.c.client.call('session.bind', { agent_session_id: 'T' });
+      const owner = getSession(f.broker.db, f.c.welcome.session_id);
+      if (!owner) throw new Error('missing owner');
+      const other = createSession(f.broker.db, {
+        agent: 'codex',
+        cwd: owner.cwd,
+        workspace: owner.workspace,
+        pid_chain: [],
+        mcp_ppid: null,
+      });
+      claimName(f.broker.db, other.id, 'other-worker', 'custom');
+      setState(f.broker.db, other.id, 'offline');
+      let enter = () => {},
+        release = () => {};
+      const entered = new Promise<void>((r) => {
+          enter = r;
+        }),
+        gate = new Promise<void>((r) => {
+          release = r;
+        });
+      f.broker.checkCodexPush = async () => {
+        enter();
+        await gate;
+        return mode === 'hold' ? 'app-server-unavailable' : null;
+      };
+      const wake = await f.send();
+      try {
+        await entered;
+        f.broker.db.prepare('UPDATE deliveries SET forward_to=? WHERE message_id=?').run(other.id, wake.id);
+        // A physical old address legitimately rides along for this session through durable forward_to ownership.
+        const ride = insertMessage(
+          f.broker.db,
+          {
+            from_name: 'owner',
+            to_target: 'old-address',
+            kind: 'message',
+            priority: 'low',
+            subject: 'ride',
+            body: 'owned ride',
+            attachments: [],
+            reply_to: null,
+            request_id: null,
+            expires_at: null,
+            stream: null,
+          },
+          ['old-address'],
+        );
+        f.broker.db
+          .prepare("UPDATE deliveries SET state='held',hold_reason='low',forward_to=? WHERE message_id=?")
+          .run(owner.id, ride.id);
+        release();
+        await f.c.client.call('sys.ping');
+        if (mode === 'push') await until(() => deliveriesOfMessage(f.broker.db, ride.id)[0]?.state === 'read');
+        expect(f.pushedMail.filter((x) => x.session === owner.id).flatMap((x) => x.messages)).not.toContain(wake.id);
+        if (mode === 'push') expect(f.pushedMail.flatMap((x) => x.messages)).toContain(ride.id);
+        else
+          expect(deliveriesOfMessage(f.broker.db, wake.id)[0]).toMatchObject({
+            state: 'pending',
+            hold_reason: null,
+            forward_to: other.id,
+          });
+      } finally {
+        release();
+      }
+    },
+  );
+  it('replans after generation changes during trust I/O even when every delivery still belongs to the same slot', async () => {
+    const f = await boot();
+    await f.c.client.call('session.bind', { agent_session_id: 'T' });
+    const s = getSession(f.broker.db, f.c.welcome.session_id);
+    if (!s) throw new Error('missing slot');
+    let enter = () => {},
+      release = () => {};
+    const entered = new Promise<void>((r) => {
+        enter = r;
+      }),
+      gate = new Promise<void>((r) => {
+        release = r;
+      }),
+      generations: number[] = [];
+    f.broker.checkCodexPush = async (current) => {
+      generations.push(current.conn_generation);
+      if (generations.length === 1) {
+        enter();
+        await gate;
+        return null;
+      }
+      return 'app-server-unavailable';
+    };
+    const wake = await f.send();
+    try {
+      await entered;
+      f.broker.db.prepare('UPDATE sessions SET conn_generation=conn_generation+1 WHERE id=?').run(s.id);
+      release();
+      await until(() => deliveriesOfMessage(f.broker.db, wake.id)[0]?.state === 'held');
+      expect(generations).toEqual([s.conn_generation, s.conn_generation + 1]);
+      expect(f.pushedMail).toEqual([]);
+      expect(deliveriesOfMessage(f.broker.db, wake.id)[0]?.hold_reason).toBe('codex-untrusted');
+    } finally {
+      release();
+    }
+  });
   it('never collects a replacement holder’s low mail after a rename during metadata preflight', async () => {
     const { home, app, broker, pushedMail, o, c } = await boot();
     app.loaded.push('U');

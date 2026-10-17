@@ -93,6 +93,24 @@ async function boot() {
   return { home, broker, connect, hook, event, send, retainWork, owner };
 }
 describe('untrusted binds cannot move or block trusted state', () => {
+  it('a trusted hook cannot detach a proven raw squatter in another workspace', async () => {
+    const f = await boot(),
+      squatter = await f.connect(100, { requested_name: 'squatter-one' });
+    await squatter.client.call('session.bind', { agent_session_id: 'N' });
+    const { assignment, mail } = await f.retainWork(squatter.welcome.session_id, 'squatter-one');
+    const elsewhere = tmpHome(),
+      real = await f.connect(200, { cwd: elsewhere }),
+      h = await f.hook();
+    expect(await h.call('hook.event', { ...f.event(200), cwd: elsewhere })).toMatchObject({ bound: false });
+    expect(await squatter.client.call('session.whoami')).toMatchObject({
+      id: squatter.welcome.session_id,
+      bound: true,
+    });
+    expect(getSession(f.broker.db, squatter.welcome.session_id)?.agent_session_id).toBe('N');
+    expect(f.broker.questions.assignment(assignment.id)?.worker_session_id).toBe(squatter.welcome.session_id);
+    expect(deliveriesOfMessage(f.broker.db, mail.id)[0]?.state).toBe('held');
+    expect(JSON.stringify(await real.client.call('msg.inbox'))).not.toContain(mail.id);
+  });
   it.each([false, true])(
     'raw Claude bind refuses an existing canonical slot (legacy=%s), then its trusted hook recovers',
     async (old) => {

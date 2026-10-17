@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CodexNames } from '../../src/native/codex-names.js';
 import type { AppFrame } from '../../src/questions/app-server.js';
 import { asyncReply } from '../../src/questions/native.js';
+import { recordBindingOrigin } from '../../src/store/binding-origin.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
+import * as recovery from '../../src/store/recovery.js';
 import { recordLineage } from '../../src/store/recovery.js';
 import { bindAgentSession, claimName, createSession, getSession } from '../../src/store/sessions.js';
 import { DIST_MAIN, mcpClient, ownerClient, startBroker, tmpHome, until } from '../helpers.js';
@@ -13,6 +15,7 @@ import { DIST_MAIN, mcpClient, ownerClient, startBroker, tmpHome, until } from '
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
+  vi.restoreAllMocks();
 });
 class Metadata extends EventEmitter {
   loaded = ['T'];
@@ -178,6 +181,113 @@ async function asyncQuestion() {
   return { f, native, q, item };
 }
 describe('verified Codex MCP reattachment without a remembered slot', () => {
+  it.each(['ambiguous', 'switched-away'])(
+    'refuses an initially %s holder before any metadata await',
+    async (condition) => {
+      const f = await boot();
+      await f.disconnect();
+      const old = getSession(f.broker.db, f.old.welcome.session_id);
+      if (!old) throw new Error('missing holder');
+      if (condition === 'ambiguous') {
+        const duplicate = createSession(f.broker.db, {
+          agent: 'codex',
+          cwd: f.home,
+          workspace: old.workspace,
+          pid_chain: [],
+          mcp_ppid: null,
+        });
+        bindAgentSession(f.broker.db, duplicate.id, 'T');
+        // Both candidates pass the later per-holder checks, regardless of row ordering.
+        f.broker.db
+          .prepare(
+            "UPDATE sessions SET link='disconnected',bind_origin='hook-verified',host_client_name='codex-mcp-client',host_client_version='0.162.1' WHERE id=?",
+          )
+          .run(duplicate.id);
+      } else
+        recordLineage(f.broker.db, {
+          agent: 'codex',
+          native_id: 'other',
+          previous_native_id: 'T',
+          workspace: old.workspace,
+          session_id: old.id,
+          cause: 'switch',
+          outcome: 'observed',
+          reason: 'conversation-split',
+          evidence: {},
+        });
+      if (!f.broker.codexNames) throw new Error('missing reader');
+      const fresh = await f.connect(),
+        metadata = vi.spyOn(f.broker.codexNames, 'loadedThreads');
+      await expect(fresh.client.call('session.bind', { agent_session_id: 'T' })).rejects.toMatchObject({
+        code: 'conflict',
+      });
+      expect(metadata).not.toHaveBeenCalled();
+      expect(getSession(f.broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
+    },
+  );
+  it.each(['duplicate', 'switched-away'])('refuses a %s that appears only during metadata I/O', async (change) => {
+    const f = await boot();
+    await f.disconnect();
+    const fresh = await f.connect(),
+      old = getSession(f.broker.db, f.old.welcome.session_id);
+    if (!old) throw new Error('missing holder');
+    let enter = () => {},
+      release = () => {};
+    const entered = new Promise<void>((r) => {
+        enter = r;
+      }),
+      gate = new Promise<void>((r) => {
+        release = r;
+      });
+    f.app.pauseRead = { entered: enter, gate };
+    const binding = fresh.client.call('session.bind', { agent_session_id: 'T' }),
+      refused = expect(binding).rejects.toMatchObject({ code: 'conflict' });
+    await entered;
+    try {
+      if (change === 'duplicate') {
+        const duplicate = createSession(f.broker.db, {
+          agent: 'codex',
+          cwd: f.home,
+          workspace: old.workspace,
+          pid_chain: [],
+          mcp_ppid: null,
+        });
+        bindAgentSession(f.broker.db, duplicate.id, 'T');
+        // Offline: live-holder/adoption guards cannot accidentally cover the post-await duplicate test.
+        f.broker.db.prepare("UPDATE sessions SET state='offline',link='disconnected' WHERE id=?").run(duplicate.id);
+      } else
+        recordLineage(f.broker.db, {
+          agent: 'codex',
+          native_id: 'other',
+          previous_native_id: 'T',
+          workspace: old.workspace,
+          session_id: old.id,
+          cause: 'switch',
+          outcome: 'observed',
+          reason: 'conversation-split',
+          evidence: {},
+        });
+    } finally {
+      release();
+    }
+    await refused;
+    expect(getSession(f.broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
+    expect(f.broker.questions.assignment(f.assignment.id)?.worker_session_id).toBe(old.id);
+    expect(JSON.stringify(await fresh.client.call('msg.inbox'))).not.toContain(f.mail.id);
+  });
+  it('routes a disconnected proven-untrusted holder to detachment instead of verified reattach', async () => {
+    const f = await boot();
+    await f.disconnect();
+    const old = getSession(f.broker.db, f.old.welcome.session_id);
+    if (!old) throw new Error('missing holder');
+    recordBindingOrigin(f.broker.db, old, 'legacy-unverified');
+    const fresh = await f.connect();
+    await fresh.client.call('session.bind', { agent_session_id: 'T' });
+    expect(await fresh.client.call('session.whoami')).toMatchObject({ id: fresh.welcome.session_id, bound: true });
+    expect(getSession(f.broker.db, old.id)?.agent_session_id).toBeNull();
+    expect(f.broker.questions.assignment(f.assignment.id)?.worker_session_id).toBe(old.id);
+    expect(JSON.stringify(await fresh.client.call('msg.inbox'))).not.toContain(f.mail.id);
+  });
   it.each(['cancel', 'delivered'] as const)(
     'holds a durable unknown async outcome across restart until the owner resolves it as %s',
     async (outcome) => {
@@ -616,6 +726,7 @@ describe('verified Codex MCP reattachment without a remembered slot', () => {
         release = r;
       });
     f.app.pauseRead = { entered: enter, gate };
+    const adopting = vi.spyOn(recovery, 'adoptCanonical');
     const binding = fresh.client.call('session.bind', { agent_session_id: 'T' });
     const refused = expect(binding).rejects.toMatchObject({ code: 'conflict' });
     await entered;
@@ -636,6 +747,9 @@ describe('verified Codex MCP reattachment without a remembered slot', () => {
       release();
     }
     await refused;
+    // M5 guards before entering the transaction. M17 repeats it with no await in between in this production path.
+    // The direct store regression covers M17 independently for callers of adoptCanonical.
+    if (change === 'generation-after-restart') expect(adopting).not.toHaveBeenCalled();
     expect(getSession(f.broker.db, fresh.welcome.session_id)?.retired_into).toBeNull();
     expect(f.broker.questions.assignment(f.assignment.id)?.worker_session_id).toBe(f.old.welcome.session_id);
     expect(deliveriesOfMessage(f.broker.db, f.mail.id)[0]?.state).toBe('held');
