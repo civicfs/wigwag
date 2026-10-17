@@ -372,3 +372,25 @@ export async function cmdRecovery(args: string[]): Promise<void> {
     out(parts.length ? parts.join('\n\n') : 'nothing to resolve');
   });
 }
+
+export async function cmdQuestions(args: string[]): Promise<void> {
+  if (args[0] === 'resolve') {
+    const { positionals, values } = parseCli({
+      args: args.slice(1),
+      allowPositionals: true,
+      options: { cancel: { type: 'boolean' }, delivered: { type: 'boolean' } },
+    });
+    if (positionals.length !== 1 || !!values.cancel === !!values.delivered) throw usageError('questions');
+    return withOwner(async (c) => {
+      const result = await c.call('owner.resolve_question', {
+        relay_id: positionals[0],
+        outcome: values.cancel ? 'cancel' : 'delivered',
+      });
+      out(JSON.stringify(result));
+    });
+  }
+  if (args.some((a) => a !== '--json')) throw usageError('questions');
+  return withOwner(async (c) => {
+    out(JSON.stringify(await c.call('question.list', { include_history: false, limit: 10 }), null, 2));
+  });
+}

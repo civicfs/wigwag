@@ -146,6 +146,10 @@ export const METHODS = {
   ),
   'assignment.release': m('session+owner', z.object({ assignment_id: z.string().min(1) })),
   'question.answer': m('session', z.object({ relay_id: z.string().min(1), answers: AnswersZ })),
+  'owner.resolve_question': m(
+    'owner',
+    z.object({ relay_id: z.string().min(1), outcome: z.enum(['cancel', 'delivered']) }).strict(),
+  ),
   'question.list': m(
     'session+owner',
     z.object({

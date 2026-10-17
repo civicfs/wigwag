@@ -135,3 +135,8 @@ override never enables native I/O. A mode-0600 `rehearsal.json` marker records t
 normal CLI/broker refuse that home until the owner explicitly clears it with `wigwag rehearsal clear` while stopped.
 Clearing the marker does not erase retained data or change config; a subsequent normal start may contact integrations
 and apply retained answers. Old binaries do not honor this marker. Rehearsal never makes or removes a live-data copy.
+
+Native Codex question relays retain a local submission state before sending an answer. Unknown outcomes are not
+automatically repeated after reload or restart. The original acknowledgement, matching native history or an explicit
+owner confirmation resolves them; cancellation prevents retry and keeps the unknown outcome in history.
+`wigwag questions resolve` changes only local relay status and never sends another answer.

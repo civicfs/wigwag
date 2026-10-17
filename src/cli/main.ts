@@ -27,6 +27,7 @@ import {
   cmdKv,
   cmdLink,
   cmdLinks,
+  cmdQuestions,
   cmdRecovery,
   cmdReleaseThrottle,
   cmdSend,
@@ -164,6 +165,8 @@ async function main(argv: string[]): Promise<void> {
       return cmdUnlink(tail);
     case 'links':
       return cmdLinks(tail);
+    case 'questions':
+      return cmdQuestions(tail);
     case 'recovery':
       return cmdRecovery(tail);
     case 'tui':

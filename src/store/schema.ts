@@ -300,6 +300,13 @@ ${appendOnly('session_renames')}
 
 /** Metadata-derived Codex push evidence is refreshed at bind/probe and immediately before queueing. */
 export const SCHEMA_V4 = `
+ALTER TABLE question_relays ADD COLUMN submission_state TEXT NOT NULL DEFAULT 'unsent'
+  CHECK (submission_state IN ('unsent', 'unknown', 'confirmed'));
+UPDATE question_relays SET submission_state='confirmed' WHERE state='applied' AND kind IN ('codex', 'codex_async');
+-- Pre-guard answers may already have reached Codex; never automatically repeat them after upgrade.
+UPDATE question_relays SET submission_state='unknown',
+  error=COALESCE(error, 'Native submission outcome unknown after upgrade; inspect native thread and resolve with wigwag questions resolve.')
+  WHERE state='answered' AND kind IN ('codex', 'codex_async');
 ALTER TABLE sessions ADD COLUMN codex_push_reason TEXT DEFAULT 'unverified-bind'
   CHECK (codex_push_reason IN ('shared-root', 'root-not-loaded', 'descendant-loaded', 'app-server-unavailable',
     'unverified-bind', 'too-many-loaded', 'unreadable-loaded'));

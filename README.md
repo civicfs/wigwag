@@ -554,9 +554,13 @@ your existing values.
 | Claude hook errors | Read `~/.wigwag/logs/hooks.log` |
 
 Claude question timeouts leave a visible pending relay ID instead of opening a
-second human question. Ambiguous Codex async submissions fail visibly instead of
-automatically sending a potentially duplicate answer; inspect the native thread
-before retrying. Broker recovery rechecks identities, scope, cancellation, and
+second human question. Both Codex reply kinds claim a durable submission before
+native I/O. An unknown outcome stays held across MCP reloads and broker restarts,
+without automatic resubmission; `questions`, `question_details` and
+`wigwag questions --json` show its submission state and reason. After inspecting
+the native thread, the owner can run `wigwag questions resolve <relay-id> --cancel`
+or `--delivered`. Cancellation prevents retry and retains the unknown native
+outcome in history; confirmation records delivery. Neither command resends an answer. Broker recovery rechecks identities, scope, cancellation, and
 human answers before applying a saved relay answer.
 
 ## Limitations

@@ -64,7 +64,7 @@ export class CodexQuestions {
     for (const q of this.service.list(null).questions) {
       const assignment = this.service.assignment(q.assignment_id);
       if (
-        q.kind !== 'codex' ||
+        !['codex', 'codex_async'].includes(q.kind) ||
         !['pending', 'answered'].includes(q.state) ||
         q.native_session_id !== session.agent_session_id ||
         assignment?.worker_session_id !== session.id ||
@@ -72,7 +72,11 @@ export class CodexQuestions {
       )
         continue;
       const pending = existing?.pending.get(q.id);
-      checks.set(q.id, { requestId: pending?.requestId, sent: pending?.sent ?? false });
+      const previous = this.revalidations.get(session.id)?.get(q.id);
+      checks.set(q.id, {
+        requestId: pending?.requestId ?? previous?.requestId,
+        sent: q.submission_state === 'unknown' || pending?.sent === true || previous?.sent === true,
+      });
     }
     if (checks.size) {
       this.revalidations.set(session.id, checks);
@@ -257,20 +261,45 @@ export class CodexQuestions {
     })();
     return entry.starting;
   }
-  private waiting(session: string, reason: 'native-request-unverified' | 'question-revalidation-unavailable'): void {
+  private waiting(
+    session: string,
+    reason: 'native-request-unverified' | 'question-revalidation-unavailable' | 'submission-outcome-unknown',
+  ): void {
     if (this.service.codexWaiting.get(session) === reason) return;
     this.service.codexWaiting.set(session, reason);
-    this.service.broker.log(`Codex question relay waiting: ${session}: ${reason}; relay retained, no answer submitted`);
+    this.service.broker.log(
+      `Codex question relay waiting: ${session}: ${reason}; relay retained; answers are never repeated while submission evidence is unknown`,
+    );
     this.service.broker.announce(session);
   }
   private revalidationStatus(e: Attached): void {
-    if (!e.revalidation) return;
+    if (!e.revalidation) {
+      if (
+        this.service
+          .list(null)
+          .questions.some(
+            (q) =>
+              q.native_session_id === e.native &&
+              q.state === 'answered' &&
+              q.submission_state === 'unknown' &&
+              this.service.assignment(q.assignment_id)?.worker_session_id === e.session,
+          )
+      )
+        this.waiting(e.session, 'submission-outcome-unknown');
+      else if (this.service.codexWaiting.get(e.session) === 'submission-outcome-unknown') {
+        this.service.codexWaiting.delete(e.session);
+        this.service.broker.announce(e.session);
+      }
+      return;
+    }
     for (const id of e.revalidation.keys()) {
       const q = this.service.get(id);
       if (!q || !['pending', 'answered'].includes(q.state)) e.revalidation.delete(id);
     }
     if (!e.revalidation.size) this.revalidations.delete(e.session);
-    if ([...e.revalidation.keys()].some((id) => !e.pending.has(id)))
+    if ([...e.revalidation.keys()].some((id) => this.service.get(id)?.submission_state === 'unknown'))
+      this.waiting(e.session, 'submission-outcome-unknown');
+    else if ([...e.revalidation.keys()].some((id) => !e.pending.has(id)))
       this.waiting(e.session, 'native-request-unverified');
     else if (this.service.codexWaiting.delete(e.session)) this.service.broker.announce(e.session);
   }
@@ -435,7 +464,11 @@ export class CodexQuestions {
       e.activeTurn = q.turn_id;
       // Pending replay preserves the exact server request ID (0.162.1 outgoing_message.rs:446,582).
       // https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/app-server/src/outgoing_message.rs#L446
-      e.pending.set(q.id, { relay: q, requestId: f.id, sent: expected?.sent ?? false });
+      e.pending.set(q.id, {
+        relay: q,
+        requestId: f.id,
+        sent: q.submission_state === 'unknown' || expected?.sent === true,
+      });
     }
     if (f.method === 'item/completed' && object(p.item)) {
       const item = p.item;
@@ -447,7 +480,12 @@ export class CodexQuestions {
             normalizeNative('codex', 'request_user_input_async', { questions: item.questions })?.questions,
           ) === JSON.stringify(q.questions)
         ) {
-          if (!e.pending.has(q.id)) e.pending.set(q.id, { relay: q, sent: false });
+          if (!e.pending.has(q.id))
+            e.pending.set(q.id, {
+              relay: q,
+              sent: q.submission_state === 'unknown' || e.revalidation?.get(q.id)?.sent === true,
+            });
+          if (q.submission_state === 'unknown') this.waiting(e.session, 'submission-outcome-unknown');
           if (!e.recovering) e.activeTurn = q.turn_id;
         }
       }
@@ -503,14 +541,25 @@ export class CodexQuestions {
   }
   private flush(): void {
     if (this.stopped) return;
-    for (const e of this.attached.values())
+    for (const e of this.attached.values()) {
       for (const [id, pending] of e.pending) {
+        const current = this.service.get(id);
+        if (!current || !['pending', 'answered'].includes(current.state)) {
+          e.pending.delete(id);
+          continue;
+        }
         if (pending.sent || e.closed || e.recovering) continue;
         const q = this.service.answerFor(id, e.session);
         const a = q && this.service.assignment(q.assignment_id);
         const pair = a && this.service.participants(a);
         if (!q?.answers || !pair) continue;
         pending.sent = true;
+        if (!this.service.claimSubmission(id, e.session)) {
+          if (this.service.get(id)?.submission_state === 'unknown')
+            this.waiting(e.session, 'submission-outcome-unknown');
+          continue;
+        }
+        this.waiting(e.session, 'submission-outcome-unknown');
         const revalidation = e.revalidation?.get(id);
         if (revalidation) revalidation.sent = true;
         try {
@@ -525,24 +574,31 @@ export class CodexQuestions {
               : e.app.call('turn/start', { threadId: e.native, input });
             sending
               .then(() => {
+                if (this.stopped) return;
                 e.pending.delete(id);
                 this.service.applied(id);
               })
               .catch((err) => {
+                if (this.stopped) return;
                 e.pending.delete(id);
-                this.service.fail(
+                this.service.unknownSubmission(
                   id,
-                  'Native async acknowledgement unavailable; input may already be accepted. Inspect the native thread before explicitly retrying.',
+                  `Native async acknowledgement unavailable; input may already be accepted. No automatic retry. Inspect the native thread, then use wigwag questions resolve ${id} --cancel or --delivered.`,
                 );
                 this.log(err);
               });
           }
         } catch (err) {
-          pending.sent = false;
-          if (revalidation) revalidation.sent = false;
+          this.service.unknownSubmission(
+            id,
+            `Native submission acknowledgement unavailable; no automatic retry. Inspect the native thread, then use wigwag questions resolve ${id} --cancel or --delivered.`,
+          );
+          this.waiting(e.session, 'submission-outcome-unknown');
           this.log(err);
         }
       }
+      this.revalidationStatus(e);
+    }
   }
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;

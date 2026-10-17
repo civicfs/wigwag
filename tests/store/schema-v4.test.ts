@@ -23,6 +23,52 @@ const fixture = (version = 3) => {
 };
 describe('schema v4 Codex push holds', () => {
   it.each([2, 3])(
+    'preserves legacy relay data and marks already-answered native submissions unknown from v%s',
+    (version) => {
+      const file = fixture(version),
+        old = new DatabaseSync(file);
+      old.exec(`INSERT INTO sessions(id,name,agent,agent_session_id,cwd,workspace,pid_chain,state,transport,created_at,last_seen_at) VALUES('lead','leader','claude','L','/fixture','/fixture','[]','offline','claude-channel','t','t');
+      INSERT INTO assignments(id,orchestrator_session_id,orchestrator_native_id,worker_session_id,worker_native_id,idempotency_key,payload_json,task_message_id,created_at) VALUES('a','lead','L','codex-old','T','key','{}','m','t');`);
+      for (const [id, kind, state] of [
+        ['sync', 'codex', 'answered'],
+        ['async', 'codex_async', 'answered'],
+        ['pending', 'codex_async', 'pending'],
+        ['applied', 'codex_async', 'applied'],
+      ])
+        old
+          .prepare(
+            'INSERT INTO question_relays(id,assignment_id,native_session_id,turn_id,tool_use_id,kind,questions_json,answers_json,message_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+          )
+          .run(id, 'a', 'T', 'turn', id, kind, '[]', '{}', 'm', state, 't', 't');
+      old.close();
+      const db = openDb(file);
+      try {
+        expect(db.prepare('SELECT id,state,submission_state FROM question_relays ORDER BY id').all()).toEqual([
+          { id: 'applied', state: 'applied', submission_state: 'confirmed' },
+          { id: 'async', state: 'answered', submission_state: 'unknown' },
+          { id: 'pending', state: 'pending', submission_state: 'unsent' },
+          { id: 'sync', state: 'answered', submission_state: 'unknown' },
+        ]);
+        expect(() => db.exec("UPDATE question_relays SET submission_state='invented'")).toThrow(/CHECK/);
+        const backup = new DatabaseSync(`${file}.pre-v4.bak`, { readOnly: true });
+        try {
+          expect(backup.prepare('SELECT answers_json FROM question_relays').all()).toHaveLength(4);
+          expect(
+            (backup.prepare('PRAGMA table_info(question_relays)').all() as Array<{ name: string }>).some(
+              (c) => c.name === 'submission_state',
+            ),
+          ).toBe(false);
+        } finally {
+          backup.close();
+        }
+        expect(statSync(`${file}.pre-v4.bak`).mode & 0o777).toBe(0o600);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  it.each([2, 3])(
     'migrates v%s bindings unverified and widens diagnostic reasons without losing backup data',
     (version) => {
       const file = fixture(version),
@@ -39,6 +85,9 @@ describe('schema v4 Codex push holds', () => {
         for (const reason of ['unverified-bind', 'too-many-loaded', 'unreadable-loaded'])
           db.prepare('UPDATE sessions SET codex_push_reason=?').run(reason);
         expect(() => db.exec("UPDATE sessions SET codex_push_reason='invented'")).toThrow(/CHECK/);
+        expect(
+          (db.prepare('PRAGMA table_info(question_relays)').all() as Array<{ name: string }>).map((c) => c.name),
+        ).toContain('submission_state');
         expect(db.prepare('SELECT forward_to FROM deliveries').get()).toEqual({ forward_to: null });
         db.exec("UPDATE deliveries SET forward_to='codex-old'");
         expect(() => db.exec("UPDATE deliveries SET forward_to='missing-slot'")).toThrow(/FOREIGN KEY/);

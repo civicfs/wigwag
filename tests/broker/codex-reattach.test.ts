@@ -1,12 +1,14 @@
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CodexNames } from '../../src/native/codex-names.js';
 import type { AppFrame } from '../../src/questions/app-server.js';
+import { asyncReply } from '../../src/questions/native.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { recordLineage } from '../../src/store/recovery.js';
 import { bindAgentSession, claimName, createSession, getSession } from '../../src/store/sessions.js';
-import { mcpClient, ownerClient, startBroker, tmpHome, until } from '../helpers.js';
+import { DIST_MAIN, mcpClient, ownerClient, startBroker, tmpHome, until } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
 afterEach(async () => {
@@ -45,12 +47,16 @@ class Metadata extends EventEmitter {
 type NativeQuestions = { request: AppFrame | null; turns: unknown[]; unavailable: boolean; apps: Questions[] };
 class Questions extends EventEmitter {
   sent: unknown[] = [];
+  calls: Array<{ method: string; params: unknown }> = [];
+  onCall?: (method: string, params: unknown) => Promise<void> | void;
   closed = false;
   constructor(private readonly state: NativeQuestions) {
     super();
   }
   async connect() {}
-  async call(method: string) {
+  async call(method: string, params: unknown) {
+    this.calls.push({ method, params });
+    await this.onCall?.(method, params);
     if (this.state.unavailable && ['thread/resume', 'thread/read'].includes(method))
       throw new Error('fixture replay unavailable');
     if (method === 'thread/resume' && this.state.request) this.emit('message', this.state.request);
@@ -68,7 +74,7 @@ async function boot() {
   const home = tmpHome(),
     app = new Metadata();
   const nativeQuestions: NativeQuestions = { request: null, turns: [], unavailable: false, apps: [] };
-  const broker = await startBroker(home, {
+  const options = (): NonNullable<Parameters<typeof startBroker>[1]> => ({
     codexNames: new CodexNames({ factory: () => app, indexPath: join(home, 'missing-index') }),
     codexQuestionFactory: () => {
       const q = new Questions(nativeQuestions);
@@ -80,6 +86,7 @@ async function boot() {
       codex: { kind: 'codex-queue', async push() {} },
     },
   });
+  let broker = await startBroker(home, options());
   cleanup.push(() => broker.stop());
   const connect = async (extra = {}) => {
     const c = await mcpClient(home, { agent: 'codex', cwd: home, ...extra });
@@ -118,9 +125,302 @@ async function boot() {
       link: 'disconnected',
     });
   };
-  return { home, broker, app, connect, old, lead, nativeQuestions, assignment, mail, owner, disconnect };
+  return {
+    home,
+    get broker() {
+      return broker;
+    },
+    app,
+    connect,
+    old,
+    lead,
+    nativeQuestions,
+    assignment,
+    mail,
+    owner,
+    disconnect,
+    restart: async () => {
+      await broker.stop();
+      broker = await startBroker(home, options());
+      await broker.liveness?.probeNow();
+    },
+  };
+}
+async function asyncQuestion() {
+  const f = await boot(),
+    native = f.nativeQuestions.apps.at(-1);
+  if (!native) throw new Error('missing native fixture');
+  const q = f.broker.questions.capture(f.old.welcome.session_id, {
+    native_session_id: 'T',
+    turn_id: 'turn1',
+    tool_use_id: 'async-call',
+    kind: 'codex_async',
+    questions: [
+      {
+        id: 'q1',
+        header: '',
+        question: 'Which?',
+        options: [{ label: 'A', description: '' }],
+        multiSelect: false,
+        allowOther: true,
+      },
+    ],
+  });
+  if (!q) throw new Error('missing relay fixture');
+  const item = {
+    type: 'agentMessage',
+    id: 'async-call',
+    delivery: 'async',
+    questions: [{ title: 'Which?', options: ['A'] }],
+  };
+  native.emit('message', { method: 'item/completed', params: { threadId: 'T', turnId: 'turn1', item } });
+  f.nativeQuestions.turns = [{ id: 'turn1', status: 'inProgress', items: [item] }];
+  return { f, native, q, item };
 }
 describe('verified Codex MCP reattachment without a remembered slot', () => {
+  it.each(['cancel', 'delivered'] as const)(
+    'holds a durable unknown async outcome across restart until the owner resolves it as %s',
+    async (outcome) => {
+      const { f, native, q } = await asyncQuestion();
+      let release = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      native.onCall = async (method) => {
+        if (method.startsWith('turn/')) await gate;
+      };
+      try {
+        await f.lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['A'] } });
+        await until(() => native.calls.some((c) => c.method.startsWith('turn/')));
+        expect(f.broker.questions.get(q.id)).toMatchObject({ state: 'answered', submission_state: 'unknown' });
+        await f.restart();
+        const fresh = await f.connect({ resume_session_id: f.old.welcome.session_id });
+        await fresh.client.call('session.bind', { agent_session_id: 'T', question_relay_version: 1 });
+        await until(
+          () =>
+            f.nativeQuestions.apps.length > 1 &&
+            !!f.nativeQuestions.apps.at(-1)?.calls.some((c) => c.method === 'thread/read'),
+        );
+        const owner = await ownerClient(f.home);
+        cleanup.push(() => owner.destroy());
+        expect(JSON.stringify(await owner.call('question.list', { include_history: false, limit: 10 }))).toContain(
+          'submission_state',
+        );
+        expect(await owner.call('question.details', { relay_id: q.id, offset: 0 })).toMatchObject({
+          state: 'answered',
+          submission_state: 'unknown',
+          error: expect.stringContaining('no automatic retry'),
+        });
+        expect(f.nativeQuestions.apps.flatMap((a) => a.calls).filter((c) => c.method.startsWith('turn/'))).toHaveLength(
+          1,
+        );
+        await expect(fresh.client.call('owner.resolve_question', { relay_id: q.id, outcome })).rejects.toMatchObject({
+          code: 'bad_request',
+        });
+        if (outcome === 'cancel') {
+          const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+            const child = spawn(process.execPath, [DIST_MAIN, 'questions', 'resolve', q.id, '--cancel'], {
+              env: { ...process.env, WIGWAG_HOME: f.home },
+            });
+            let stdout = '',
+              stderr = '';
+            child.stdout.on('data', (d) => (stdout += d));
+            child.stderr.on('data', (d) => (stderr += d));
+            child.on('close', (code) => resolve({ code, stdout, stderr }));
+            child.stdin.end();
+          });
+          expect(result).toMatchObject({ code: 0, stderr: '' });
+          expect(result.stdout).toContain('cancelled');
+        } else await owner.call('owner.resolve_question', { relay_id: q.id, outcome });
+        expect(f.broker.questions.get(q.id)).toMatchObject({
+          state: outcome === 'cancel' ? 'cancelled' : 'applied',
+          submission_state: outcome === 'cancel' ? 'unknown' : 'confirmed',
+        });
+        await expect(owner.call('owner.resolve_question', { relay_id: q.id, outcome })).rejects.toMatchObject({
+          code: 'conflict',
+        });
+        release();
+        await new Promise<void>((r) => setImmediate(r));
+        expect(f.nativeQuestions.apps.flatMap((a) => a.calls).filter((c) => c.method.startsWith('turn/'))).toHaveLength(
+          1,
+        );
+      } finally {
+        release();
+      }
+    },
+  );
+  it('clears the durable async claim only on matching native reply history, and ignores a later rejected old RPC', async () => {
+    const { f, native, q, item } = await asyncQuestion();
+    let reject = (_e: Error) => {};
+    const gate = new Promise<void>((_r, no) => {
+      reject = no;
+    });
+    native.onCall = async (method) => {
+      if (method.startsWith('turn/')) await gate;
+    };
+    try {
+      await f.lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['A'] } });
+      await until(() => native.calls.some((c) => c.method.startsWith('turn/')));
+      f.nativeQuestions.turns = [
+        {
+          id: 'turn1',
+          status: 'inProgress',
+          items: [
+            item,
+            {
+              type: 'userMessage',
+              content: [{ type: 'text', text: asyncReply(q.tool_use_id, q.questions, { q1: ['A'] }, 'lead-one') }],
+            },
+          ],
+        },
+      ];
+      await f.disconnect();
+      const fresh = await f.connect();
+      await fresh.client.call('session.bind', { agent_session_id: 'T', question_relay_version: 1 });
+      await until(() => f.broker.questions.get(q.id)?.state === 'applied');
+      reject(new Error('old acknowledgement unavailable'));
+      await new Promise<void>((r) => setImmediate(r));
+      expect(f.broker.questions.get(q.id)).toMatchObject({
+        state: 'applied',
+        submission_state: 'confirmed',
+        error: null,
+      });
+      expect(f.nativeQuestions.apps.flatMap((a) => a.calls).filter((c) => c.method.startsWith('turn/'))).toHaveLength(
+        1,
+      );
+    } finally {
+      reject(new Error('fixture cleanup'));
+    }
+  });
+  it('does not resend a synchronous answer after broker restart while its acknowledgement is unknown', async () => {
+    const f = await boot(),
+      native = f.nativeQuestions.apps.at(-1);
+    if (!native) throw new Error('missing app');
+    const q = f.broker.questions.capture(f.old.welcome.session_id, {
+      native_session_id: 'T',
+      turn_id: 'turn1',
+      tool_use_id: 'call1',
+      kind: 'codex',
+      questions: [
+        {
+          id: 'q1',
+          header: '',
+          question: 'Which?',
+          options: [{ label: 'A', description: '' }],
+          multiSelect: false,
+          allowOther: true,
+        },
+      ],
+    });
+    if (!q) throw new Error('missing relay');
+    f.nativeQuestions.request = {
+      id: 42,
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'T',
+        turnId: 'turn1',
+        itemId: 'call1',
+        questions: [
+          { id: 'q1', header: '', question: 'Which?', options: [{ label: 'A', description: '' }], isOther: true },
+        ],
+      },
+    };
+    native.emit('message', f.nativeQuestions.request);
+    await f.lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['A'] } });
+    expect(native.sent).toHaveLength(1);
+    await f.restart();
+    const fresh = await f.connect({ resume_session_id: f.old.welcome.session_id });
+    await fresh.client.call('session.bind', { agent_session_id: 'T', question_relay_version: 1 });
+    await until(() => f.nativeQuestions.apps.length > 1);
+    await fresh.client.call('sys.ping');
+    expect(f.nativeQuestions.apps.flatMap((a) => a.sent)).toHaveLength(1);
+    expect(f.broker.questions.get(q.id)).toMatchObject({ state: 'answered', submission_state: 'unknown' });
+    f.nativeQuestions.apps
+      .at(-1)
+      ?.emit('message', { method: 'serverRequest/resolved', params: { threadId: 'T', requestId: 42 } });
+    await until(() => f.broker.questions.get(q.id)?.state === 'applied');
+    expect(f.broker.questions.get(q.id)?.submission_state).toBe('confirmed');
+  });
+
+  it.each(['turn/start', 'turn/steer'])(
+    'does not submit an async answer twice while the old %s acknowledgement is pending across reattach',
+    async (method) => {
+      const f = await boot(),
+        native = f.nativeQuestions.apps.at(-1);
+      if (!native) throw new Error('missing native fixture');
+      let release = () => {},
+        unsubscribe = () => {};
+      const pending = new Promise<void>((r) => {
+          release = r;
+        }),
+        closing = new Promise<void>((r) => {
+          unsubscribe = r;
+        });
+      native.onCall = async (name) => {
+        if (name === method) await pending;
+        if (name === 'thread/unsubscribe') await closing;
+      };
+      const questions = [
+        {
+          id: 'q1',
+          header: '',
+          question: 'Which?',
+          options: [{ label: 'A', description: '' }],
+          multiSelect: false,
+          allowOther: true,
+        },
+      ];
+      const q = f.broker.questions.capture(f.old.welcome.session_id, {
+        native_session_id: 'T',
+        tool_use_id: 'async-call',
+        turn_id: 'turn1',
+        kind: 'codex_async',
+        questions,
+      });
+      if (!q) throw new Error('missing relay fixture');
+      const item = {
+        type: 'agentMessage',
+        id: 'async-call',
+        delivery: 'async',
+        questions: [{ title: 'Which?', options: ['A'] }],
+      };
+      native.emit('message', { method: 'item/completed', params: { threadId: 'T', turnId: 'turn1', item } });
+      if (method === 'turn/start')
+        native.emit('message', {
+          method: 'turn/completed',
+          params: { threadId: 'T', turn: { id: 'turn1', status: 'completed' } },
+        });
+      try {
+        await f.lead.client.call('question.answer', { relay_id: q.id, answers: { q1: ['A'] } });
+        await until(() => native.calls.some((c) => c.method === method));
+        f.nativeQuestions.turns = [
+          { id: 'turn1', status: method === 'turn/start' ? 'completed' : 'inProgress', items: [item] },
+        ];
+        await f.disconnect();
+        const fresh = await f.connect();
+        await fresh.client.call('session.bind', { agent_session_id: 'T', question_relay_version: 1 });
+        await until(
+          () =>
+            f.nativeQuestions.apps.length > 1 &&
+            !!f.nativeQuestions.apps.at(-1)?.calls.some((c) => c.method === 'thread/read'),
+        );
+        await fresh.client.call('sys.ping');
+        const submissions = () =>
+          f.nativeQuestions.apps.flatMap((a) => a.calls).filter((c) => c.method.startsWith('turn/'));
+        expect(submissions()).toHaveLength(1);
+        expect(f.broker.questions.get(q.id)?.state).toBe('answered');
+        expect(JSON.stringify(await fresh.client.call('session.whoami'))).toContain('submission-outcome-unknown');
+        release();
+        unsubscribe();
+        await until(() => f.broker.questions.get(q.id)?.state === 'applied');
+        expect(submissions()).toHaveLength(1);
+      } finally {
+        release();
+        unsubscribe();
+      }
+    },
+  );
+
   it.each([
     'active',
     'answered',

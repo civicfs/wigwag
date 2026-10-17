@@ -747,7 +747,16 @@ recovery may read its own assigned thread history internally (transport limit
 
 On reconnect, async history is replayed before buffered live events and answer
 submission; interrupted turns and existing human replies cancel stale answers.
-An acknowledgement timeout after async submission is ambiguous, so Wigwag marks
-it failed and does not blindly retry. Claude has a separate bounded wait deadline
+Before either Codex reply kind performs native I/O, a single SQL update atomically claims the answered relay with
+`submission_state='unknown'`. The dedicated column is part of unshipped V4; pre-V4 answered Codex relays migrate
+conservatively to unknown, while applied relays become confirmed. MCP reattach and broker restart never repeat an
+unknown submission. The original acknowledgement or matching native history may mark it confirmed/applied;
+missing evidence or a rejected async acknowledgement keeps it answered/unknown with a visible reason in
+question.list, question.details and whoami's question wait status. Late responses cannot revive cancelled relays,
+and stopped adapters never access the closed DB. The owner-only owner.resolve_question RPC and
+`wigwag questions resolve <relay-id> --cancel|--delivered` explicitly resolve an unknown answered relay after
+inspection: cancel excludes it from retries while retaining the unknown native outcome, delivered records an owner
+confirmation. Neither action submits input; model clients cannot call this RPC. A second resolution refuses.
+ Claude has a separate bounded wait deadline
 (default 300 seconds). Timeout/failure returns a visible pending/error result and
 keeps the durable question available for explicit status inspection.

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Claim native Codex question submissions durably before I/O, preventing duplicate
+  async replies across MCP handover and repeat sync/async replies after broker
+  restart. Unknown outcomes remain held and visible; the owner can cancel or
+  confirm delivery after inspection with `wigwag questions resolve`. Amend
+  unshipped V4 with submission_state, preserving migration backups and relay data.
+
 - Require rehearsal-mode broker evidence on owner CLI connections, including
   autospawn and broker control; reject socket symlinks and escaped storage before
   any connection so rehearsal commands cannot reach a normal broker.

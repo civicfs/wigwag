@@ -13,6 +13,15 @@ export interface CommandHelp {
 /** The single source for `--help`, `help`, and every usage error. */
 export const COMMANDS: CommandHelp[] = [
   {
+    name: 'questions',
+    summary: 'inspect relays or resolve an unknown native submission',
+    usage: ['wigwag questions [--json]', 'wigwag questions resolve <relay-id> --cancel|--delivered'],
+    flags: [
+      ['--cancel', 'cancel without retry; native delivery may already have happened'],
+      ['--delivered', 'mark delivered only after inspecting the native thread'],
+    ],
+  },
+  {
     name: 'rehearsal',
     summary: 'explicitly remove a stopped copied home’s rehearsal marker',
     usage: ['wigwag rehearsal clear'],
