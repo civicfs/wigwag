@@ -227,8 +227,12 @@ vitest, linted with biome.
   migrations skip their old snapshots at startup; a retained successful backup alone does not block startup.
 - **Owner-only upgrade rehearsal.** Config `rehearsal.enabled`/`rehearsal.allow_external_paths` default false;
   `WIGWAG_REHEARSAL=1` and `WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS=1` force them on. CLI use requires an explicit
-  absolute WIGWAG_HOME distinct from the default live home (including XDG/symlink aliases) and any running
-  broker's socket home. Before DB open, native socket/binary and effective CODEX_HOME/CLAUDE_CONFIG_DIR paths
+  absolute WIGWAG_HOME distinct from account-home/.wigwag (userInfo, independent of HOME), HOME/.wigwag,
+  configured XDG state home and default .local/state/wigwag paths. Native realpath plus device/inode identity
+  rejects case/firmlink aliases; missing leaves use nearest-existing-parent identity plus case-folded names.
+  Startup refuses any existing broker.sock entry, including stale sockets/files, before probing or DB open;
+  a prepared database/config copy contains no socket. An arbitrary former XDG path cannot be rediscovered once
+  unset; socket refusal and the sticky marker remain the backstops. Before DB open, native socket/binary and effective CODEX_HOME/CLAUDE_CONFIG_DIR paths
   must resolve inside that home unless the explicit external-path override is set. Storage, mutex, logs and
   broker socket paths cannot escape even with that override. Ping/doctor display mode and a loud override warning.
   One shared storage inventory covers blobs/sha256, archive files and SQLite sidecars, migration backups,

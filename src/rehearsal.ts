@@ -1,6 +1,15 @@
-import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import {
+  lstatSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, userInfo } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { BrokerLock } from './broker/lock.js';
 import { canConnect, sockPath } from './client/autospawn.js';
 import type { Config } from './config.js';
@@ -56,7 +65,7 @@ function canonical(path: string, depth = 0): string {
   if (depth > 64) throw new WigwagError('config', 'Rehearsal path has too many symlinks');
   const abs = resolve(path);
   try {
-    return realpathSync(abs);
+    return realpathSync.native(abs);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
     try {
@@ -69,14 +78,40 @@ function canonical(path: string, depth = 0): string {
     return join(canonical(parent, depth + 1), abs.slice(parent.length));
   }
 }
+/** Native realpath alone does not collapse every APFS firmlink; compare filesystem identity as well. */
+function pathIdentity(path: string): { dev: number; ino: number; missing: string } {
+  let existing = resolve(path);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const stat = statSync(existing);
+      return { dev: stat.dev, ino: stat.ino, missing: missing.join('/').toLowerCase() };
+    } catch (e) {
+      if (!['ENOENT', 'ENOTDIR'].includes((e as NodeJS.ErrnoException).code ?? '')) throw e;
+      const parent = dirname(existing);
+      if (parent === existing) throw e;
+      missing.unshift(basename(existing));
+      existing = parent;
+    }
+  }
+}
 export function assertRehearsalHome(home: string): void {
   if (!isAbsolute(home)) throw new WigwagError('config', 'Rehearsal requires an explicit absolute WIGWAG_HOME');
   const actual = canonical(home);
+  const identity = pathIdentity(actual);
+  // userInfo is independent of $HOME. Missing leaves are conservatively case-folded against their existing parent.
+  const accountHomes = new Set([userInfo().homedir, homedir(), process.env.HOME].filter((p): p is string => !!p));
   const defaults = [
-    join(homedir(), '.wigwag'),
+    ...[...accountHomes].flatMap((p) => [join(p, '.wigwag'), join(p, '.local', 'state', 'wigwag')]),
     ...(process.env.XDG_STATE_HOME ? [join(process.env.XDG_STATE_HOME, 'wigwag')] : []),
   ];
-  if (defaults.some((p) => canonical(p) === actual))
+  if (
+    defaults.some((p) => {
+      if (canonical(p) === actual) return true;
+      const candidate = pathIdentity(p);
+      return candidate.dev === identity.dev && candidate.ino === identity.ino && candidate.missing === identity.missing;
+    })
+  )
     throw new WigwagError('config', 'Rehearsal refuses the default live home; use a separate copied WIGWAG_HOME.');
 }
 /** Every implicit writable root/file. Dynamic leaves must also use assertRehearsalStoragePaths before I/O. */
@@ -166,6 +201,16 @@ export async function validateRehearsal(home: string, config: Config, mode = reh
   if (!mode.enabled) return;
   assertRehearsalHome(home);
   assertRehearsalStorage(home);
+  // Startup only: a prepared sqlite backup/config copy contains no socket. Owner inspection connections still work.
+  try {
+    lstatSync(sockPath(home));
+    throw new WigwagError(
+      'config',
+      'Rehearsal refuses an existing broker.sock entry (possibly a running broker); prepare a copy without sockets, or deliberately remove this entry after confirming its broker is stopped.',
+    );
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+  }
   // Every broker owns <home>/broker.sock. Probe only this explicit home (including aliases), never enumerate pids/homes.
   if (await canConnect(sockPath(home), AbortSignal.timeout(1000)))
     throw new WigwagError('config', 'Rehearsal refuses the home of a running broker.');

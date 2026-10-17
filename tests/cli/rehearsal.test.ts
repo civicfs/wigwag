@@ -21,7 +21,7 @@ function fixture() {
     preload = join(home, 'offline.mjs');
   writeFileSync(
     preload,
-    `import { appendFileSync } from 'node:fs'; const localFetch = globalThis.fetch; globalThis.fetch = async (input, options) => { if (String(input?.url ?? input).startsWith('data:')) return localFetch(input, options); appendFileSync(${JSON.stringify(networkCalled)}, 'called'); throw new Error('fixture forbids network'); };`,
+    `import ${JSON.stringify(new URL('../fixtures/private-account-home.mjs', import.meta.url).href)}; import { appendFileSync } from 'node:fs'; const localFetch = globalThis.fetch; globalThis.fetch = async (input, options) => { if (String(input?.url ?? input).startsWith('data:')) return localFetch(input, options); appendFileSync(${JSON.stringify(networkCalled)}, 'called'); throw new Error('fixture forbids network'); };`,
   );
   const config = JSON.parse(readFileSync(configPath(home), 'utf8'));
   config.codex.binary = join(bin, 'codex');

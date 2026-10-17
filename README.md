@@ -281,8 +281,16 @@ temporary leaves are checked again before I/O. Explicit blob exports also stay
 inside the copy; inline inspection remains available. The external-native-path
 override never permits storage or exports outside the copy.
 
-Rehearsal refuses the default live home (including XDG/aliases) and any home
-with a running broker socket. It writes `rehearsal.json` with mode 0600 under
+Rehearsal compares native paths and filesystem device/inode identity against
+the account home (independent of `$HOME`), `$HOME`, configured XDG state home,
+and default `.local/state/wigwag` paths. Case and firmlink aliases are refused;
+missing leaves are conservatively compared through their nearest existing parent.
+Broker startup also refuses every existing `broker.sock` entry, including stale
+sockets and regular files. A prepared database/config copy contains no socket;
+remove a recorded entry deliberately only after confirming its broker is stopped.
+An arbitrary former XDG state path cannot be rediscovered after its variable is
+unset; the socket refusal and sticky marker are the remaining backstops.
+It writes `rehearsal.json` with mode 0600 under
 the broker lock before opening the database, even if migration later fails.
 The updated normal broker and CLI refuse a marked home. To deliberately release
 a stopped copy, use `WIGWAG_HOME=/absolute/path/to/private-copy wigwag rehearsal clear`.

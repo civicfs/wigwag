@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Refuse rehearsal through case/firmlink or HOME-override aliases by comparing
+  account/default-home filesystem identity, including missing leaves. Startup
+  rejects every recorded broker.sock entry before probing or migrating.
+
 - Contain all rehearsal storage through one shared inventory, including blobs,
   archive/SQLite sidecars, backups, logs, sockets and managed temporary files.
   Recheck dynamic blob and export paths before I/O; outside exports are refused
