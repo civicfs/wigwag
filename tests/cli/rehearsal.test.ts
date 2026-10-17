@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { expect, it } from 'vitest';
 import { configPath } from '../../src/config.js';
 import { DIST_MAIN, tmpHome } from '../helpers.js';
@@ -15,13 +16,22 @@ function fixture() {
     writeFileSync(join(bin, name), `#!/bin/sh\ntouch '${called}'\nexit 0\n`);
     chmodSync(join(bin, name), 0o755);
   }
+  // Keep even a regression of the update guard offline; Yoga's embedded WASM uses a local data: fetch.
+  const networkCalled = join(home, 'network-called'),
+    preload = join(home, 'offline.mjs');
+  writeFileSync(
+    preload,
+    `import { appendFileSync } from 'node:fs'; const localFetch = globalThis.fetch; globalThis.fetch = async (input, options) => { if (String(input?.url ?? input).startsWith('data:')) return localFetch(input, options); appendFileSync(${JSON.stringify(networkCalled)}, 'called'); throw new Error('fixture forbids network'); };`,
+  );
   const config = JSON.parse(readFileSync(configPath(home), 'utf8'));
   config.codex.binary = join(bin, 'codex');
   writeFileSync(configPath(home), JSON.stringify(config));
   return {
     home,
     called,
+    networkCalled,
     env: {
+      NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
       WIGWAG_HOME: home,
       WIGWAG_REHEARSAL: '1',
       WIGWAG_REHEARSAL_ALLOW_EXTERNAL_PATHS: '1',
@@ -85,6 +95,7 @@ it.each([
   expect(result.stderr).toMatch(/rehearsal.*disables/i);
   expect(existsSync(f.called)).toBe(false);
   expect(existsSync(join(f.home, 'update-check.json'))).toBe(false);
+  expect(existsSync(f.networkCalled)).toBe(false);
 });
 it('requires an explicit absolute WIGWAG_HOME for rehearsal CLI', async () => {
   const f = fixture();
