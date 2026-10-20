@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1 — 2026-10-20
 
 - Keep requests, responses and replies attached to their original sessions across renames,
   old-name reuse and verified recovery. Schema v5 captures participant IDs and backs up existing

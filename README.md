@@ -36,7 +36,7 @@ Sessions in a Git repository and its worktrees share a workspace automatically.
 Other workspaces need an owner-created link. Wigwag runs on one host; it does not
 currently spawn replacement agents or transfer tasks after a worker fails.
 
-## Parent liveness limits in 0.3.0
+## Parent liveness limits
 
 An idle Codex assignment no longer pins its thread. The question relay attaches at
 turn start and before queue pushes to an assigned worker, stays through queue
@@ -56,10 +56,10 @@ resolution; PID reuse within the same second by the same uid cannot be distingui
 
 ## Install
 
-The current source release is **0.3.0**. GitHub releases and npm
+The current source release is **0.3.1**. GitHub releases and npm
 packages are published separately; check the [npm package page](https://www.npmjs.com/package/@civicfs/wigwag)
 for registry availability. Live native-question tests (0.2.0) used macOS, Claude Code
-**2.1.296**, and Codex **0.162.1**; 0.3.0's new behaviour is covered by automated tests
+**2.1.296**, and Codex **0.162.1**; 0.3.x's new behaviour is covered by automated tests
 with fake native hosts and has not had a separate live acceptance pass. Automated CI passes on macOS and Linux; real
 provider integration on Linux has not been tested end to end. See the
 [verification report](docs/native-question-relay-2026-10-13.md).
