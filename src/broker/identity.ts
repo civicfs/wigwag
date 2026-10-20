@@ -37,6 +37,7 @@ import {
   setState,
 } from '../store/sessions.js';
 import { capabilitiesFor } from './capabilities.js';
+import { isVerifiedCodexBinding } from './codex-push.js';
 import type { Connection } from './connection.js';
 import { parentOnDisconnect, verifyAtStart } from './liveness.js';
 import { isReachable, publicSession } from './registry.js';
@@ -74,6 +75,7 @@ interface WaitingName {
 export function installIdentity(broker: Broker): void {
   const db = broker.db;
   let tick = 0;
+  let stopped = false;
   /** Sessions still on the provisional name the broker gave them (value: their place in event order): only these can take a launcher's name. */
   const provisional = new Map<string, number>();
   /** Held while the launcher's connection is open; gone when it disconnects (codex exited) or the broker restarts. */
@@ -90,6 +92,7 @@ export function installIdentity(broker: Broker): void {
     waiting.delete(w);
   };
   broker.onStop.push(() => {
+    stopped = true;
     for (const w of [...waiting]) dropWaiting(w);
   });
   // After the lock is held, before any connection: every recorded session is from a previous broker. W8: verify each
@@ -484,10 +487,10 @@ export function installIdentity(broker: Broker): void {
     if (!hello.agent || hello.cwd === undefined || !hello.pid_chain) {
       throw new WigwagError('bad_request', 'mcp hello requires agent, cwd and pid_chain');
     }
-    // The only await in hello: everything below runs in one tick. A peer that left meanwhile gets no session (its
+    // A peer that left during workspace/native I/O gets no session (its
     // disconnect already ran, so a session created now would stay online forever).
     const workspace = await broker.workspaces.resolve(hello.cwd);
-    if (conn.closed || conn.failed) throw new WigwagError('transport', 'connection closed during hello');
+    if (stopped || conn.closed || conn.failed) throw new WigwagError('transport', 'connection closed during hello');
     const mcpPid = hello.pid_chain[0];
     conn.mcpIdentity =
       !conn.legacy && hello.agent === 'claude' && mcpPid !== undefined
@@ -518,6 +521,45 @@ export function installIdentity(broker: Broker): void {
     // W8: a new MCP process under the same live Claude parent (plugin reload, MCP crash) re-attaches to its slot.
     if (!s && !ignoredHint && !conn.legacy && hello.agent === 'claude' && hello.mcp_ppid !== undefined)
       s = reattachable(hello.mcp_ppid, workspace, conn);
+    if (
+      s?.agent === 'codex' &&
+      s.state === 'offline' &&
+      s.agent_session_id &&
+      s.bind_origin === 'hook-verified' &&
+      s.codex_push_reason === 'root-not-loaded'
+    ) {
+      // The retained MCP automatically retries this hint after liveness expires it. A reconnect alone cannot
+      // revive a positively unloaded native thread or reserve its former name again.
+      if (conn.legacy || !trustedCodexHost(hello.host_client, broker.config.codex.trusted_host_versions))
+        throw new WigwagError('transport', 'Codex resume requires an active root thread on a supported host');
+      const previous = s;
+      const trust = await broker.codexNames?.pushTrust(s.agent_session_id, true, undefined, true);
+      if (stopped || conn.closed || conn.failed)
+        throw new WigwagError('transport', 'connection closed during Codex resume');
+      const current = getSession(db, previous.id);
+      if (
+        !current ||
+        current.retired_at ||
+        current.agent !== previous.agent ||
+        current.state !== 'offline' ||
+        current.link !== previous.link ||
+        current.conn_generation !== previous.conn_generation ||
+        current.agent_session_id !== previous.agent_session_id ||
+        current.bind_origin !== previous.bind_origin ||
+        current.host_client_name !== previous.host_client_name ||
+        current.host_client_version !== previous.host_client_version ||
+        current.workspace !== previous.workspace ||
+        !isVerifiedCodexBinding(broker, current) ||
+        !trustedCodexHost(hello.host_client, broker.config.codex.trusted_host_versions)
+      )
+        throw new WigwagError('conflict', 'Codex resume binding changed during native verification; retry');
+      if (!trust?.trusted)
+        throw new WigwagError(
+          'transport',
+          `Codex thread is not ready to resume (${trust?.reason ?? 'app-server-unavailable'})`,
+        );
+      s = current;
+    }
     const rejoining = s;
     if (
       rejoining?.agent === 'codex' &&
@@ -669,6 +711,13 @@ export function installIdentity(broker: Broker): void {
         `Name "${name}" is held by ${liveHolderText(caller, r.holder)}`,
         sameScope(caller, r.holder) ? { holder_session_id: r.holder.id } : undefined,
       );
+    }
+    // Startup's explicit register resolves an ambiguous daemon handoff. Consume only its exact, unique intent;
+    // otherwise the still-open launcher would keep later launches in this directory ambiguous.
+    const born = provisional.get(before.id);
+    if (before.agent === 'codex' && born !== undefined) {
+      const matching = [...intents].filter((i) => i.name === name && i.cwd === canonical(before.cwd) && i.seq < born);
+      if (matching.length === 1) intents.delete(matching[0]);
     }
     renamed(before, 'register');
     announce(conn.sessionId as string);

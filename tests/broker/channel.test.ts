@@ -157,7 +157,13 @@ describe('claude channel capability (E-3)', () => {
     const m = await send('no-chan', 'normal', 'LATER');
     a.client.close();
     await settle();
-    const b = await mcpClient(home, { requested_name: 'no-chan', mcp_ppid: 4001, channel: true });
+    // Resume this concrete session: a new holder of the same display name must not inherit its backlog.
+    const b = await mcpClient(home, {
+      requested_name: 'no-chan',
+      mcp_ppid: 4001,
+      channel: true,
+      resume_session_id: a.welcome.session_id,
+    });
     closers.push(() => b.client.close());
     await settle();
     expect(b.pushes).toHaveLength(1);

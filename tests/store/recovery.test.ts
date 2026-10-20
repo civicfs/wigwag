@@ -9,6 +9,7 @@ import {
   liveNativeHolders,
   recordLineage,
   recoveryCandidates,
+  recoverySlot,
   switchedAwayHint,
 } from '../../src/store/recovery.js';
 import {
@@ -153,6 +154,36 @@ describe('recovery candidates', () => {
     const s = mk({ native: 'sid-retired', name: 'retired-role' });
     db.prepare('UPDATE sessions SET retired_at = ? WHERE id = ?').run(nowIso(), s.id);
     expect(liveNativeHolders(db, 'claude', 'sid-retired', 'other')).toEqual([]);
+  });
+
+  it('retains a nameless slot with owned mail when its old name is reclaimed', () => {
+    const shell = mk({ name: 'worker-one', native: 'sid-owned', offline: true });
+    insertMessage(
+      db,
+      {
+        from_name: 'owner',
+        to_target: 'worker-one',
+        kind: 'request',
+        priority: 'low',
+        subject: 'retained request',
+        body: 'private',
+        attachments: [],
+        reply_to: null,
+        request_id: 'req-owned',
+        expires_at: null,
+        stream: null,
+      },
+      ['worker-one'],
+    );
+    const replacement = mk({ name: 'worker-one' });
+    expect(getSession(db, shell.id)?.name).toBeNull();
+    expect(recoverySlot(db, shell.id)?.undelivered).toBe(1);
+    expect(recoverySlot(db, replacement.id)?.undelivered).toBe(0);
+    expect(
+      recoveryCandidates(db, { agent: 'claude', native: 'sid-owned', workspace: '/w', exceptId: 'fresh' }).map(
+        (s) => s.id,
+      ),
+    ).toEqual([shell.id]);
   });
 
   it('ignores provisional and unnamed empty shells while retaining the assigned canonical slot', () => {

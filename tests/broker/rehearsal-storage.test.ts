@@ -160,6 +160,7 @@ it('enumerates all implicit roots/files, current and leftover temporaries, and a
       'state.db-journal',
       'state.db.pre-v3.bak',
       'state.db.pre-v4.bak',
+      'state.db.pre-v5.bak',
       'logs',
       'logs/broker.log',
       'logs/hooks.log',
@@ -174,6 +175,7 @@ it('enumerates all implicit roots/files, current and leftover temporaries, and a
       `broker.lock.${process.pid}.tmp`,
       `state.db.pre-v3.${process.pid}.tmp`,
       `state.db.pre-v4.${process.pid}.tmp`,
+      `state.db.pre-v5.${process.pid}.tmp`,
       'config.json.9876.tmp',
     ]),
   );

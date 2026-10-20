@@ -7,7 +7,6 @@ import { Client } from '../../src/client/client.js';
 import { loadConfig } from '../../src/config.js';
 import { frameLimit } from '../../src/protocol/frame.js';
 import { preV3BackupPath } from '../../src/store/db.js';
-import { insertMessage } from '../../src/store/messages.js';
 import { SCHEMA_V1, SCHEMA_V2 } from '../../src/store/schema.js';
 import { mcpClient, startBroker, tmpHome } from '../helpers.js';
 
@@ -26,24 +25,11 @@ it('migrates v2 duplicates, saves a private backup, and recovers the assigned sl
   insert.run('s-dup1', 'claude-project-ab2c', 'sid-migrated');
   insert.run('s-dup2', 'claude-project-bc3d', 'sid-migrated');
   insert.run('s-dup3', null, 'sid-migrated');
-  const mail = insertMessage(
-    db,
-    {
-      from_name: 'owner',
-      to_target: 'claude-project-ab2c',
-      kind: 'message',
-      priority: 'low',
-      subject: 'retained',
-      body: 'b',
-      attachments: [],
-      reply_to: null,
-      request_id: null,
-      expires_at: null,
-      stream: null,
-    },
-    ['claude-project-ab2c'],
-  );
-  db.prepare("UPDATE deliveries SET state='held', hold_reason='low' WHERE message_id=?").run(mail.id);
+  const mail = { id: 'msg-migrated' };
+  db.exec(`INSERT INTO messages(id,from_name,to_target,kind,priority,subject,body,attachments,created_at)
+    VALUES('msg-migrated','owner','claude-project-ab2c','message','low','retained','b','[]','t');
+    INSERT INTO deliveries(message_id,recipient,state,hold_reason,updated_at)
+    VALUES('msg-migrated','claude-project-ab2c','held','low','t');`);
   db.prepare('INSERT INTO assignments VALUES (?,?,?,?,?,?,?,?,?,NULL)').run(
     'req-migrated',
     's-lead',

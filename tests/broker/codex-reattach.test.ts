@@ -778,9 +778,7 @@ describe('verified Codex MCP reattachment without a remembered slot', () => {
       });
       expect(f.broker.questions.assignment(f.assignment.id)?.worker_session_id).toBe(f.old.welcome.session_id);
       expect(getSession(f.broker.db, fresh.welcome.session_id)?.retired_into).toBe(f.old.welcome.session_id);
-      expect(getSession(f.broker.db, f.old.welcome.session_id)?.codex_push_reason).toBe(
-        descendant ? 'descendant-loaded' : null,
-      );
+      expect(getSession(f.broker.db, f.old.welcome.session_id)?.codex_push_reason).toBeNull();
       expect(JSON.stringify(await fresh.client.call('msg.inbox'))).toContain(f.mail.id);
     },
   );

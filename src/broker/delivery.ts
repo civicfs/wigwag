@@ -17,6 +17,13 @@ import {
   type TransitionPatch,
   transitionIf,
 } from '../store/messages.js';
+import {
+  claimMessageRecipient,
+  claimUnownedRecipients,
+  deliveryOwnedBy,
+  deliveryOwner,
+  messageSender,
+} from '../store/ownership.js';
 import { getSession, holderOf, type SessionRow } from '../store/sessions.js';
 import { activeThrottles, addThrottle, isMuted, isThrottled, releaseThrottle } from '../store/subs.js';
 import type { CodexPushProof, TransportRegistry } from '../transports/types.js';
@@ -129,9 +136,9 @@ export class DeliveryEngine {
   }
 
   /**
-   * Delivered into the model's context (a channel push, a codex queue call, a hook digest): `pushed`, then at once
+   * Accepted by the local transport (a channel write, a Codex queue call, a hook digest): `pushed`, then at once
    * `read`, both logged in delivery_events. The recipient's unread count and default inbox exclude it; history and
-   * `show` keep the transport and both events. Spec §5: delivery into the context counts as reading.
+   * `show` keep the transport and both events. This records local acceptance, not model consumption.
    */
   private delivered(k: Key, onlyFrom: DeliveryState[] | null, patch: TransitionPatch): void {
     const row = this.moveIf(k, onlyFrom, 'pushed', patch);
@@ -145,9 +152,7 @@ export class DeliveryEngine {
   /** A physical delivery key may still carry its former name while a durable handoff is pending. */
   private belongsTo(session: SessionRow, k: Key): boolean {
     const row = deliveriesOfMessage(this.d.db, k.message_id).find((x) => x.recipient === k.recipient);
-    return (
-      !!row && (row.forward_to ? row.forward_to === session.id : holderOf(this.d.db, row.recipient)?.id === session.id)
-    );
+    return !!row && deliveryOwnedBy(this.d.db, row, session.id);
   }
 
   /** Native I/O cannot preserve a captured name/generation. Re-plan only this slot's original wake items. */
@@ -197,11 +202,13 @@ export class DeliveryEngine {
     if (!msg || reason === null) return true;
     this.move(k, 'stuck', { last_error: reason, next_attempt_at: null });
     if (SYSTEM_SENDERS.has(msg.from_name)) return false;
+    const sender = messageSender(this.d.db, msg.id);
+    if (!sender) return false;
     this.notice(
-      msg.from_name,
+      sender.name ?? msg.from_name,
       `delivery stuck: ${k.message_id} → ${k.recipient}`,
       `wigwag did not deliver ${k.message_id} ("${msg.subject}") to ${k.recipient}.\n${reason}`,
-      { from_workspace: msg.from_workspace }, // R46-N3: a notice about a message keeps that message's provenance
+      { from_workspace: msg.from_workspace, recipient_session_id: sender.id },
     ).catch((e) => this.d.log(`scope notice failed: ${(e as Error).message}`));
     return false;
   }
@@ -223,7 +230,8 @@ export class DeliveryEngine {
    * dispatches were keyed by the old one); held ones are picked up by the `session.available` sweep that follows.
    */
   /** Name reuse cannot erase stable ownership. Complete any already-settled handoffs before publishing it. */
-  nameClaimed(_sessionId: string, _name: string): void {
+  nameClaimed(sessionId: string, _name: string): void {
+    claimUnownedRecipients(this.d.db, sessionId);
     this.settleForwards();
   }
 
@@ -250,7 +258,7 @@ export class DeliveryEngine {
     const moved: DeliveryRow[] = [];
     for (const row of rows) {
       if (this.busy(row)) continue;
-      const owner = row.forward_to ? getSession(this.d.db, row.forward_to) : undefined;
+      const owner = deliveryOwner(this.d.db, row);
       const message = getMessage(this.d.db, row.message_id);
       if (!owner?.name || !message || scopeViolation(this.d.db, message.from_workspace, owner.name) !== null) continue;
       const next = settleForward(this.d.db, row, owner.name);
@@ -262,9 +270,10 @@ export class DeliveryEngine {
 
   /** Pure data writes, safe inside the claim/adoption transaction. No events, dispatch or transport before commit. */
   prepareForward(from: string, to: string, sessionId: string, onlyMessageIds?: Set<string>): void {
-    const holder = holderOf(this.d.db, from);
-    if (from === to || (holder && holder.id !== sessionId)) return;
-    const rows = deliveriesFor(this.d.db, from, ['pending', 'held', 'failed', 'stuck']);
+    if (from === to) return;
+    const rows = this.d.db
+      .prepare("SELECT * FROM deliveries WHERE recipient=? AND state IN ('pending','held','failed','stuck')")
+      .all(from) as unknown as DeliveryRow[];
     // Inspect only active chunks, not the name's potentially large delivered history.
     for (const key of this.inflight) {
       const separator = key.indexOf('\u0000');
@@ -273,12 +282,12 @@ export class DeliveryEngine {
       const chunk = deliveriesOfMessage(this.d.db, id).find(
         (d) => d.recipient === from && (d.state === 'pushed' || d.state === 'read'),
       );
-      const message = chunk ? getMessage(this.d.db, id) : undefined;
-      if (chunk && message) rows.push({ ...chunk, message });
+      if (chunk) rows.push(chunk);
     }
     // Include already-pushed/read chunks whose transport is still running. Neither inbox history nor a new
     // source-name claimant may gain them while the physical key is needed by the old push callback.
     for (const row of rows) {
+      if (!deliveryOwnedBy(this.d.db, row, sessionId)) continue;
       if (onlyMessageIds && !onlyMessageIds.has(row.message_id)) continue;
       if (!['pending', 'held', 'failed', 'stuck'].includes(row.state) && !this.busy(row)) continue;
       // Ownership survives even when scope currently prevents completing the move. Never donate a skipped row
@@ -291,8 +300,7 @@ export class DeliveryEngine {
   }
 
   forward(from: string, to: string, sessionId: string, onlyMessageIds?: Set<string>): number {
-    const holder = holderOf(this.d.db, from);
-    if (from === to || (holder && holder.id !== sessionId)) return 0;
+    if (from === to) return 0;
     this.prepareForward(from, to, sessionId, onlyMessageIds);
     const settled = this.settleForwards(sessionId);
     const moved = moveDeliveries(
@@ -300,6 +308,7 @@ export class DeliveryEngine {
       from,
       to,
       (row) =>
+        deliveryOwnedBy(this.d.db, row, sessionId) &&
         (!onlyMessageIds || onlyMessageIds.has(row.message_id)) &&
         !this.busy(row) &&
         scopeViolation(this.d.db, row.message.from_workspace, to) === null,
@@ -329,51 +338,49 @@ export class DeliveryEngine {
     if (!msg) return;
     const k = { message_id: messageId, recipient };
     if (this.busy(k)) return;
-    const cur = deliveriesOfMessage(this.d.db, messageId).find((x) => x.recipient === recipient);
+    let cur = deliveriesOfMessage(this.d.db, messageId).find((x) => x.recipient === recipient);
     if (!cur || (cur.state !== 'pending' && cur.state !== 'failed' && cur.state !== 'held')) return;
     if (cur.forward_to) {
       this.settleForwards();
       return; // never dispatch a durable handoff under its reclaimed physical source name
     }
-    if (!this.allowed(k)) return;
     if (recipient === OWNER) {
+      if (!this.allowed(k)) return;
       // The owner is not a session: there is nothing to wake and no live/offline state. The message is committed and
       // the owner reads it from the feed (TUI) or `wigwag tail`/`show`, so it counts as delivered, never held.
       this.move(k, 'pushed', { transport: OWNER_FEED, last_error: null, next_attempt_at: null });
       return;
     }
-    const rs = this.recipient(recipient);
+    if (!cur.recipient_session_id) {
+      const holder = holderOf(this.d.db, recipient);
+      if (holder && claimMessageRecipient(this.d.db, messageId, holder.id))
+        cur = deliveriesOfMessage(this.d.db, messageId).find((x) => x.recipient === recipient) as DeliveryRow;
+    }
+    const owner = deliveryOwner(this.d.db, cur);
+    // The physical key can outlive its name claim. Only its captured owner can receive this delivery.
+    if (!owner?.name) {
+      if (deliveryRecipient(this.d.db, cur) && !this.allowed(k)) return;
+      this.move(k, 'held', { hold_reason: 'offline' });
+      return;
+    }
+    if (!this.allowed(k)) return;
+    const destination = owner.name;
+    const rs = this.recipient(destination);
     const nativeQuestion = this.nativeQuestion(messageId);
     const dec = decide({
       priority: msg.priority,
       recipient: rs.state,
-      muted: isMuted(this.d.db, recipient, msg.from_name, msg.stream ?? undefined),
-      throttled: !nativeQuestion && isThrottled(this.d.db, msg.from_name, recipient),
+      muted: isMuted(this.d.db, destination, msg.from_name, msg.stream ?? undefined),
+      throttled: !nativeQuestion && isThrottled(this.d.db, msg.from_name, destination),
     });
     if (dec.action === 'hold') {
-      if (dec.reason === 'throttled') this.scheduleThrottle(msg.from_name, recipient);
+      if (dec.reason === 'throttled') this.scheduleThrottle(msg.from_name, destination);
       this.move(k, 'held', {
         hold_reason: dec.reason,
         ...(rs.state === 'no-channel'
           ? { last_error: rs.session?.agent_session_id ? NO_CHANNEL : UNBOUND_NO_CHANNEL }
           : {}),
       });
-      return;
-    }
-    // A retry of a failed push was already counted when it first dispatched; counting it again would
-    // throttle the pair mid-backoff and hide the failure instead of ending in `stuck`.
-    const isRetry = cur.state === 'failed';
-    if (
-      !isRetry &&
-      !nativeQuestion &&
-      !SYSTEM_SENDERS.has(msg.from_name) &&
-      !this.limiter.tryConsume(msg.from_name, recipient)
-    ) {
-      addThrottle(this.d.db, msg.from_name, recipient);
-      this.d.emitFeed('throttle', { from: msg.from_name, to: recipient, active: true });
-      this.d.log(`throttled ${msg.from_name} -> ${recipient}`);
-      this.move(k, 'held', { hold_reason: 'throttled' });
-      this.scheduleThrottle(msg.from_name, recipient);
       return;
     }
     await this.push(rs.session as SessionRow, [k]);
@@ -452,19 +459,57 @@ export class DeliveryEngine {
     );
     // Final review I-11: an item this transport can never carry (over the codex argv budget) is stuck at once, with a
     // notice, instead of being retried max_attempts times; it also never blocks the wake push it would ride along.
-    const pairs = allowedKeys.flatMap((k) => {
+    let pairs = allowedKeys.flatMap((k) => {
       const item = this.items([k])[0];
       const why = transport.tooLarge?.(item) ?? null;
       if (why === null) return [{ k, item }];
       this.unpushable(k, why);
       return [];
     });
+    const due = new Set(wake.map((k) => DeliveryEngine.id(k)));
+    // Attempts survive temporary preflight holds, unlike `state === failed`. Such retries already spent a slot.
+    const retries = new Set(
+      pairs.flatMap(({ k }) =>
+        deliveriesOfMessage(this.d.db, k.message_id).some((d) => d.recipient === k.recipient && d.attempts > 0)
+          ? [DeliveryEngine.id(k)]
+          : [],
+      ),
+    );
+    const admitted = new Map<string, boolean>();
+    const to = session.name;
+    if (!to || !pairs.some(({ k }) => due.has(DeliveryEngine.id(k)))) return;
+    // Only a real transport admission spends wake quota. Preflight holds, invalid items and ride-alongs do not.
+    // A backlog is one push per sender pair; retries already spent their slot on the original attempt.
+    for (const { k, item } of pairs) {
+      const from = item.msg.from_name;
+      if (
+        !due.has(DeliveryEngine.id(k)) ||
+        retries.has(DeliveryEngine.id(k)) ||
+        SYSTEM_SENDERS.has(from) ||
+        item.nativeQuestion ||
+        admitted.has(from)
+      )
+        continue;
+      const allowed = !isThrottled(this.d.db, from, to) && this.limiter.tryConsume(from, to);
+      admitted.set(from, allowed);
+      if (!allowed) {
+        addThrottle(this.d.db, from, to);
+        this.d.emitFeed('throttle', { from, to, active: true });
+        this.d.log(`throttled ${from} -> ${to}`);
+        this.scheduleThrottle(from, to);
+      }
+    }
+    pairs = pairs.filter(({ k, item }) => {
+      if (retries.has(DeliveryEngine.id(k)) || item.nativeQuestion || admitted.get(item.msg.from_name) !== false)
+        return true;
+      this.moveIf(k, ['pending', 'held', 'failed'], 'held', { hold_reason: 'throttled' });
+      return false;
+    });
+    if (!pairs.some(({ k }) => due.has(DeliveryEngine.id(k)))) return;
     const keys = pairs.map((x) => x.k);
-    if (!keys.length) return;
     // R46-N1: each key's state when the push starts, and the receiving session (its workspace is the only one granted
     // the attachments). A completion that finds another state (swept to stuck, read) is dropped.
     const started = keys.map((k) => ({ k, from: this.stateOf(k) as DeliveryState }));
-    const due = new Set(wake.map((k) => DeliveryEngine.id(k)));
     // Claimed synchronously (no await since the ride list was read), so a concurrent push cannot also take them.
     for (const k of keys) this.inflight.add(DeliveryEngine.id(k));
     const markPushed = (ids: Set<string>) => {
@@ -535,13 +580,15 @@ export class DeliveryEngine {
     this.move(k, 'stuck', { attempts, last_error: why, next_attempt_at: null });
     const msg = getMessage(this.d.db, k.message_id);
     if (!msg || SYSTEM_SENDERS.has(msg.from_name)) return;
+    const sender = messageSender(this.d.db, msg.id);
+    if (!sender) return;
     // Deferred: push() is still selecting and claiming its keys synchronously; the notice dispatches after that.
     queueMicrotask(() => {
       this.notice(
-        msg.from_name,
+        sender.name ?? msg.from_name,
         `delivery stuck: ${k.message_id} → ${k.recipient}`,
         `wigwag cannot deliver ${k.message_id} ("${msg.subject}") to ${k.recipient}: ${why}. Send a smaller message or put the content in a blob.`,
-        { from_workspace: msg.from_workspace }, // R46-N3
+        { from_workspace: msg.from_workspace, recipient_session_id: sender.id },
       ).catch((e) => this.d.log(`unpushable notice failed: ${(e as Error).message}`));
     });
   }
@@ -552,12 +599,13 @@ export class DeliveryEngine {
     if (attempts >= this.d.config.retry.max_attempts) {
       this.move(k, 'stuck', { attempts, last_error: err.message });
       const msg = getMessage(this.d.db, k.message_id);
-      if (msg && !SYSTEM_SENDERS.has(msg.from_name)) {
+      const sender = msg ? messageSender(this.d.db, msg.id) : undefined;
+      if (msg && sender && !SYSTEM_SENDERS.has(msg.from_name)) {
         await this.notice(
-          msg.from_name,
+          sender.name ?? msg.from_name,
           `delivery stuck: ${k.message_id} → ${k.recipient}`,
           `wigwag could not deliver ${k.message_id} ("${msg.subject}") to ${k.recipient} after ${attempts} attempts.\nLast error: ${err.message}`,
-          { from_workspace: msg.from_workspace }, // R46-N3
+          { from_workspace: msg.from_workspace, recipient_session_id: sender.id },
         );
       }
       return;
@@ -616,7 +664,13 @@ export class DeliveryEngine {
     to: string,
     subject: string,
     body: string,
-    opts: { priority?: Priority; stream?: string; attachments?: string[]; from_workspace?: string | null } = {},
+    opts: {
+      priority?: Priority;
+      stream?: string;
+      attachments?: string[];
+      from_workspace?: string | null;
+      recipient_session_id?: string;
+    } = {},
   ): Promise<void> {
     const m = insertMessage(
       this.d.db,
@@ -636,6 +690,7 @@ export class DeliveryEngine {
         stream: opts.stream ?? null,
       },
       [to],
+      { recipient_session_id: opts.recipient_session_id },
     );
     this.d.emitFeed('message', m);
     this.dispatchMessage(m.id).catch((e) => this.d.log(`notice dispatch failed: ${(e as Error).message}`));
@@ -667,8 +722,8 @@ export class DeliveryEngine {
       const dec = decide({
         priority: x.message.priority,
         recipient: rs.state,
-        muted: isMuted(this.d.db, x.recipient, x.message.from_name, x.message.stream ?? undefined),
-        throttled: !this.nativeQuestion(x.message_id) && isThrottled(this.d.db, x.message.from_name, x.recipient),
+        muted: isMuted(this.d.db, session.name, x.message.from_name, x.message.stream ?? undefined),
+        throttled: !this.nativeQuestion(x.message_id) && isThrottled(this.d.db, x.message.from_name, session.name),
       });
       if (dec.action === 'push') wake.push(k);
       else this.move(k, 'held', { hold_reason: dec.reason });
@@ -724,7 +779,6 @@ export class DeliveryEngine {
       else this.move(k, 'held', { hold_reason: dec.reason });
     }
     if (!wake.length) return;
-    if (!SYSTEM_SENDERS.has(from)) this.limiter.tryConsume(from, to);
     await this.push(rs.session as SessionRow, wake);
   }
 

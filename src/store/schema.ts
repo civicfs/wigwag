@@ -337,3 +337,30 @@ CREATE INDEX deliveries_recipient_state ON deliveries (recipient, state);
 CREATE INDEX deliveries_state ON deliveries (state);
 CREATE INDEX deliveries_forward_to ON deliveries (forward_to) WHERE forward_to IS NOT NULL;
 `;
+
+/** Stable conversation participants. Historical names are evidence only while an unambiguous claim covered send time. */
+export const SCHEMA_V5 = `
+CREATE TABLE message_ownership (
+  message_id TEXT PRIMARY KEY REFERENCES messages (id),
+  sender_session_id TEXT REFERENCES sessions (id),
+  mode TEXT NOT NULL CHECK (mode IN ('captured', 'historical'))
+);
+INSERT INTO message_ownership (message_id, sender_session_id, mode)
+  SELECT m.id, (
+    SELECT CASE WHEN count(DISTINCT n.session_id)=1 THEN min(n.session_id) END
+    FROM name_claims n WHERE n.name=m.from_name AND n.claimed_at<=m.created_at
+      AND (n.released_at IS NULL OR n.released_at>=m.created_at)
+  ), 'historical' FROM messages m;
+${appendOnly('message_ownership')}
+ALTER TABLE deliveries ADD COLUMN recipient_session_id TEXT REFERENCES sessions (id);
+UPDATE deliveries SET recipient_session_id=COALESCE(forward_to,
+  (SELECT a.worker_session_id FROM assignments a WHERE a.task_message_id=deliveries.message_id),
+  (SELECT a.orchestrator_session_id FROM assignments a JOIN question_relays q ON q.assignment_id=a.id
+    WHERE q.message_id=deliveries.message_id), (
+  SELECT CASE WHEN count(DISTINCT n.session_id)=1 THEN min(n.session_id) END
+  FROM name_claims n JOIN messages m ON m.id=deliveries.message_id
+  WHERE n.name=CASE WHEN m.to_target='all' THEN deliveries.recipient ELSE m.to_target END
+    AND n.claimed_at<=m.created_at AND (n.released_at IS NULL OR n.released_at>=m.created_at)
+));
+CREATE INDEX deliveries_owner ON deliveries (recipient_session_id);
+`;

@@ -11,7 +11,15 @@ import type { Hello } from '../../src/protocol/rpc.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
 import { bindAgentSession, claimName, createSession, getSession, setState } from '../../src/store/sessions.js';
 import { GIT_TIMEOUT_MS } from '../../src/workspace.js';
-import { fakeGitDir, mcpClient, ownerClient, startBroker, startTestBroker } from '../helpers.js';
+import {
+  fakeGitDir,
+  fixtureCodexNames,
+  mcpClient,
+  ownerClient,
+  startBroker,
+  startTestBroker,
+  tmpHome,
+} from '../helpers.js';
 
 type Welcome = { session_id: string; name: string; agent: string; warning: string | null };
 const cleanup: Array<() => unknown> = [];
@@ -272,7 +280,12 @@ describe('identity', () => {
     });
 
     it('a resumed session (same wigwag id) rebinds its own thread; a nested session cannot claim the outer thread', async () => {
-      const { home, broker } = await boot();
+      const home = tmpHome();
+      // The native threads stay loaded while their MCP connection is replaced.
+      const broker = await startBroker(home, {
+        codexNames: fixtureCodexNames(home, () => ['thread-outer', 'thread-inner']),
+      });
+      cleanup.push(() => broker.stop());
       const outer = await codex(home, { requested_name: 'codex-outer', mcp_ppid: 300, pid_chain: [301, 300] });
       await outer.client.call('session.bind', { agent_session_id: 'thread-outer' });
       const inner = await codex(home, { mcp_ppid: 600, pid_chain: [601, 600, 301, 300] });

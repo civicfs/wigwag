@@ -4,10 +4,16 @@ import { runMcp } from '../../src/mcp/server.js';
 import { tmpHome } from '../helpers.js';
 
 const state = vi.hoisted(() => ({
-  servers: [] as Array<{ oninitialized?: () => void; onclose?: () => void; sent: unknown[] }>,
+  servers: [] as Array<{
+    oninitialized?: () => void;
+    onclose?: () => void;
+    sent: unknown[];
+    notification: (value: unknown) => Promise<void>;
+  }>,
   starts: 0,
   stops: 0,
   clients: [] as Array<EventEmitter & { hello: () => { resume_session_id?: string } }>,
+  receipts: [] as Array<{ method: string; params: unknown }>,
 }));
 vi.mock('@modelcontextprotocol/sdk/server/index.js', () => ({
   Server: class {
@@ -46,6 +52,10 @@ vi.mock('../../src/client/reconnecting.js', () => ({
       this.emit('event', 'push', { content: 'two', meta: { msg_id: 'two' } });
       return { session_id: 'ses-one', name: 'peer-one', warning: null };
     }
+    async call(method: string, params: unknown) {
+      state.receipts.push({ method, params });
+      return { accepted: true };
+    }
     stop() {
       state.stops++;
     }
@@ -63,8 +73,67 @@ afterEach(() => {
   state.starts = 0;
   state.stops = 0;
   state.clients.length = 0;
+  state.receipts.length = 0;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it('reports failed host notification writes to the broker without exposing the internal receipt to Claude', async () => {
+  vi.stubEnv('WIGWAG_HOME', tmpHome());
+  const running = runMcp('claude', '/unused');
+  await Promise.resolve();
+  await Promise.resolve();
+  const server = state.servers[0];
+  server.oninitialized?.();
+  await running;
+  const notification = vi.spyOn(server, 'notification').mockRejectedValueOnce(new Error('fixture write failure'));
+  vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const receiptId = '5463e3ac-041c-4342-b2b7-00510b2a819d';
+  try {
+    state.clients[0].emit('event', 'push', { content: 'from codex', meta: { msg_id: 'three' }, receipt_id: receiptId });
+    await vi.waitFor(() =>
+      expect(state.receipts).toEqual([{ method: 'channel.receipt', params: { receipt_id: receiptId, ok: false } }]),
+    );
+    expect(notification).toHaveBeenLastCalledWith({
+      method: 'notifications/claude/channel',
+      params: { content: 'from codex', meta: { msg_id: 'three' } },
+    });
+  } finally {
+    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    server.onclose?.();
+    await Promise.resolve();
+  }
+});
+
+it('sends a success receipt only after the host notification write completes', async () => {
+  vi.stubEnv('WIGWAG_HOME', tmpHome());
+  const running = runMcp('claude', '/unused');
+  await Promise.resolve();
+  await Promise.resolve();
+  const server = state.servers[0];
+  server.oninitialized?.();
+  await running;
+  let complete!: () => void;
+  vi.spyOn(server, 'notification').mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        complete = resolve;
+      }),
+  );
+  const receiptId = '5463e3ac-041c-4342-b2b7-00510b2a819d';
+  try {
+    state.clients[0].emit('event', 'push', { content: 'from codex', meta: {}, receipt_id: receiptId });
+    await Promise.resolve();
+    expect(state.receipts).toEqual([]);
+    complete();
+    await vi.waitFor(() =>
+      expect(state.receipts).toEqual([{ method: 'channel.receipt', params: { receipt_id: receiptId, ok: true } }]),
+    );
+  } finally {
+    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    server.onclose?.();
+    await Promise.resolve();
+  }
 });
 
 it('remembers internal identity changes for reconnect without exposing them as channel notifications', async () => {

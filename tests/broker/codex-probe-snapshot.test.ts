@@ -123,7 +123,7 @@ it('finishes a blocked Codex pass by its deadline and still applies a new Claude
   }
 });
 
-it('fails closed if a descendant appears during metadata reads and detects it on the next pass', async () => {
+it('trusts a verified concrete root when newly loaded unrelated metadata has not been read', async () => {
   const app = new Metadata();
   const { broker, seed } = await boot(app);
   const id = seed('T');
@@ -131,10 +131,27 @@ it('fails closed if a descendant appears during metadata reads and detects it on
     if (!app.loaded.includes('child')) app.loaded.push('child');
   };
   await broker.liveness?.probeNow();
-  expect(getSession(broker.db, id)?.codex_push_reason).toBe('unreadable-loaded');
+  expect(getSession(broker.db, id)?.codex_push_reason).toBeNull();
   expect(app.lists).toBe(2);
   await broker.liveness?.probeNow();
-  expect(getSession(broker.db, id)?.codex_push_reason).toBe('descendant-loaded');
+  expect(getSession(broker.db, id)?.codex_push_reason).toBeNull();
+  expect(app.reads).toEqual(['T', 'T']);
+});
+
+it('reads only actual recipients from a large loaded set and isolates an unreadable recipient', async () => {
+  const app = new Metadata();
+  app.loaded = ['T', 'U', ...Array.from({ length: 256 }, (_, i) => `unrelated-${i}`)];
+  const { broker, seed } = await boot(app);
+  const healthy = seed('T'),
+    unreadable = seed('U');
+  app.onRead = (id) => {
+    if (id === 'U') throw new Error('Codex app-server error: fixture unreadable');
+  };
+  await broker.liveness?.probeNow();
+  expect(getSession(broker.db, healthy)?.codex_push_reason).toBeNull();
+  expect(getSession(broker.db, unreadable)?.codex_push_reason).toBe('unreadable-loaded');
+  expect(app.reads.sort()).toEqual(['T', 'U']);
+  expect(app.lists).toBe(2);
 });
 
 it('stops a blocked snapshot without waiting for its long deadline or touching the closed DB later', async () => {

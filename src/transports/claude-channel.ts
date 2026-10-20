@@ -26,10 +26,20 @@ export class ClaudeChannelTransport implements Transport {
     let batch: RenderItem[] = [];
     let originals: RenderItem[] = [];
     const fits = (part: RenderItem[]) => Buffer.byteLength(JSON.stringify(renderClaude(part))) <= 12000;
-    const flush = () => {
+    const flush = async () => {
       if (!batch.length) return;
       if (options.signal?.aborted) throw new WigwagError('transport', 'Claude push cancelled during shutdown');
-      if (!conn?.event('push', renderClaude(batch)))
+      if (!conn || this.connectionFor(session.id) !== conn)
+        throw new WigwagError('transport', `No live connection for session ${session.name ?? session.id}`);
+      if (conn.channelReceipts) {
+        const generation = conn.generation;
+        await conn.channelPush(renderClaude(batch), options.signal);
+        if (conn.sessionId !== session.id || conn.generation !== generation || this.connectionFor(session.id) !== conn)
+          throw new WigwagError(
+            'transport',
+            'Claude channel connection changed while awaiting its notification receipt',
+          );
+      } else if (!conn.event('push', renderClaude(batch)))
         throw new WigwagError('transport', `No live connection for session ${session.name ?? session.id}`);
       options.onPushed?.(originals);
       batch = [];
@@ -47,12 +57,12 @@ export class ClaudeChannelTransport implements Transport {
             },
             attachments: [],
           };
-      if (batch.length && !fits([...batch, item])) flush();
+      if (batch.length && !fits([...batch, item])) await flush();
       if (!fits([item]))
         throw new WigwagError('transport', 'Message metadata exceeds the Claude channel payload budget');
       batch.push(item);
       originals.push(original);
     }
-    flush();
+    await flush();
   }
 }

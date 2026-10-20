@@ -21,6 +21,9 @@ export interface CodexMetadataSnapshot {
   loaded: Set<string> | null;
   reads: Map<string, CodexReadResult>;
 }
+interface MetadataConnection {
+  app: AppConnection;
+}
 
 const ROOT_SOURCES = new Set(['cli', 'vscode', 'exec', 'appServer']);
 const nonEmpty = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -65,47 +68,64 @@ export const codexIndexPath = (appServerSocket: string): string =>
 
 /**
  * W2 (S-B) and W7 (S-E): one lazily opened app-server connection that only issues metadata-only `thread/read`. It never
- * resumes, subscribes or loads a thread. `available` is the outcome of the last call: an app-server error response
+ * resumes, subscribes or loads a thread. `available` is the outcome of the last current-connection call: an error response
  * (e.g. thread not found) counts as available; a transport failure does not and drops the connection.
  */
 export class CodexNames {
   onName: (threadId: string, name: string, origin: CodexNameOrigin) => void = () => {};
   available: boolean | null = null;
-  private app: AppConnection | null = null;
-  private connecting: Promise<AppConnection> | null = null;
+  private app: MetadataConnection | null = null;
+  private connecting: Promise<MetadataConnection> | null = null;
   private stopped = false;
   private readonly trustCache = new Map<string, { at: number; value: CodexPushTrust }>();
   private readonly snapshots = new Set<AbortController>();
+  private readonly snapshotOwners = new WeakMap<CodexMetadataSnapshot, MetadataConnection>();
 
   constructor(
     private readonly opts: { factory: () => AppConnection; indexPath: string; log?: (line: string) => void },
   ) {}
 
-  private connection(): Promise<AppConnection> {
+  private connection(): Promise<MetadataConnection> {
+    if (this.connecting) return this.connecting;
     if (this.app) return Promise.resolve(this.app);
-    this.connecting ??= (async () => {
+    if (this.stopped) return Promise.reject(new Error('Codex name reader stopped'));
+    const pending = (async () => {
       const app = this.opts.factory();
-      app.on('message', (f: AppFrame) => this.receive(f));
+      const owner = { app };
+      this.app = owner;
+      app.on('message', (f: AppFrame) => {
+        if (this.app === owner && !this.stopped) this.receive(f);
+      });
       app.on('disconnected', () => {
+        if (this.app !== owner) return;
         this.trustCache.clear();
-        if (this.app === app) this.app = null;
+        this.available = false;
+        this.app = null;
       });
       try {
         await app.connect();
       } catch (e) {
-        app.close();
+        this.drop(owner);
         throw e;
       }
-      if (this.stopped) {
-        app.close();
+      if (this.stopped || this.app !== owner) {
+        this.drop(owner);
         throw new Error('Codex name reader stopped');
       }
-      this.app = app;
-      return app;
+      return owner;
     })().finally(() => {
-      this.connecting = null;
+      if (this.connecting === pending) this.connecting = null;
     });
-    return this.connecting;
+    this.connecting = pending;
+    return pending;
+  }
+
+  private drop(owner: MetadataConnection): void {
+    if (this.app !== owner) return;
+    this.available = false;
+    this.trustCache.clear();
+    this.app = null;
+    owner.app.close();
   }
 
   private receive(f: AppFrame): void {
@@ -116,25 +136,27 @@ export class CodexNames {
   }
 
   async read(threadId: string): Promise<CodexReadResult> {
+    let owner: MetadataConnection | undefined;
     try {
-      const app = await this.connection();
-      const raw = await app.call('thread/read', { threadId, includeTurns: false });
+      owner = await this.connection();
+      const raw = await owner.app.call('thread/read', { threadId, includeTurns: false });
+      if (this.stopped || this.app !== owner) return { available: false };
       this.available = true;
       return { available: true, meta: threadMeta(raw, threadId) };
     } catch (e) {
+      if (!owner || this.stopped || this.app !== owner) return { available: false };
       const answered = e instanceof Error && e.message.startsWith('Codex app-server error');
       this.available = answered;
       if (!answered) {
         this.opts.log?.(`codex names: app-server unavailable: ${e instanceof Error ? e.message : String(e)}`);
-        this.app?.close();
-        this.app = null;
+        this.drop(owner);
       }
       return answered ? { available: true, meta: null } : { available: false };
     }
   }
 
-  /** One bounded pass shared by every slot. Re-list after reads; newly loaded, unread threads fail closed. */
-  async metadataSnapshot(deadlineMs = 10000): Promise<CodexMetadataSnapshot> {
+  /** One bounded pass; concrete recipients need only their own reads. Re-list after reads to confirm loading. */
+  async metadataSnapshot(deadlineMs = 10000, threadIds?: Iterable<string>): Promise<CodexMetadataSnapshot> {
     const unknown = (): CodexMetadataSnapshot => ({ loaded: null, reads: new Map() });
     if (this.stopped || deadlineMs <= 0) return unknown();
     const controller = new AbortController();
@@ -147,20 +169,27 @@ export class CodexNames {
     const work = (async (): Promise<CodexMetadataSnapshot> => {
       const loaded = await this.loadedThreads();
       if (controller.signal.aborted || this.stopped || loaded === null) return unknown();
+      const owner = this.app;
+      if (!owner) return unknown();
       const reads = new Map<string, CodexReadResult>();
-      if (loaded.size > 256) return { loaded, reads };
-      const ids = [...loaded];
+      const finish = (current: Set<string> | null) => {
+        const snapshot = { loaded: current, reads };
+        this.snapshotOwners.set(snapshot, owner);
+        return snapshot;
+      };
+      if (!threadIds && loaded.size > 256) return finish(loaded);
+      const ids = threadIds ? [...new Set(threadIds)].filter((id) => loaded.has(id)) : [...loaded];
       for (let i = 0; i < ids.length; i += 8) {
         const batch = ids.slice(i, i + 8);
         const results = await Promise.all(batch.map((id) => this.read(id)));
-        if (controller.signal.aborted || this.stopped) return unknown();
+        if (controller.signal.aborted || this.stopped || this.app !== owner) return unknown();
         batch.forEach((id, j) => {
           reads.set(id, results[j]);
         });
       }
       const current = await this.loadedThreads();
-      if (controller.signal.aborted || this.stopped) return unknown();
-      return { loaded: current, reads };
+      if (controller.signal.aborted || this.stopped || this.app !== owner) return unknown();
+      return finish(current);
     })();
     try {
       return await Promise.race([work.catch(unknown), cancelled]);
@@ -170,14 +199,29 @@ export class CodexNames {
     }
   }
 
-  /** Bounded metadata-only evidence; a fresh push check never uses bind-time cached trust. */
-  async pushTrust(threadId: string, fresh = false, snapshot?: CodexMetadataSnapshot): Promise<CodexPushTrust> {
-    const cached = this.trustCache.get(threadId);
+  /** A completed snapshot becomes unknown as soon as its metadata connection is replaced or stopped. */
+  loadedIn(snapshot: CodexMetadataSnapshot): Set<string> | null {
+    const owner = this.snapshotOwners.get(snapshot);
+    return !this.stopped && owner && this.app === owner ? snapshot.loaded : null;
+  }
+
+  /**
+   * Bounded metadata-only evidence; fresh checks bypass cached trust. `concreteRoot` is reserved for a supported host's
+   * hook-verified concrete binding. It still requires that recipient's loaded/root metadata; defaults stay conservative.
+   */
+  async pushTrust(
+    threadId: string,
+    fresh = false,
+    snapshot?: CodexMetadataSnapshot,
+    concreteRoot = false,
+  ): Promise<CodexPushTrust> {
+    const cacheKey = `${concreteRoot ? 'concrete' : 'conservative'}:${threadId}`;
+    const cached = this.trustCache.get(cacheKey);
     if (!snapshot && !fresh && cached && Date.now() - cached.at < 2000) return cached.value;
     let reason: CodexPushReason | null = 'app-server-unavailable';
-    const data = snapshot ?? (await this.metadataSnapshot());
-    const loaded = this.stopped ? null : data.loaded;
-    if (loaded && loaded.size > 256) reason = 'too-many-loaded';
+    const data = snapshot ?? (await this.metadataSnapshot(10000, concreteRoot ? [threadId] : undefined));
+    const loaded = this.loadedIn(data);
+    if (loaded && !concreteRoot && loaded.size > 256) reason = 'too-many-loaded';
     else if (loaded) {
       if (!loaded.has(threadId)) reason = 'root-not-loaded';
       else {
@@ -187,15 +231,17 @@ export class CodexNames {
           if (!own.meta.root) reason = 'shared-root';
           else {
             reason = null;
-            const others = [...loaded].filter((id) => id !== threadId).map((id) => data.reads.get(id));
-            if (others.some((r) => r?.available && r.meta?.sessionId === threadId)) reason = 'descendant-loaded';
-            else if (others.some((r) => !r?.available || !r.meta?.sessionId)) reason = 'unreadable-loaded';
+            if (!concreteRoot) {
+              const others = [...loaded].filter((id) => id !== threadId).map((id) => data.reads.get(id));
+              if (others.some((r) => !r?.available || !r.meta?.sessionId)) reason = 'unreadable-loaded';
+              else if (others.some((r) => r?.available && r.meta?.sessionId === threadId)) reason = 'descendant-loaded';
+            }
           }
         }
       }
     }
     const value: CodexPushTrust = reason === null ? { trusted: true, reason: null } : { trusted: false, reason };
-    if (!this.stopped) this.trustCache.set(threadId, { at: Date.now(), value });
+    if (loaded !== null) this.trustCache.set(cacheKey, { at: Date.now(), value });
     return value;
   }
 
@@ -206,6 +252,7 @@ export class CodexNames {
 
   async refresh(threadId: string): Promise<void> {
     const r = await this.read(threadId);
+    if (this.stopped || (!r.available && this.available === true)) return;
     if (r.available) {
       if (r.meta?.name) this.onName(threadId, r.meta.name, 'codex-api');
       return;
@@ -219,16 +266,18 @@ export class CodexNames {
    * is unreachable or the listing is malformed or longer than 50 pages, so callers treat liveness as unknown.
    */
   async loadedThreads(): Promise<Set<string> | null> {
+    let owner: MetadataConnection | undefined;
     try {
-      const app = await this.connection();
+      owner = await this.connection();
       const out = new Set<string>();
       const cursors = new Set<string>();
       let cursor: string | null = null;
       for (let page = 0; page < 50; page++) {
-        const r = (await app.call('thread/loaded/list', cursor ? { cursor } : {})) as {
+        const r = (await owner.app.call('thread/loaded/list', cursor ? { cursor } : {})) as {
           data?: unknown;
           nextCursor?: unknown;
         };
+        if (this.stopped || this.app !== owner) return null;
         if (!Array.isArray(r?.data) || r.data.some((id) => typeof id !== 'string'))
           throw new Error('malformed thread/loaded/list data');
         if (r.nextCursor != null && typeof r.nextCursor !== 'string')
@@ -243,12 +292,12 @@ export class CodexNames {
       this.available = true;
       return out;
     } catch (e) {
+      if (!owner || this.stopped || this.app !== owner) return null;
       const answered = e instanceof Error && e.message.startsWith('Codex app-server error');
       this.available = answered;
       this.opts.log?.(`codex names: loaded-thread listing failed: ${e instanceof Error ? e.message : String(e)}`);
       if (!answered) {
-        this.app?.close();
-        this.app = null;
+        this.drop(owner);
       }
       return null;
     }
@@ -259,8 +308,7 @@ export class CodexNames {
     for (const controller of this.snapshots) controller.abort();
     this.snapshots.clear();
     this.trustCache.clear();
-    this.app?.close();
-    this.app = null;
+    if (this.app) this.drop(this.app);
   }
 }
 

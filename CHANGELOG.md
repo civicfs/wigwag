@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.1 — 2026-10-20
+
+- Keep requests, responses and replies attached to their original sessions across renames,
+  old-name reuse and verified recovery. Schema v5 captures participant IDs and backs up existing
+  databases before migration; ambiguous historical participants require owner inspection.
+- Wait for negotiated Claude MCP notification-write receipts before marking channel batches read.
+  Failed writes, disconnects and receipt deadlines preserve unread recovery; failed channels
+  fall back to hooks/inbox until reconnect. Legacy clients retain socket-admission behavior.
+- Isolate Codex metadata connection generations so late reads, failures and notifications cannot
+  tear down a recovered connection or overwrite its evidence. Check verified recipients independently
+  of unrelated unreadable threads or large loaded sets.
+- Expire connected Codex sessions after repeated positive loaded-list absence spanning the liveness
+  grace period. Close their exact MCP connection and require fresh loaded-root proof on reconnect
+  so late hooks cannot revive a stale name holder.
+- Charge wake quota at transport admission, preserving quota across native metadata/question preflight holds.
+  Recovered backlogs count as one wake per sender pair and transport retries retain their original charge.
+- Deliver to verified concrete Codex root threads while their subagents are loaded,
+  avoiding indefinite `descendant-loaded` holds. Keep host, binding, duplicate-slot,
+  connection and metadata checks; failures reading the actual recipient still hold delivery.
+- Match the Codex `--as` name handoff against the directory selected by `--cd`/`-C`,
+  including relative and attached values. Explicit names remain fixed through native title refreshes.
+- Include the requested name in Codex's automatic readiness prompt and register it
+  when a same-directory launcher handoff is ambiguous. Explicit registration consumes
+  its exact pending intent so an open launcher cannot keep subsequent launches ambiguous.
+
 ## 0.3.0 — 2026-10-16
 
 - Add Codex host `codex-mcp-client` 0.163.0 to the built-in verified push list

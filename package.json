@@ -1,6 +1,6 @@
 {
   "name": "@civicfs/wigwag",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Push messaging and a data channel between Claude Code and Codex sessions on one host",
   "license": "MIT",
   "author": {

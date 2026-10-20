@@ -1,6 +1,8 @@
 import { WigwagError } from '../errors.js';
 import { newId } from '../ids.js';
 import { type Db, nowIso, tx } from './db.js';
+import { deliveryOwner } from './ownership.js';
+import { holderOf } from './sessions.js';
 
 export type Priority = 'urgent' | 'normal' | 'low';
 export type MessageKind = 'message' | 'request' | 'response' | 'notice';
@@ -39,6 +41,8 @@ export interface DeliveryRow {
   updated_at: string;
   /** Stable destination owner while an in-flight rename cannot yet change the physical recipient key. */
   forward_to: string | null;
+  /** Session addressed at send time (or its first claim), independent of later display-name ownership. */
+  recipient_session_id: string | null;
 }
 export type DeliveryWithMessage = DeliveryRow & { message: MessageRow };
 
@@ -62,7 +66,12 @@ const msg = (r: unknown): MessageRow | undefined => {
   return { ...raw, attachments: JSON.parse(raw.attachments) as string[] };
 };
 
-export function insertMessage(db: Db, input: NewMessage, recipients: string[]): MessageRow {
+export function insertMessage(
+  db: Db,
+  input: NewMessage,
+  recipients: string[],
+  ownership: { recipient_session_id?: string } = {},
+): MessageRow {
   const id = newId('msg');
   const at = nowIso();
   tx(db, () => {
@@ -85,14 +94,20 @@ export function insertMessage(db: Db, input: NewMessage, recipients: string[]): 
       input.stream,
       at,
     );
+    db.prepare(`INSERT INTO message_ownership(message_id,sender_session_id,mode) VALUES(?,?,'captured')`).run(
+      id,
+      ['owner', 'wigwag'].includes(input.from_name) ? null : (holderOf(db, input.from_name)?.id ?? null),
+    );
     const ins = db.prepare(
-      `INSERT INTO deliveries (message_id, recipient, state, attempts, updated_at) VALUES (?, ?, 'pending', 0, ?)`,
+      `INSERT INTO deliveries (message_id, recipient, state, attempts, updated_at,recipient_session_id,forward_to) VALUES (?, ?, 'pending', 0, ?, ?, ?)`,
     );
     const ev = db.prepare(
       `INSERT INTO delivery_events (message_id, recipient, from_state, to_state, detail, at) VALUES (?, ?, NULL, 'pending', NULL, ?)`,
     );
     for (const r of [...new Set(recipients)]) {
-      ins.run(id, r, at);
+      const owner = ownership.recipient_session_id ?? holderOf(db, r)?.id ?? null;
+      const route = owner && holderOf(db, r)?.id !== owner ? owner : null;
+      ins.run(id, r, at, owner, route);
       ev.run(id, r, at);
     }
   });
@@ -178,15 +193,23 @@ export function transitionIf(
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(', ');
 
 /** Bind both placeholders to the requested name. A reclaimed source name never gains its former owner's rows. */
-export const deliveryForNameSql = `(d.forward_to IS NULL AND d.recipient = ? OR
-  d.forward_to = (SELECT id FROM sessions WHERE name = ? ORDER BY last_seen_at DESC LIMIT 1))`;
+export const deliveryForNameSql = `(CASE WHEN COALESCE(d.recipient_session_id,d.forward_to) IS NOT NULL THEN
+  COALESCE(d.recipient_session_id,d.forward_to) IN (
+    WITH RECURSIVE owners(id) AS (
+      SELECT id FROM sessions WHERE name=?
+      UNION SELECT s.id FROM sessions s JOIN owners o ON s.retired_into=o.id
+    ) SELECT id FROM owners
+  ) ELSE d.recipient=? AND (d.recipient='owner' OR EXISTS (
+    SELECT 1 FROM message_ownership mo WHERE mo.message_id=d.message_id AND mo.mode='captured'
+  )) END)`;
 
 export function deliveryRecipient(db: Db, d: DeliveryRow): string | null {
-  if (!d.forward_to) return d.recipient;
-  return (
-    (db.prepare('SELECT name FROM sessions WHERE id=?').get(d.forward_to) as { name: string | null } | undefined)
-      ?.name ?? null
-  );
+  if (d.recipient_session_id || d.forward_to) return deliveryOwner(db, d)?.name ?? null;
+  if (d.recipient === 'owner') return 'owner';
+  const row = db.prepare('SELECT mode FROM message_ownership WHERE message_id=?').get(d.message_id) as
+    | { mode: string }
+    | undefined;
+  return row?.mode === 'captured' ? d.recipient : null;
 }
 
 export const deliveryForRecipient = (db: Db, messageId: string, name: string): DeliveryRow | undefined =>

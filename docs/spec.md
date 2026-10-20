@@ -115,7 +115,7 @@ vitest, linted with biome.
   If `WIGWAG_NAME` is set in the MCP server's environment, it is requested instead (same validation and
   collision rules). This is the iteration-2 spawn provision (§16); it also lets the owner pre-name a manual launch.
   A Codex MCP server started by the shared app-server daemon does not inherit that environment (E-1), so
-  `wigwag codex --as <name>` sends `launch.intend {agent: codex, name, cwd}` over an owner connection it keeps open while
+  `wigwag codex --as <name>` sends `launch.intend {agent: codex, name, cwd}` (following `--cd`/`-C`) over an owner connection it keeps open while
   codex runs. The broker applies the intent when the Codex MCP server connects (hello), right after it assigns the
   provisional name, so the name shows at once and the session stays unbound (`BOUND` no) until the first prompt makes Codex
   call `session.bind`; `session.bind` repeats the attempt as a fallback. The broker claims the name with the same rules as
@@ -125,7 +125,10 @@ vitest, linted with biome.
   intent that is applied, or refused by the claim rules, is consumed; the rest end with their launcher's connection).
   Until the first prompt there is no Codex thread to push into, so messages sent to the name wait as held (`unbound`) and
   are delivered when the session binds. For fresh named launches without a supplied prompt, `wigwag codex` adds a
-  readiness prompt that checks `whoami` and ends its turn, triggering binding without owner input. Supplied prompts,
+  readiness prompt that checks `whoami`, explicitly registers the requested name if it differs, and verifies both
+  the exact name and `bound: true` before reporting ready. A successful explicit registration consumes its unique
+  matching intent (same name, canonical cwd, and session created after intent), preventing an open launcher's
+  unused intent from making subsequent launches ambiguous. It then ends its turn, triggering binding without owner input. Supplied prompts,
   subcommands, and unrecognized options pass through unchanged. Hook trust is still required.
   Intents are in memory and end with the launcher's connection; there is no age
   limit.
@@ -214,14 +217,14 @@ vitest, linted with biome.
   access so committed WAL content is visible. Unsupported URI support falls back to ordinary read-only access with
   a diagnostic. Every ordinary read-only path warns that SQLite may update `-shm` or create missing bookkeeping
   sidecars; database content is never changed or copied. It reports schema,
-  pre-v3/v4 backup presence/modes, disconnected/unknown live slots, missing Claude process identities, unresolved
+  pre-v3/v4/v5 backup presence/modes, disconnected/unknown live slots, missing Claude process identities, unresolved
   recovery flags, duplicate group/slot counts and Codex push-untrusted reasons. State findings and recent rejected-peer
   history are warnings; an actual incompatible broker/client handshake is an error. Stop/restart alone retain a version-agnostic read-only hello/ping path for PID
   verification; that path exposes no general RPC client.
-  The old 0.2 CLI/broker has no newer-schema rejection and can open an upgraded v3/v4 file without complaint.
+  The old 0.2 CLI/broker has no newer-schema rejection and can open an upgraded v3/v4/v5 file without complaint.
   Never run those binaries against upgraded state.db; the new protocol checks do not protect old direct file opens.
   Downgrading requires a separate compatible database, with later state reconciled separately. Successful upgrades
-  retain mode-0600 pre-v3/pre-v4 snapshots. A crash after publishing a backup but before committing that migration
+  retain mode-0600 pre-v3/pre-v4/pre-v5 snapshots. A crash after publishing a backup but before committing that migration
   leaves a pre-existing file that blocks the next migration/start until the operator inspects and moves/removes it.
   Confirmed rollback removes only this attempt's redundant backup; unknown outcomes preserve it. Completed
   migrations skip their old snapshots at startup; a retained successful backup alone does not block startup.
@@ -310,11 +313,15 @@ vitest, linted with biome.
   are never resent; native resolutions or ended turns cancel stale relays. Unavailable/mismatched replay retains the
   relay with a visible waiting reason and submits nothing. General adoption still cancels synchronous relays.
   Untrusted binds preserve offline canonical bindings and record
-  `codex-thread-id-untrusted`; non-offline holders refuse. Codex queue pushes require metadata evidence that the presented ID is a loaded root and no other loaded thread
-  shares its sessionId, plus a current connected MCP link and non-offline slot, all revalidated after I/O. The
+  `codex-thread-id-untrusted`; non-offline holders refuse. Codex queue pushes require metadata evidence that the presented ID is a loaded root,
+  plus a current connected MCP link and non-offline slot, all revalidated after I/O. A supported host's verified hook
+  identifies the concrete thread, so loaded descendants sharing its sessionId do not block a push to that root.
+  Codex 0.162.1/0.163.0 parses a UUID passed to `queue --thread` directly and submits `thread/queue/add` to that thread.
+  Duplicate live Wigwag bindings still refuse. The
   metadata-only reader checks bind, probes and each queue push (fresh before dispatch),
-  reads at most 256 loaded threads in batches of eight, and caches non-push checks for 2 s. Unavailable/malformed
-  evidence fails closed. Reasons are shared-root, root-not-loaded, descendant-loaded or app-server-unavailable;
+  reads concrete verified recipient roots in batches of eight, and caches non-push checks for 2 s. Unrelated
+  unreadable metadata and large loaded sets do not block a verified recipient. Conservative callers without
+  concrete identity read at most 256 loaded threads. Unavailable/malformed recipient evidence fails closed. Reasons are shared-root, root-not-loaded or app-server-unavailable;
   deliveries hold as codex-untrusted and remain accessible through hooks/inbox. Public session/capability/TUI/recovery
   diagnostics show the reason, including `too-many-loaded` for over 256 loaded threads and `unreadable-loaded`
   when a loaded thread's metadata cannot be read or lacks sessionId. The transport may reuse only this push's
@@ -356,10 +363,14 @@ vitest, linted with biome.
   require fresh loaded-root trust; active throttles keep their throttled hold reason ahead of disconnected holds.
   An immediate probe and an extra check about 2 s after disconnect catch exits promptly; a 10 s probe loop
   continues checking and marks the session offline once the parent is gone. Each Codex pass shares one bounded
-  metadata snapshot across slots (at most 256 thread reads, batches of eight), with a per-pass deadline and a final
+  metadata snapshot across recipient slots (batches of eight), with a per-pass deadline and a final
   loaded-set recheck. New unread threads fail closed until the next pass. Claude probes run independently on every
   kick; a slow Codex pass cannot delay them. Shutdown cancels snapshot deadlines and ignores late results.
-  No recorded evidence at
+  A verified Codex root whose MCP stays connected goes offline only after at least 3 consecutive positive
+  absence probes spanning 60 s; a loaded result or unavailable listing resets that absence grace. Expiry closes
+  the exact old MCP connection so late hooks cannot revive the stale slot. Automatic MCP reconnects must
+  prove that expired thread is a loaded root before reviving its slot. Metadata connection replacement
+  invalidates its outstanding evidence. No recorded evidence at
   disconnect (Claude without identity, Codex without app-server) keeps the 0.2 behavior; an unverifiable parent (probe
   error, legacy row at broker start) goes offline after 3 consecutive unknown probes and 60 s. A new MCP process under
   the same verified Claude parent re-attaches to a disconnected slot. Replacing an older connected MCP additionally
@@ -435,7 +446,8 @@ All IDs exposed outside the broker are prefixed ULIDs. Integer rowids are intern
 | `sessions` | `id (ses-)`, `name`, `agent (claude|codex)`, `agent_session_id`, `cwd`, `pid_chain`, `state (online-busy|online-idle|offline)`, `transport`, `spawned_by (nullable, unused in v1)`, `launch_json (nullable, unused in v1)`, `created_at`, `last_seen_at` | Row kept after offline (history). `spawned_by`/`launch_json` are iteration-2 provisions (§16) |
 | `name_claims` | `name`, `session_id`, `claimed_at`, `released_at` | Append-only history of who held a name |
 | `messages` | `id (msg-)`, `from_name`, `to (name|all)`, `kind (message|request|response|notice)`, `priority`, `subject`, `body`, `attachments (json array of blob refs)`, `reply_to`, `request_id`, `expires_at`, `created_at` | Immutable |
-| `deliveries` | `message_id`, `recipient_name`, `state (pending|held|pushed|failed|stuck|read)`, `attempts`, `last_error`, `transport`, `updated_at` | One row per (message, recipient); state transitions logged in `delivery_events` |
+| `message_ownership` | `message_id`, `sender_session_id`, `mode (captured|historical)` | Immutable session ownership; historical participants require unambiguous evidence |
+| `deliveries` | `message_id`, `recipient_name`, `recipient_session_id`, `state (pending|held|pushed|failed|stuck|read)`, `attempts`, `last_error`, `transport`, `updated_at` | One row per (message, recipient); state transitions logged in `delivery_events` |
 | `delivery_events` | `message_id`, `recipient_name`, `from_state`, `to_state`, `detail`, `at` | Append-only audit |
 | `blobs` | `ref (sha256:<hex>)`, `size`, `media_type`, `name`, `created_by`, `created_at` | Content at `blobs/sha256/<2>/<62>` |
 | `kv` | `key`, `version`, `value_json`, `updated_by`, `updated_at` | Current value |
@@ -444,6 +456,13 @@ All IDs exposed outside the broker are prefixed ULIDs. Integer rowids are intern
 | `stream_records` | `stream`, `seq`, `record_json`, `appended_by`, `at` | Append-only, `seq` monotonic per stream |
 | `subscriptions` | `session_name`, `target (stream:<name>|kv:<prefix>)`, `priority`, `created_at`, `removed_at` | |
 | `mutes` | `session_name`, `target (sender:<name>|stream:<name>)`, `created_at`, `removed_at` | `urgent` bypasses mutes |
+
+Schema v5 captures sender and recipient session IDs when a message is committed. A never-registered destination
+is claimed once by its first in-scope holder, including when an owner-created workspace link first makes
+that holder eligible. Requests, responses, ordinary replies and unread/history access
+follow those IDs through renames and trusted `retired_into` recovery. A replacement holder of an old name cannot
+respond to, await or read the previous session's conversation. Historical backfill uses unique claim intervals
+or native assignment evidence; ambiguous participants remain unavailable to session APIs and visible to owners.
 
 ## 6. Delivery engine
 
@@ -468,15 +487,18 @@ Nothing wakes Codex for a `low` item on its own.
 
 ### State machine per (message, recipient)
 
-`pending → pushed → read` on the happy path. A message counts as read once it is delivered into the model's context:
+`pending → pushed → read` on the happy path. A message counts as read once its local transport accepts it:
 the broker records `pushed` (transport `claude-channel`, `codex-queue` or `hook`) and, in the same step and after the
 transport succeeded, `read` (both logged in `delivery_events`; no row is deleted or rewritten). So the unread count
 (sessions list, TUI, `wigwag who`, the SessionStart context) and the default `inbox` listing cover only `pending`,
 `held`, `failed` and `stuck` items; `inbox` with `include_read`, `wigwag show` and `wigwag deliveries` still show the
 rest with their events. The turn-boundary hook takes its digest before composing a SessionStart context, so a digest
 never leaves a stale count. `read` is also set when the recipient calls `inbox`, `ack`, `reply`, or `respond` for an
-item not yet delivered that way. Claude channels have no transport ack, so a channel `read` means "written to the
-channel", not "the model attended to it". Owner-addressed messages stay `pushed` (`owner-feed`).
+item not yet delivered that way. Current Claude bridges negotiate channel receipts: the broker waits for the
+MCP bridge to confirm its local stdio notification write before marking each batch read. Negative receipts,
+disconnects and receipt deadlines retain unread mail for recovery. A failed channel is unavailable until a fresh
+connection, allowing hooks/inbox to drain the backlog. Legacy bridges retain their socket-admission behavior.
+A receipt proves a local write; it does not prove provider or model consumption. Owner-addressed messages stay `pushed` (`owner-feed`).
 
 `pending → failed → (retry) → pushed | stuck`: Codex transport failures retry with exponential backoff
 (`retry.base_ms`, `retry.max_attempts` from config). `stuck` is visible in the TUI and generates a `low` notice to
@@ -521,6 +543,10 @@ Per sender→recipient pair, more than `rate.wake_pushes` wake-pushes within `ra
 further messages to `held`. The cooldown expires after `rate.window_s`, including across broker restarts, and
 the backlog is dispatched automatically. The owner can release it earlier from the TUI or CLI. Agent send/reply/
 request/respond receipts include delivery states: an accepted message ID is not proof of delivery.
+Wake quota is charged only when a push reaches transport admission, after native question and metadata preflight
+and payload validation. Preflight holds spend no quota. A recovered backlog spends one slot per contributing
+sender pair, while transport retries retain their original charge through temporary preflight holds.
+Backlog mute and throttle policy uses the original recipient session's current name.
 
 MCP inbox responses are capped at 12,000 formatted JSON bytes. Only messages included in the returned page are
 marked read. Repeat unread inbox while `has_more` is true; page read history with `next_before` passed as `before`.

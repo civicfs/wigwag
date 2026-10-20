@@ -6,8 +6,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it } from 'vitest';
 import { Broker } from '../../src/broker/server.js';
 import { loadConfig } from '../../src/config.js';
-import { preV3BackupPath, preV4BackupPath } from '../../src/store/db.js';
+import { preV3BackupPath, preV4BackupPath, preV5BackupPath } from '../../src/store/db.js';
 import { SCHEMA_V1, SCHEMA_V2 } from '../../src/store/schema.js';
+import { SCHEMA_VERSION } from '../../src/version.js';
 import { spawnTsChild, tmpHome } from '../helpers.js';
 
 const brokers: Broker[] = [];
@@ -79,11 +80,12 @@ it('does not migrate or back up a locked v2 database; the next locked start back
   expect(readFileSync(file).equals(before)).toBe(true);
   expect(existsSync(preV3BackupPath(file))).toBe(false);
   expect(existsSync(preV4BackupPath(file))).toBe(false);
+  expect(existsSync(preV5BackupPath(file))).toBe(false);
   await release();
   const running = broker(home);
   await running.start();
-  expect(running.db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 4 });
-  for (const path of [preV3BackupPath(file), preV4BackupPath(file)]) {
+  expect(running.db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: SCHEMA_VERSION });
+  for (const path of [preV3BackupPath(file), preV4BackupPath(file), preV5BackupPath(file)]) {
     expect(statSync(path).mode & 0o777).toBe(0o600);
     const backup = new DatabaseSync(path, { readOnly: true });
     try {

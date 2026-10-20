@@ -27,6 +27,16 @@ export const codexPushLabel = (reason: string): string =>
         ? 'Codex push held: reload the Wigwag plugin / restart this Codex session to enable push; inbox delivery works (unverified-bind)'
         : `Codex push held: thread identity unverified (${reason})`;
 
+export const isVerifiedCodexBinding = (broker: Broker, slot: SessionRow): boolean =>
+  !isLegacySession(broker.db, slot.id) &&
+  slot.bind_origin === 'hook-verified' &&
+  trustedCodexHost(
+    slot.host_client_name && slot.host_client_version
+      ? { name: slot.host_client_name, version: slot.host_client_version }
+      : null,
+    broker.config.codex.trusted_host_versions,
+  );
+
 /** Revalidate slot ownership after metadata I/O; never apply evidence to a different binding or a closed DB. */
 export function installCodexPushTrust(broker: Broker, now: () => number = Date.now): void {
   let stopped = false;
@@ -39,19 +49,13 @@ export function installCodexPushTrust(broker: Broker, now: () => number = Date.n
       !!current &&
       !current.retired_at &&
       current.agent_session_id === s.agent_session_id &&
-      current.conn_generation === s.conn_generation;
+      current.conn_generation === s.conn_generation &&
+      current.bind_origin === s.bind_origin &&
+      current.host_client_name === s.host_client_name &&
+      current.host_client_version === s.host_client_version;
     const before = getSession(broker.db, s.id);
     if (!matches(before)) return 'app-server-unavailable';
-    const isVerified = (slot: SessionRow) =>
-      !isLegacySession(broker.db, slot.id) &&
-      slot.bind_origin === 'hook-verified' &&
-      trustedCodexHost(
-        slot.host_client_name && slot.host_client_version
-          ? { name: slot.host_client_name, version: slot.host_client_version }
-          : null,
-        broker.config.codex.trusted_host_versions,
-      );
-    const verified = isVerified(before);
+    const verified = isVerifiedCodexBinding(broker, before);
     const duplicated = () =>
       !!(
         s.agent_session_id &&
@@ -77,12 +81,12 @@ export function installCodexPushTrust(broker: Broker, now: () => number = Date.n
         : reuse
           ? { trusted: true, reason: null }
           : s.agent_session_id
-            ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh, snapshot)
+            ? await broker.codexNames?.pushTrust(s.agent_session_id, fresh, snapshot, true)
             : undefined;
     if (stopped) return 'app-server-unavailable';
     const current = getSession(broker.db, s.id);
     if (!matches(current)) return 'app-server-unavailable';
-    const stillVerified = isVerified(current);
+    const stillVerified = isVerifiedCodexBinding(broker, current);
     const reason = !stillVerified
       ? 'unverified-bind'
       : duplicated()

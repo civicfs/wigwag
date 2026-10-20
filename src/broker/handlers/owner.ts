@@ -16,6 +16,7 @@ import {
   getMessage,
   type Priority,
 } from '../../store/messages.js';
+import { claimUnownedRecipients } from '../../store/ownership.js';
 import { holderOf, listSessions } from '../../store/sessions.js';
 import { activeThrottles } from '../../store/subs.js';
 import { workspaceLabel } from '../../workspace.js';
@@ -111,6 +112,8 @@ export function installOwner(broker: Broker): void {
       // Held messages that the merged scope now allows are retried; stuck ones stay stuck.
       const scope = scopeOf(db, a);
       for (const s of listSessions(db)) {
+        // Linking can make a previously ineligible name holder its first valid recipient, even for stuck/read mail.
+        if (scope.has(s.workspace)) claimUnownedRecipients(db, s.id);
         // Final review I-7: the link is committed; pushes of the newly allowed backlog run detached.
         if (s.state !== 'offline' && scope.has(s.workspace)) {
           broker.engine

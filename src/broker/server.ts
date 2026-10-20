@@ -130,6 +130,10 @@ export class Broker {
     mkdirSync(logs, { recursive: true, mode: 0o700 });
     this.sockPath = socket;
     this.logPath = log;
+    this.handle('channel.receipt', ({ conn }, p) => {
+      if (!conn.channelReceipts) throw new WigwagError('bad_request', 'Channel receipts were not negotiated');
+      return { accepted: conn.channelReceipt(p.receipt_id, p.ok) };
+    });
   }
 
   handle<M extends MethodName>(method: M, h: (ctx: HandlerCtx, params: Params<M>) => unknown): void {
@@ -264,7 +268,7 @@ export class Broker {
   }
 
   private accept(socket: Socket): void {
-    const conn = new Connection(socket);
+    const conn = new Connection(socket, this.config.broker.start_timeout_ms);
     const decoder = new LineDecoder(frameLimit(this.config));
     this.connections.add(conn);
     socket.setEncoding('utf8');
@@ -365,6 +369,7 @@ export class Broker {
           'Rehearsal accepts owner clients only; native MCP/hook clients are disabled.',
         );
       const compatibility = assertPeerVersions(hello, 'client');
+      conn.channelReceipts = hello.role === 'mcp' && hello.agent === 'claude' && hello.channel_receipts === true;
       conn.legacy = compatibility.legacy;
       if (compatibility.warning) this.recordVersionWarning(compatibility.warning);
       const welcome = await this.onHello(conn, hello);

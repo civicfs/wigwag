@@ -38,11 +38,20 @@ it('keeps stderr echoes out of stored errors, audit events, notices and owner de
     });
     claimName(broker.db, receiver.id, 'codex-one');
     bindAgentSession(broker.db, receiver.id, 'thread-1');
+    const sender = createSession(broker.db, {
+      agent: 'claude',
+      cwd: '/test',
+      workspace: '/test',
+      pid_chain: [],
+      mcp_ppid: null,
+    });
+    claimName(broker.db, sender.id, 'peer-one');
     const insert = (from: string, priority: 'normal' | 'low', body: string) =>
       insertMessage(
         broker.db,
         {
           from_name: from,
+          from_workspace: from === 'owner' ? null : '/test',
           to_target: 'codex-one',
           kind: 'message',
           priority,

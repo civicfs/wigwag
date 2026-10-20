@@ -162,7 +162,7 @@ export const REHEARSAL_STORAGE_PATHS: readonly string[] = Object.freeze([
   'blobs/sha256',
   'archive',
   ...['state.db', 'broker.mutex'].flatMap((file) => [file, `${file}-wal`, `${file}-shm`, `${file}-journal`]),
-  ...[3, 4].map((version) => `state.db.pre-v${version}.bak`),
+  ...[3, 4, 5].map((version) => `state.db.pre-v${version}.bak`),
 ]);
 function containedStorage(home: string, path: string): string {
   if (!isAbsolute(path)) throw new WigwagError('config', 'Rehearsal storage requires absolute paths');
@@ -202,7 +202,7 @@ export function rehearsalStoragePaths(home: string): string[] {
   for (const name of [
     `config.json.${process.pid}.tmp`,
     `broker.lock.${process.pid}.tmp`,
-    ...[3, 4].map((version) => `state.db.pre-v${version}.${process.pid}.tmp`),
+    ...[3, 4, 5].map((version) => `state.db.pre-v${version}.${process.pid}.tmp`),
   ])
     paths.add(join(home, name));
   for (const directory of [home, join(home, 'archive')]) {
@@ -303,7 +303,7 @@ export function rehearsalSqlitePath(
   if (mode.enabled) {
     const auxiliary = ['-wal', '-shm', '-journal'].map((suffix) => actual + suffix);
     if (migrations)
-      for (const v of [3, 4]) auxiliary.push(`${actual}.pre-v${v}.bak`, `${actual}.pre-v${v}.${process.pid}.tmp`);
+      for (const v of [3, 4, 5]) auxiliary.push(`${actual}.pre-v${v}.bak`, `${actual}.pre-v${v}.${process.pid}.tmp`);
     const checked = assertRehearsalStoragePaths(home, auxiliary, mode);
     if (auxiliary.some((path, i) => path !== checked[i]))
       throw new WigwagError('config', 'Rehearsal SQLite auxiliary paths must not be aliased');

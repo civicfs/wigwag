@@ -5,13 +5,13 @@
   },
   "metadata": {
     "description": "wigwag agent messaging",
-    "version": "0.2.0"
+    "version": "0.3.1"
   },
   "plugins": [
     {
       "name": "wigwag",
       "description": "Push messages and a data channel between Claude Code and Codex sessions on this machine.",
-      "version": "0.2.0",
+      "version": "0.3.1",
       "author": {
         "name": "Michael Handelman"
       },
