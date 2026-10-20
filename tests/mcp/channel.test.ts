@@ -64,6 +64,9 @@ describe('claude MCP server channel capability (E-3)', () => {
     await sendOwner('adv-one', 'ADV-TOKEN');
     await until(() => a.channel.length === 1);
     expect(a.channel[0].content).toContain('ADV-TOKEN');
+    // The client can observe the notification before its write receipt reaches the broker.
+    const db = broker.db;
+    await until(() => deliveriesByState(db, ['read']).length === 1);
     expect(deliveriesByState(broker.db, ['read'])).toHaveLength(1);
   });
 
