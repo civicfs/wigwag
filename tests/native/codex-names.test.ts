@@ -96,6 +96,94 @@ describe('readIndexName', () => {
 });
 
 describe('CodexNames', () => {
+  it.each(['stopped', 'replaced'])('does not publish a late refresh from a %s connection', async (change) => {
+    let enter = () => {},
+      release = () => {};
+    const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      }),
+      gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    const a = new FakeApp({}),
+      b = new FakeApp({ t1: root('t1') });
+    a.call = async () => {
+      enter();
+      await gate;
+      return { thread: root('t1', 'Late API name') };
+    };
+    let made = 0;
+    const names = new CodexNames({
+      factory: () => (++made === 1 ? a : b),
+      indexPath: indexFile(['{"id":"t1","thread_name":"Stale index name"}']),
+    });
+    const seen: unknown[] = [];
+    names.onName = (...args) => seen.push(args);
+    const refreshing = names.refresh('t1');
+    try {
+      await entered;
+      if (change === 'stopped') names.stop();
+      else {
+        a.emit('disconnected');
+        expect(await names.verifyRoot('t1')).toBe(true);
+      }
+      release();
+      await refreshing;
+      expect(seen).toEqual([]);
+    } finally {
+      release();
+      await refreshing;
+      names.stop();
+    }
+  });
+
+  it.each(['thread/read', 'thread/loaded/list'])(
+    'keeps the replacement connection when an old %s fails late',
+    async (method) => {
+      let rejectFirst = (_e: Error) => {},
+        rejectLate = (_e: Error) => {};
+      const first = new Promise<never>((_resolve, reject) => {
+          rejectFirst = reject;
+        }),
+        late = new Promise<never>((_resolve, reject) => {
+          rejectLate = reject;
+        });
+      const a = new FakeApp({}),
+        b = new FakeApp({ t1: root('t1') });
+      let calls = 0,
+        made = 0,
+        closedB = 0;
+      a.call = async () => (++calls === 1 ? first : late);
+      b.close = () => {
+        closedB++;
+        b.emit('disconnected');
+      };
+      const names = new CodexNames({ factory: () => (++made === 1 ? a : b), indexPath: missingIndex() });
+      const seen: unknown[] = [];
+      names.onName = (...args) => seen.push(args);
+      const check = () => (method === 'thread/read' ? names.read('t1') : names.loadedThreads());
+      try {
+        const oldFirst = check(),
+          oldLate = check();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        rejectFirst(new Error('connection A failed'));
+        await oldFirst;
+        expect(await names.verifyRoot('t1')).toBe(true);
+        rejectLate(new Error('connection A failed late'));
+        await oldLate;
+        expect(names.available).toBe(true);
+        expect(closedB).toBe(0);
+        a.emit('message', { method: 'thread/name/updated', params: { threadId: 't1', threadName: 'Stale name' } });
+        b.emit('message', { method: 'thread/name/updated', params: { threadId: 't1', threadName: 'Current name' } });
+        expect(seen).toEqual([['t1', 'Current name', 'codex-api']]);
+        expect(await names.verifyRoot('t1')).toBe(true);
+        expect(made).toBe(2);
+      } finally {
+        names.stop();
+      }
+    },
+  );
+
   it.each([
     ['non-array data', { data: 't1', nextCursor: null }],
     ['non-string thread id', { data: ['t1', 42], nextCursor: null }],

@@ -9,6 +9,7 @@ import { openDb } from '../../src/store/db.js';
 import { recordLineage } from '../../src/store/recovery.js';
 import { SCHEMA_V1, SCHEMA_V2 } from '../../src/store/schema.js';
 import { bindAgentSession, claimName, createSession } from '../../src/store/sessions.js';
+import { SCHEMA_VERSION } from '../../src/version.js';
 import { DIST_MAIN, tmpHome } from '../helpers.js';
 
 function fixturePath(home: string): string {
@@ -175,7 +176,7 @@ describe('read-only doctor state diagnostics', () => {
       r = await doctor(home, path);
     for (const text of [
       'schema version',
-      '4',
+      String(SCHEMA_VERSION),
       'state.db.pre-v3.bak',
       '0600',
       'MCP disconnected',
@@ -196,10 +197,10 @@ describe('read-only doctor state diagnostics', () => {
     expect(r.stdout).not.toContain('\u001b[2J');
     expect(snapshot(home)).toEqual(before);
   });
-  it('reports an insecure backup mode without opening or changing the backup', async () => {
+  it.each([3, 4, 5])('reports an insecure v%s backup mode without opening or changing the backup', async (version) => {
     const home = tmpHome(),
       path = fixturePath(home),
-      backup = join(home, 'state.db.pre-v3.bak');
+      backup = join(home, `state.db.pre-v${version}.bak`);
     writeFileSync(backup, 'private fixture', { mode: 0o644 });
     const before = snapshot(home);
     const r = await doctor(home, path);
@@ -237,7 +238,7 @@ describe('read-only doctor state diagnostics', () => {
       return new DatabaseSync(path, { readOnly: true });
     });
     try {
-      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 4 });
+      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: SCHEMA_VERSION });
       expect(fallback).toBe(true);
     } finally {
       db.close();
@@ -257,7 +258,7 @@ describe('read-only doctor state diagnostics', () => {
     const before = snapshot(home),
       r = await doctor(home, path);
     expect(r.stdout).toContain('schema version');
-    expect(r.stdout).toContain('2 (client requires 4)');
+    expect(r.stdout).toContain(`2 (client requires ${SCHEMA_VERSION})`);
     expect(snapshot(home)).toEqual(before);
   });
 });

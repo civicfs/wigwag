@@ -34,6 +34,47 @@ while (!existsSync(${JSON.stringify(release)})) await new Promise((r) => setTime
 }
 
 describe('wigwag codex --as (E-1)', () => {
+  it.each(['--cd', '-C', '--cd=', '-C-attached'])(
+    'applies --as in the working directory selected by %s and preserves it through native title refreshes',
+    async (option) => {
+      const t = await startTestBroker();
+      broker = t.broker;
+      const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ww-launch-cd-')));
+      const work = join(dir, 'work');
+      mkdirSync(work);
+      const fake = blockingCodex(dir);
+      const cfg = JSON.parse(readFileSync(configPath(t.home), 'utf8'));
+      cfg.codex.binary = fake.bin;
+      writeFileSync(configPath(t.home), JSON.stringify(cfg));
+      const cdArgs = option === '--cd=' ? [`--cd=${work}`] : option === '-C-attached' ? ['-Cwork'] : [option, 'work'];
+      const child = spawn(process.execPath, [DIST_MAIN, 'codex', '--as', 'e2e-codex', ...cdArgs], {
+        cwd: dir,
+        env: { ...process.env, WIGWAG_HOME: t.home, WIGWAG_NO_UPDATE_CHECK: '1' },
+        stdio: 'ignore',
+      });
+      const exited = new Promise<number | null>((resolve) => child.once('close', resolve));
+      try {
+        await until(() => existsSync(fake.log));
+        const c = await mcpClient(t.home, { agent: 'codex', cwd: work });
+        try {
+          expect(c.welcome.name).toBe('e2e-codex');
+          await c.client.call('session.bind', { agent_session_id: 'thread-cd' });
+          broker.naming.adoptNative(c.welcome.session_id, 'Automatically generated Codex title', 'codex-api');
+          expect(getSession(broker.db, c.welcome.session_id)).toMatchObject({
+            name: 'e2e-codex',
+            name_source: 'custom',
+            native_name: 'Automatically generated Codex title',
+          });
+        } finally {
+          c.client.close();
+        }
+      } finally {
+        writeFileSync(fake.release, '');
+        expect(await exited).toBe(0);
+      }
+    },
+  );
+
   it('registers the intended name with the broker before launching; the session that connects in this directory takes it at once', async () => {
     const t = await startTestBroker();
     broker = t.broker;
@@ -58,7 +99,7 @@ describe('wigwag codex --as (E-1)', () => {
       await until(() => existsSync(fake.log));
       expect(JSON.parse(readFileSync(fake.log, 'utf8'))).toEqual({
         name: 'e2e-codex',
-        argv: ['-m', 'some-model', expect.stringMatching(/initialize.*wigwag/i)],
+        argv: ['-m', 'some-model', expect.stringMatching(/wigwag register tool with name "e2e-codex"/)],
       });
       // The daemon-spawned MCP server of the new thread: no WIGWAG_NAME, cwd is the terminal's directory.
       const c = await mcpClient(t.home, { agent: 'codex', cwd: work });

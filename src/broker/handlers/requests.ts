@@ -1,10 +1,11 @@
 import { WigwagError } from '../../errors.js';
 import { newId } from '../../ids.js';
 import { findRequest, findResponse, type MessageRow } from '../../store/messages.js';
+import { messageAddressedTo, messageSender, messageSentBy } from '../../store/ownership.js';
 import type { Connection } from '../connection.js';
 import { connCanSee } from '../scope.js';
 import type { Broker } from '../server.js';
-import { deliveryReceipt, markRead, myName, sendMessage, stillMine } from './messages.js';
+import { deliveryReceipt, markRead, myName, replyDestination, sendMessage, stillMine } from './messages.js';
 
 export type RequestSummary = {
   request_id: string;
@@ -77,7 +78,13 @@ export function installRequests(broker: Broker): void {
   /** R46-6: the response id is listed only when the caller can see that response. */
   const visibleResponseId = (conn: Connection, req: MessageRow): string | null => {
     const resp = req.request_id ? findResponse(db, req.request_id) : undefined;
-    return resp && connCanSee(db, conn, resp) ? resp.id : null;
+    return resp &&
+      connCanSee(db, conn, resp) &&
+      (conn.role === 'owner' ||
+        messageSentBy(db, resp, conn.sessionId) ||
+        messageAddressedTo(db, resp.id, conn.sessionId))
+      ? resp.id
+      : null;
   };
 
   const summary = (req: MessageRow, conn: Connection): RequestSummary => ({
@@ -93,19 +100,20 @@ export function installRequests(broker: Broker): void {
   });
 
   const expiryNotice = (req: MessageRow) => {
+    const sender = messageSender(db, req.id);
+    if (!sender && !['owner', 'wigwag'].includes(req.from_name)) return;
+    const to = sender?.name ?? req.from_name;
     const subject = `request expired: ${req.request_id}`;
     const exists = db
-      .prepare(
-        `SELECT 1 FROM messages WHERE kind = 'notice' AND from_name = 'wigwag' AND to_target = ? AND subject = ?`,
-      )
-      .get(req.from_name, subject);
+      .prepare(`SELECT 1 FROM messages WHERE kind = 'notice' AND from_name = 'wigwag' AND subject = ?`)
+      .get(subject);
     if (exists) return;
     broker.engine
       ?.notice(
-        req.from_name,
+        to,
         subject,
         `Your request "${req.subject}" to ${req.to_target} expired without a response.`,
-        { from_workspace: req.from_workspace }, // R46-N3: keeps the request's provenance
+        { from_workspace: req.from_workspace, recipient_session_id: sender?.id }, // R46-N3: keeps provenance and ownership
       )
       .catch((e) => broker.log(`expiry notice failed: ${(e as Error).message}`));
   };
@@ -163,13 +171,13 @@ export function installRequests(broker: Broker): void {
   broker.handle('req.respond', async ({ conn }, p) => {
     const me = myName(broker, conn);
     const req = visibleRequest(conn, p.request_id);
-    if (req.to_target !== me)
+    if (!messageAddressedTo(db, req.id, conn.sessionId))
       throw new WigwagError('bad_request', `Request ${p.request_id} is addressed to ${req.to_target}, not ${me}`);
     const status = statusOf(req);
     if (status !== 'open') throw new WigwagError('conflict', `Request ${p.request_id} is already ${status}`);
     const m = await sendMessage(broker, {
       from: me,
-      to: req.from_name,
+      ...replyDestination(broker, req),
       kind: 'response',
       priority: 'normal',
       subject: `${p.status === 'ok' ? 'Response' : 'Error response'}: ${req.subject}`.slice(0, 200),
@@ -184,17 +192,25 @@ export function installRequests(broker: Broker): void {
   });
 
   broker.handle('req.await', async ({ conn }, p) => {
-    const me = myName(broker, conn);
+    myName(broker, conn);
     const req = visibleRequest(conn, p.request_id);
-    if (req.from_name !== me) throw new WigwagError('bad_request', `Request ${p.request_id} was not sent by ${me}`);
+    if (!messageSentBy(db, req, conn.sessionId))
+      throw new WigwagError(
+        'bad_request',
+        `Request ${p.request_id} was not sent by this session; historical ownership may be unavailable`,
+      );
     const finish = (got: MessageRow | null) => {
       // R42-B / R46-6: re-check the request and the response right before returning (links may have changed while
       // waiting); a request that is no longer visible is reported like a missing one.
       if (!connCanSee(db, conn, req)) throw new WigwagError('not_found', `Request not found: ${p.request_id}`);
-      // Final review I-4 (R48): a caller that no longer holds `me` (renamed while waiting, name taken by another
-      // session) must not read or receive the response, which is now addressed to the new holder.
-      const resp = got && stillMine(broker, conn, me, got) ? got : null;
-      if (resp) markRead(broker, resp.id, me);
+      const resp =
+        got &&
+        messageSentBy(db, req, conn.sessionId) &&
+        messageAddressedTo(db, got.id, conn.sessionId) &&
+        connCanSee(db, conn, got)
+          ? got
+          : null;
+      if (resp) markRead(broker, resp.id, myName(broker, conn));
       return { status: statusOf(req), response: resp };
     };
     const existing = findResponse(db, p.request_id);
@@ -224,7 +240,10 @@ export function installRequests(broker: Broker): void {
       }>
     )
       .map((r) => findRequest(db, r.request_id) as MessageRow)
-      .filter((r) => conn.role === 'owner' || [r.from_name, r.to_target].includes(myName(broker, conn)))
+      .filter(
+        (r) =>
+          conn.role === 'owner' || messageSentBy(db, r, conn.sessionId) || messageAddressedTo(db, r.id, conn.sessionId),
+      )
       .filter((r) => connCanSee(db, conn, r))
       .map((r) => summary(r, conn))
       .filter((s) => p.status === 'all' || s.status === p.status);

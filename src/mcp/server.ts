@@ -1,5 +1,4 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { ReconnectingClient } from '../client/reconnecting.js';
@@ -12,6 +11,7 @@ import type { Agent } from '../store/sessions.js';
 import { VERSION } from '../version.js';
 import { hookOrigin } from './hook-origin.js';
 import { instructions } from './instructions.js';
+import { FlushedStdioServerTransport } from './stdio.js';
 import { parseToolInput, toolsFor } from './tools.js';
 
 type Welcome = { session_id: string; name: string; warning: string | null };
@@ -95,14 +95,27 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
   const initialized = new Promise<void>((resolve) => {
     markInitialized = resolve;
   });
-  const sendPush = (params: PushData): void => {
-    server
-      .notification({ method: 'notifications/claude/channel', params })
-      .catch((e: unknown) => process.stderr.write(`wigwag: channel notification failed: ${String(e)}\n`));
+  const sendPush = async (client: ReconnectingClient, data: PushData): Promise<void> => {
+    const { receipt_id, ...params } = data;
+    let ok = false;
+    try {
+      await server.notification({ method: 'notifications/claude/channel', params });
+      ok = true;
+    } catch (e) {
+      process.stderr.write(`wigwag: channel notification failed: ${String(e)}\n`);
+    }
+    if (receipt_id) {
+      try {
+        // This ID is owned by the exact broker connection that sent it. A reconnect cannot acknowledge it.
+        await client.call('channel.receipt', { receipt_id, ok });
+      } catch (e) {
+        process.stderr.write(`wigwag: channel receipt failed: ${String(e)}\n`);
+      }
+    }
   };
   server.oninitialized = markInitialized;
 
-  await server.connect(new StdioServerTransport());
+  await server.connect(new FlushedStdioServerTransport());
   await initialized;
   if (shuttingDown) return;
 
@@ -131,6 +144,7 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
     mcp_ppid: process.ppid,
     requested_name: process.env.WIGWAG_NAME || undefined,
     channel,
+    ...(agent === 'claude' ? { channel_receipts: true } : {}),
     resume_session_id: sessionId ?? undefined,
     ...(agent === 'codex' ? { host_client: hostClient } : {}),
   });
@@ -143,7 +157,8 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
     try {
       const home = resolveHome();
       const config = loadConfig(home);
-      client = new ReconnectingClient({ home, config, entry, hello });
+      const connectingClient = new ReconnectingClient({ home, config, entry, hello });
+      client = connectingClient;
       pending = client;
       client.on('event', (name: string, data: unknown) => {
         if (name === 'session.identity') {
@@ -152,7 +167,7 @@ export async function runMcp(agent: Agent, entry: string): Promise<void> {
           return;
         }
         if (agent !== 'claude' || name !== 'push') return;
-        sendPush(data as PushData);
+        void sendPush(connectingClient, data as PushData);
       });
       client.on('reconnected', (w: Welcome) => {
         sessionId = w.session_id;

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installLiveness } from '../../src/broker/liveness.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
+import { ReconnectingClient } from '../../src/client/reconnecting.js';
 import { loadConfig } from '../../src/config.js';
 import { CodexNames } from '../../src/native/codex-names.js';
 import type { ProcessProbe } from '../../src/proc/identity.js';
@@ -13,10 +14,25 @@ import { mcpClient, startBroker, tmpHome, until } from '../helpers.js';
 
 class FakeApp extends EventEmitter {
   loaded = new Set<string>();
+  down = false;
+  nonRoot = false;
+  onList?: () => Promise<void> | void;
   async connect() {}
   async call(method: string, p: { threadId?: string }) {
-    if (method === 'thread/loaded/list') return { data: [...this.loaded], nextCursor: null };
-    return { thread: { id: p.threadId, sessionId: p.threadId, parentThreadId: null, source: 'cli', name: null } };
+    if (this.down) throw new Error('fixture unavailable');
+    if (method === 'thread/loaded/list') {
+      await this.onList?.();
+      return { data: [...this.loaded], nextCursor: null };
+    }
+    return {
+      thread: {
+        id: p.threadId,
+        sessionId: p.threadId,
+        parentThreadId: this.nonRoot ? 'parent' : null,
+        source: 'cli',
+        name: null,
+      },
+    };
   }
   send() {}
   close() {}
@@ -80,10 +96,278 @@ async function claudeBound(home: string, ppid: number, name: string) {
   });
   return a;
 }
+async function codexBound(home: string, app: FakeApp) {
+  app.loaded.add('T');
+  const c = await mcpClient(home, { agent: 'codex', requested_name: 'native-worker' });
+  cleanup.push(() => c.client.destroy());
+  await c.client.call('session.bind', { agent_session_id: 'T' });
+  return c;
+}
 // The disconnect kicks one probe (setImmediate); settle() lets it finish so probe counts below are deterministic.
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
 describe('parent probe loop (W8)', () => {
+  it.each(['absent', 'unavailable', 'non-root'])(
+    'keeps an expired native root offline through real MCP reconnects while %s, then recovers on loaded/root proof',
+    async (evidence) => {
+      const { home, broker, app } = await boot();
+      await broker.liveness?.probeNow();
+      app.loaded.add('T');
+      let sessionId: string | undefined,
+        resumes = 0,
+        reconnected = 0;
+      const origin = { name: 'codex-mcp-client', version: '0.162.1', thread_id: 'T' };
+      const onHello = broker.onHello;
+      broker.onHello = async (conn, hello) => {
+        try {
+          return await onHello(conn, hello);
+        } finally {
+          if (hello.resume_session_id === sessionId && sessionId) resumes++;
+        }
+      };
+      const client = new ReconnectingClient({
+        home,
+        config: loadConfig(home),
+        entry: null,
+        hello: () => ({
+          protocol: 1,
+          role: 'mcp',
+          agent: 'codex',
+          cwd: CWD,
+          pid_chain: [11, 2191],
+          mcp_ppid: 2191,
+          requested_name: 'native-worker',
+          host_client: { name: origin.name, version: origin.version },
+          resume_session_id: sessionId,
+        }),
+      });
+      cleanup.push(() => client.stop());
+      client.on('reconnected', () => reconnected++);
+      const welcome = (await client.start()) as { session_id: string };
+      sessionId = welcome.session_id;
+      await client.call('session.bind', { agent_session_id: 'T', hook_origin: origin });
+      app.loaded.clear();
+      await broker.liveness?.probeNow();
+      clock = 60_000;
+      await broker.liveness?.probeNow();
+      await broker.liveness?.probeNow();
+      expect(getSession(broker.db, sessionId)?.state).toBe('offline');
+      if (evidence === 'unavailable') app.down = true;
+      if (evidence === 'non-root') {
+        app.loaded.add('T');
+        app.nonRoot = true;
+      }
+      await until(() => resumes >= 2 || reconnected > 0);
+      expect(getSession(broker.db, sessionId)).toMatchObject({ state: 'offline', link: 'disconnected' });
+      expect(reconnected).toBe(0);
+      const replacement = await mcpClient(home, { cwd: CWD, requested_name: 'native-worker' });
+      cleanup.push(() => replacement.client.destroy());
+      expect(getSession(broker.db, replacement.welcome.session_id)?.name).toBe('native-worker');
+      let turned = false;
+      const turn = client.call('session.turn', { phase: 'started', hook_origin: origin }).then(() => {
+        turned = true;
+      });
+      await until(() => resumes >= 3);
+      expect(turned).toBe(false);
+      expect(getSession(broker.db, sessionId)?.state).toBe('offline');
+      app.down = false;
+      app.nonRoot = false;
+      app.loaded.add('T');
+      await turn;
+      expect(reconnected).toBe(1);
+      expect(getSession(broker.db, sessionId)).toMatchObject({ state: 'online-busy', agent_session_id: 'T' });
+      expect(getSession(broker.db, sessionId)?.name).not.toBe('native-worker');
+      expect(getSession(broker.db, replacement.welcome.session_id)?.name).toBe('native-worker');
+    },
+  );
+
+  it.each(['generation', 'native', 'host', 'closed', 'stopped'])(
+    'does not finish an expired Codex resume after %s changes during native verification',
+    async (change) => {
+      const { home, broker, app } = await boot();
+      await broker.liveness?.probeNow();
+      broker.liveness?.stop();
+      const c = await codexBound(home, app);
+      c.client.destroy();
+      await until(() => getSession(broker.db, c.welcome.session_id)?.link === 'disconnected');
+      const db = broker.db;
+      db.prepare("UPDATE sessions SET state='offline',codex_push_reason='root-not-loaded' WHERE id=?").run(
+        c.welcome.session_id,
+      );
+      let enter = () => {},
+        release = () => {};
+      const entered = new Promise<void>((resolve) => {
+          enter = resolve;
+        }),
+        gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      app.onList = async () => {
+        app.onList = undefined;
+        enter();
+        await gate;
+      };
+      const connecting = mcpClient(home, { agent: 'codex', resume_session_id: c.welcome.session_id });
+      void connecting.then(
+        ({ client }) => client.destroy(),
+        () => {},
+      );
+      await entered;
+      const prepare = vi.spyOn(db, 'prepare');
+      try {
+        if (change === 'stopped') {
+          await broker.stop();
+          prepare.mockClear();
+        } else if (change === 'closed') {
+          const incoming = [...broker.connections].find((conn) => conn.sessionId === null);
+          if (!incoming) throw new Error('missing pending resume connection');
+          incoming.destroy();
+        } else {
+          db.prepare(
+            `UPDATE sessions SET conn_generation=conn_generation+?,agent_session_id=?,host_client_version=? WHERE id=?`,
+          ).run(
+            change === 'generation' ? 1 : 0,
+            change === 'native' ? 'U' : 'T',
+            change === 'host' ? '0.163.0' : '0.162.1',
+            c.welcome.session_id,
+          );
+        }
+        release();
+        await expect(connecting).rejects.toMatchObject({
+          code: change === 'closed' || change === 'stopped' ? 'transport' : 'conflict',
+        });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        if (change === 'stopped') expect(prepare).not.toHaveBeenCalled();
+        else {
+          expect(getSession(db, c.welcome.session_id)?.state).toBe('offline');
+          expect(broker.connectionFor(c.welcome.session_id)).toBeUndefined();
+        }
+      } finally {
+        prepare.mockRestore();
+        release();
+      }
+    },
+  );
+
+  it('expires a repeatedly unloaded connected Codex root, frees its name, and rejects the old MCP hooks', async () => {
+    const { home, broker, app } = await boot();
+    await broker.liveness?.probeNow();
+    const c = await codexBound(home, app);
+    const connection = broker.connectionFor(c.welcome.session_id);
+    app.loaded.clear();
+    await broker.liveness?.probeNow();
+    expect(getSession(broker.db, c.welcome.session_id)?.state).toBe('online-idle');
+    clock = 60_000;
+    await broker.liveness?.probeNow();
+    expect(getSession(broker.db, c.welcome.session_id)?.state).toBe('online-idle');
+    await broker.liveness?.probeNow();
+    expect(getSession(broker.db, c.welcome.session_id)).toMatchObject({ state: 'offline', link: 'disconnected' });
+    expect(connection?.failed).toBe(true);
+    const replacement = await mcpClient(home, { requested_name: 'native-worker' });
+    cleanup.push(() => replacement.client.destroy());
+    expect(getSession(broker.db, replacement.welcome.session_id)?.name).toBe('native-worker');
+    await expect(c.client.call('session.turn', { phase: 'started' })).rejects.toBeDefined();
+    expect(getSession(broker.db, c.welcome.session_id)).toMatchObject({ state: 'offline', name: null });
+  });
+
+  it.each(['loaded', 'unavailable'])('restarts connected Codex absence grace after %s evidence', async (recovery) => {
+    const { home, broker, app } = await boot();
+    await broker.liveness?.probeNow();
+    const c = await codexBound(home, app);
+    app.loaded.clear();
+    await broker.liveness?.probeNow();
+    clock = 60_000;
+    if (recovery === 'loaded') app.loaded.add('T');
+    else app.down = true;
+    for (let i = 0; i < 3; i++) await broker.liveness?.probeNow();
+    expect(getSession(broker.db, c.welcome.session_id)?.state).toBe('online-idle');
+    app.loaded.clear();
+    app.down = false;
+    clock = 120_000;
+    await broker.liveness?.probeNow();
+    await broker.liveness?.probeNow();
+    expect(getSession(broker.db, c.welcome.session_id)?.state).toBe('online-idle');
+    clock = 180_000;
+    await broker.liveness?.probeNow();
+    expect(getSession(broker.db, c.welcome.session_id)?.state).toBe('offline');
+  });
+
+  it('does not expire a connected root using absence from a replaced metadata connection', async () => {
+    const { home, broker, app } = await boot();
+    await broker.liveness?.probeNow();
+    const c = await codexBound(home, app);
+    app.loaded.clear();
+    await broker.liveness?.probeNow();
+    clock = 60_000;
+    await broker.liveness?.probeNow();
+    const check = broker.checkCodexPush;
+    const replacement = vi.spyOn(broker, 'checkCodexPush').mockImplementation(async (...args) => {
+      const verdict = await check(...args);
+      app.emit('disconnected');
+      app.loaded.add('T');
+      expect(await broker.codexNames?.verifyRoot('T')).toBe(true);
+      return verdict;
+    });
+    try {
+      await broker.liveness?.probeNow();
+      expect(getSession(broker.db, c.welcome.session_id)?.state).toBe('online-idle');
+      expect(broker.connectionFor(c.welcome.session_id)?.failed).toBe(false);
+    } finally {
+      replacement.mockRestore();
+    }
+  });
+
+  it.each(['generation', 'native', 'host'])(
+    'does not expire a connected Codex root when %s ownership changes during its absence probe',
+    async (change) => {
+      const { home, broker, app } = await boot();
+      await broker.liveness?.probeNow();
+      const c = await codexBound(home, app);
+      app.loaded.clear();
+      await broker.liveness?.probeNow();
+      clock = 60_000;
+      await broker.liveness?.probeNow();
+      let enter = () => {},
+        release = () => {};
+      const entered = new Promise<void>((resolve) => {
+          enter = resolve;
+        }),
+        gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      app.onList = async () => {
+        app.onList = undefined;
+        enter();
+        await gate;
+      };
+      const probing = broker.liveness?.probeNow();
+      try {
+        await entered;
+        broker.db
+          .prepare(
+            `UPDATE sessions SET parent_state='live',codex_push_reason=NULL,
+            conn_generation=conn_generation+?,agent_session_id=?,host_client_version=? WHERE id=?`,
+          )
+          .run(
+            change === 'generation' ? 1 : 0,
+            change === 'native' ? 'U' : 'T',
+            change === 'host' ? '0.163.0' : '0.162.1',
+            c.welcome.session_id,
+          );
+        release();
+        await probing;
+        expect(getSession(broker.db, c.welcome.session_id)).toMatchObject({
+          state: 'online-idle',
+          parent_state: 'live',
+          codex_push_reason: null,
+        });
+      } finally {
+        release();
+        await probing;
+      }
+    },
+  );
+
   it('applies Claude process checks before awaiting a slow Codex trust scan', async () => {
     const { home, broker, app } = await boot();
     procs.set(4242, 'start-A');

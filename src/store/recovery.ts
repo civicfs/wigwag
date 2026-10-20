@@ -133,7 +133,10 @@ export const recoveryCandidates = (
                  AND l.cause = 'resume' AND l.outcome = 'flagged'))
              OR EXISTS (SELECT 1 FROM assignments a WHERE a.ended_at IS NULL
                 AND (a.worker_session_id = s.id OR a.orchestrator_session_id = s.id))
-             OR EXISTS (SELECT 1 FROM deliveries d WHERE (d.forward_to = s.id OR (d.forward_to IS NULL AND d.recipient = s.name)) AND d.state IN ('pending','held','failed','stuck'))
+             OR EXISTS (SELECT 1 FROM deliveries d WHERE COALESCE(d.recipient_session_id,d.forward_to) IN (
+               WITH RECURSIVE owners(id) AS (SELECT s.id UNION SELECT a.id FROM sessions a JOIN owners o ON a.retired_into=o.id)
+               SELECT id FROM owners
+             ) AND d.state IN ('pending','held','failed','stuck'))
              OR EXISTS (SELECT 1 FROM subscriptions sub WHERE sub.session_name = s.name AND sub.removed_at IS NULL)
              OR EXISTS (SELECT 1 FROM mutes m WHERE m.session_name = s.name AND m.removed_at IS NULL)
            )
@@ -339,8 +342,11 @@ export function recoverySlot(db: Db, id: string): RecoverySlot | null {
   const mail = db
     .prepare(`SELECT count(*) AS undelivered,
     coalesce(sum(CASE WHEN state IN ('pending','held') THEN 1 ELSE 0 END),0) AS held_pending
-    FROM deliveries WHERE (forward_to=? OR (forward_to IS NULL AND recipient=?)) AND state IN ('pending','held','failed','stuck')`)
-    .get(s.id, s.name) as { undelivered: number; held_pending: number };
+    FROM deliveries WHERE COALESCE(recipient_session_id,forward_to) IN (
+      WITH RECURSIVE owners(id) AS (SELECT ? UNION SELECT a.id FROM sessions a JOIN owners o ON a.retired_into=o.id)
+      SELECT id FROM owners
+    ) AND state IN ('pending','held','failed','stuck')`)
+    .get(s.id) as { undelivered: number; held_pending: number };
   return {
     session_id: s.id,
     name: s.name,

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { pendingAwaitCount, scheduleChunked } from '../../src/broker/handlers/requests.js';
 import type { Broker } from '../../src/broker/server.js';
 import { deliveriesOfMessage } from '../../src/store/messages.js';
-import { mcpClient, startBroker, startTestBroker, until } from '../helpers.js';
+import { mcpClient, ownerClient, startBroker, startTestBroker, until } from '../helpers.js';
 
 let home: string;
 let broker: Broker;
@@ -21,6 +21,18 @@ const join = async (name: string) => {
 };
 
 describe('request/response', () => {
+  it('keeps request creation, response and await restricted to sessions; the owner can inspect requests', async () => {
+    const owner = await ownerClient(home);
+    closers.push(() => owner.close());
+    for (const [method, params] of [
+      ['req.request', { to: 'worker', subject: 'q', body: 'b' }],
+      ['req.respond', { request_id: 'req-unknown', body: 'b', status: 'ok' }],
+      ['req.await', { request_id: 'req-unknown', wait_s: 0 }],
+    ] as const)
+      await expect(owner.call(method, params)).rejects.toMatchObject({ code: 'bad_request' });
+    expect(await owner.call('req.list', {})).toEqual({ requests: [] });
+  });
+
   it('request → push to responder; await returns the response; second respond is refused', async () => {
     const a = await join('alpha-one');
     const b = await join('beta-one');
@@ -45,7 +57,7 @@ describe('request/response', () => {
     });
   });
 
-  it('an await whose caller renamed meanwhile neither reads nor returns the response now addressed to the new holder (final I-4)', async () => {
+  it('an await follows its requester rename and never sends the response to a replacement name holder', async () => {
     const s = await join('sx-one');
     const r = await join('rr-one');
     const { request_id } = await s.client.call<{ request_id: string }>('req.request', {
@@ -66,14 +78,10 @@ describe('request/response', () => {
       status: 'ok',
     });
     const got = await waiting;
-    expect(got.response).toBeNull();
-    const del = deliveriesOfMessage(broker.db, message_id).find((d) => d.recipient === 'sx-one');
-    // The only read is the push to the new holder; the await did not mark it read (that would carry no `delivered` detail).
-    const reads = broker.db
-      .prepare(`SELECT detail FROM delivery_events WHERE message_id = ? AND recipient = 'sx-one' AND to_state = 'read'`)
-      .all(message_id) as Array<{ detail: string | null }>;
+    expect(got.response?.body).toBe('SECRET answer');
+    const del = deliveriesOfMessage(broker.db, message_id).find((d) => d.recipient === 'sx-two');
     expect(del?.state).toBe('read');
-    expect(reads.map((x) => x.detail)).toEqual(['delivered via claude-channel']);
+    expect(t.pushes.some((p) => p.meta.msg_id === message_id)).toBe(false);
   });
 
   it('await times out with status open; only the addressee may respond; wait is capped by max_await_s', async () => {

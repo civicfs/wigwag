@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it, vi } from 'vitest';
 import { openDb } from '../../src/store/db.js';
 import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3 } from '../../src/store/schema.js';
+import { SCHEMA_VERSION } from '../../src/version.js';
 
 const fixture = (version = 3) => {
   const file = join(mkdtempSync(join(tmpdir(), 'ww-v4-')), 'state.db');
@@ -109,7 +110,7 @@ describe('schema v4 Codex push holds', () => {
     const file = fixture(),
       db = openDb(file);
     try {
-      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 4 });
+      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: SCHEMA_VERSION });
       expect(db.prepare('SELECT state,hold_reason,attempts FROM deliveries').get()).toEqual({
         state: 'held',
         hold_reason: 'disconnected',
@@ -153,7 +154,7 @@ describe('schema v4 Codex push holds', () => {
       spy.mockRestore();
     }
     const db = openDb(file);
-    expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 4 });
+    expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: SCHEMA_VERSION });
     db.close();
   });
 });

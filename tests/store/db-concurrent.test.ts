@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDb } from '../../src/store/db.js';
+import { SCHEMA_VERSION } from '../../src/version.js';
 import { spawnTsChild, tsChildArgs } from '../helpers.js';
 
 const CHILD = resolve(import.meta.dirname, '../fixtures/open-db-child.mjs');
@@ -90,8 +91,8 @@ describe('openDb under concurrent first open', () => {
       const results = await Promise.all(procs.map((p) => p.out.next()));
       expect(results).toEqual(procs.map(() => 'ok'));
       const db = openDb(file);
-      expect(db.prepare('SELECT count(*) AS n FROM schema_version').get()).toEqual({ n: 4 });
-      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 4 });
+      expect(db.prepare('SELECT count(*) AS n FROM schema_version').get()).toEqual({ n: SCHEMA_VERSION });
+      expect(db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: SCHEMA_VERSION });
       db.close();
     }
   });

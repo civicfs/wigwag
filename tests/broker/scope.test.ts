@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { pendingAwaitCount } from '../../src/broker/handlers/requests.js';
 import type { Broker } from '../../src/broker/server.js';
 import { sockPath } from '../../src/client/autospawn.js';
 import { Client } from '../../src/client/client.js';
@@ -347,7 +348,7 @@ describe('workspace scoping fix round 1 (R42): provenance authorization, takeove
     expect(inScope.message).toContain(w.welcome.session_id);
   });
 
-  it('C2: a same-scope unbound Codex claim sweeps a cross-scope held message to stuck; blob denied', async () => {
+  it('C2: a same-scope unbound Codex name claimant cannot inherit the offline owner mail or blob', async () => {
     const w = await join2('worker-one', repoA);
     w.client.close();
     await offline(w.welcome.session_id);
@@ -361,7 +362,7 @@ describe('workspace scoping fix round 1 (R42): provenance authorization, takeove
     const c = await mcpClient(home, { agent: 'codex', requested_name: 'worker-one', cwd: repoA });
     closers.push(() => c.client.close());
     expect(c.welcome.name).toBe('worker-one');
-    expect(stateOf(id, 'worker-one')?.state).toBe('stuck');
+    expect(stateOf(id, 'worker-one')).toMatchObject({ state: 'held', recipient_session_id: w.welcome.session_id });
     expect(await inboxIds(c)).toEqual([]);
     await expect(c.client.call('blob.get', { ref })).rejects.toMatchObject({ code: 'not_found' });
   });
@@ -547,7 +548,7 @@ describe('workspace scoping security round 2 (R46)', () => {
     await join2('late-one', repoC);
     const notices = () =>
       broker.db
-        .prepare(`SELECT subject, from_workspace FROM messages WHERE from_name = 'wigwag' AND to_target = 'sender-one'`)
+        .prepare(`SELECT subject, from_workspace FROM messages WHERE from_name = 'wigwag' AND to_target = 'sender-two'`)
         .all() as Array<{ subject: string; from_workspace: string | null }>;
     await until(() => notices().length === 2);
     expect(notices().map((n) => n.from_workspace)).toEqual([ws(repoA), ws(repoA)]);
@@ -619,9 +620,11 @@ describe('workspace scoping security round 2 (R46)', () => {
     asker2.client.close();
     await offline(asker2.welcome.session_id);
     await o.client.call('owner.link', { a: repoA, b: repoB });
-    const taker = await join2('asker-two', repoB);
-    const waiting = taker.client.call('req.await', { request_id: second.request_id, wait_s: 2 });
-    await new Promise((r) => setTimeout(r, 300));
+    const resumed = await mcpClient(home, { resume_session_id: asker2.welcome.session_id, cwd: repoB });
+    closers.push(() => resumed.client.close());
+    expect(resumed.welcome.session_id).toBe(asker2.welcome.session_id);
+    const waiting = resumed.client.call('req.await', { request_id: second.request_id, wait_s: 2 });
+    await until(() => pendingAwaitCount() === 1);
     await o.client.call('owner.unlink', { a: repoA, b: repoB });
     await expect(waiting).rejects.toMatchObject({ code: 'not_found' });
   });

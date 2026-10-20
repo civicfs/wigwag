@@ -101,6 +101,8 @@ export const HelloZ = z
     // E-3: an MCP server in Claude mode reports whether the channel can deliver pushes to this client. Absent from an
     // older or non-Claude peer, which the broker treats as capable.
     channel: z.boolean().optional(),
+    // A Claude bridge can acknowledge its local notification write rather than just broker socket admission.
+    channel_receipts: z.literal(true).optional(),
     resume_session_id: z.string().optional(),
     host_client: HostClientZ.optional(),
   })
@@ -130,6 +132,7 @@ const NativeHookZ = z.object({
 
 export const METHODS = {
   'sys.ping': m('any', z.object({})),
+  'channel.receipt': m('session', z.object({ receipt_id: z.string().uuid(), ok: z.boolean() }).strict()),
 
   'session.register': m(
     'session',
@@ -378,5 +381,5 @@ export type WireError = { code: ErrorCode; message: string; data?: unknown };
 export type RequestFrame = { id: number; method: string; params?: unknown };
 export type ResponseFrame = { id: number; result: unknown } | { id: number; error: WireError };
 export type EventFrame = { event: 'push' | 'feed'; data: unknown };
-export type PushData = { content: string; meta: Record<string, string> };
+export type PushData = { content: string; meta: Record<string, string>; receipt_id?: string };
 export type FeedData = { type: 'message' | 'delivery' | 'session' | 'throttle' | 'link'; payload: unknown };

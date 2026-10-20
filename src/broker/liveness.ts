@@ -9,6 +9,7 @@ import {
   setParentState,
   setState,
 } from '../store/sessions.js';
+import { isVerifiedCodexBinding } from './codex-push.js';
 import type { Broker } from './server.js';
 
 export type ParentVerdict = 'live' | 'gone' | 'unknown';
@@ -89,10 +90,11 @@ export interface Liveness {
 }
 
 /**
- * W8: re-checks link-disconnected live sessions every intervalMs (and on kick). Claude: one process probe for all
+ * W8: re-checks live sessions every intervalMs (and on kick). Claude: one process probe for disconnected
  * parents. Codex: one thread/loaded/list on the metadata-only connection. Gone → offline (announced, session.offline);
  * live → parent_state live; unknown → kept until both graceProbes consecutive unknown probes and graceMs have passed,
- * then today's behavior (offline). Each row is revalidated after the await (still disconnected, same generation).
+ * then today's behavior (offline). Connected verified Codex roots require both the grace duration and repeated
+ * positive absence; uncertain metadata resets that absence grace. Every result must still own the binding after I/O.
  */
 export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liveness {
   const db = broker.db;
@@ -100,7 +102,9 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
   const graceMs = opts.graceMs ?? PARENT_UNKNOWN_GRACE_MS;
   const graceProbes = opts.graceProbes ?? PARENT_UNKNOWN_GRACE_PROBES;
   const now = opts.now ?? Date.now;
-  const unknownSince = new Map<string, { first: number; probes: number; generation: number }>();
+  type Grace = { first: number; probes: number; owner: SessionRow };
+  const unknownSince = new Map<string, Grace>();
+  const missingSince = new Map<string, Grace>();
   let running: Promise<void> | null = null;
   let stopped = false;
   let queuedKick: NodeJS.Immediate | null = null;
@@ -111,9 +115,29 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
   };
   broker.bus.on('session.available', connected);
 
+  const sameBinding = (a: SessionRow, b: SessionRow) =>
+    a.agent === b.agent &&
+    a.conn_generation === b.conn_generation &&
+    a.agent_session_id === b.agent_session_id &&
+    (a.agent !== 'codex' ||
+      (a.bind_origin === b.bind_origin &&
+        a.host_client_name === b.host_client_name &&
+        a.host_client_version === b.host_client_version));
+
   const offline = (s: SessionRow, why: string) => {
     if (!markOfflineIfCurrent(db, s.id, s.conn_generation)) return;
     unknownSince.delete(s.id);
+    missingSince.delete(s.id);
+    if (s.agent === 'codex' && s.link === 'connected') {
+      // A retained MCP cannot revive this expired thread with a late turn hook after its name is reclaimed.
+      db.prepare("UPDATE sessions SET link='disconnected' WHERE id=? AND conn_generation=?").run(
+        s.id,
+        s.conn_generation,
+      );
+      const conn = broker.connectionFor(s.id);
+      if (conn?.generation === s.conn_generation)
+        conn.fail(null, { code: 'transport', message: 'Codex thread no longer loaded; MCP connection expired' });
+    }
     broker.log(`liveness: ${s.id} (${s.name ?? 'unnamed'}) offline: ${why}`);
     broker.announce(s.id);
     broker.bus.emit('session.offline', getSession(db, s.id));
@@ -131,8 +155,7 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
       fresh.retired_at ||
       fresh.state === 'offline' ||
       fresh.link !== 'disconnected' ||
-      fresh.conn_generation !== s.conn_generation ||
-      fresh.agent_session_id !== s.agent_session_id
+      !sameBinding(fresh, s)
     )
       return;
     if (v === 'gone') {
@@ -144,11 +167,37 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
       mark(fresh, 'live');
       return;
     }
-    const u = unknownSince.get(s.id) ?? { first: now(), probes: 0, generation: s.conn_generation };
+    const u = unknownSince.get(s.id) ?? { first: now(), probes: 0, owner: s };
     u.probes++;
     unknownSince.set(s.id, u);
     if (u.probes >= graceProbes && now() - u.first >= graceMs) {
       offline(fresh, `parent unverifiable for ${u.probes} probes; falling back to offline`);
+      return;
+    }
+    mark(fresh, 'unknown');
+  };
+
+  const applyConnectedCodex = (s: SessionRow, loaded: Set<string> | null) => {
+    const fresh = getSession(db, s.id);
+    if (
+      !fresh ||
+      fresh.retired_at ||
+      fresh.state === 'offline' ||
+      fresh.link !== 'connected' ||
+      !sameBinding(fresh, s) ||
+      !isVerifiedCodexBinding(broker, fresh)
+    )
+      return;
+    if (loaded === null || (fresh.agent_session_id && loaded.has(fresh.agent_session_id))) {
+      missingSince.delete(s.id);
+      mark(fresh, loaded === null ? 'unknown' : 'live');
+      return;
+    }
+    const grace = missingSince.get(s.id) ?? { first: now(), probes: 0, owner: s };
+    grace.probes++;
+    missingSince.set(s.id, grace);
+    if (grace.probes >= graceProbes && now() - grace.first >= graceMs) {
+      offline(fresh, `thread absent from loaded list for ${grace.probes} probes`);
       return;
     }
     mark(fresh, 'unknown');
@@ -160,14 +209,13 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
     const current = new Map(sessions.map((s) => [s.id, s]));
     for (const [id, grace] of unknownSince) {
       const s = current.get(id);
-      if (
-        !s ||
-        s.state === 'offline' ||
-        s.link === 'connected' ||
-        s.retired_at ||
-        s.conn_generation !== grace.generation
-      )
+      if (!s || s.state === 'offline' || s.link === 'connected' || s.retired_at || !sameBinding(s, grace.owner))
         unknownSince.delete(id);
+    }
+    for (const [id, grace] of missingSince) {
+      const s = current.get(id);
+      if (!s || s.state === 'offline' || s.link !== 'connected' || s.retired_at || !sameBinding(s, grace.owner))
+        missingSince.delete(id);
     }
     const rows = sessions.filter((s) => s.state !== 'offline' && s.link === 'disconnected' && !s.retired_at);
     const withId = rows.filter(
@@ -189,7 +237,10 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
       (s) => s.agent === 'codex' && s.agent_session_id && !s.retired_at && s.state !== 'offline',
     );
     const snapshot = live.some((s) => !isLegacySession(db, s.id))
-      ? await broker.codexNames?.metadataSnapshot(opts.codexDeadlineMs ?? broker.config.questions.app_server_timeout_ms)
+      ? await broker.codexNames?.metadataSnapshot(
+          opts.codexDeadlineMs ?? broker.config.questions.app_server_timeout_ms,
+          live.flatMap((s) => (s.agent_session_id ? [s.agent_session_id] : [])),
+        )
       : undefined;
     if (stopped) return;
     for (const s of live) {
@@ -199,7 +250,8 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
     const codex = sessions.filter(
       (s) => s.agent === 'codex' && s.state !== 'offline' && s.link === 'disconnected' && !s.retired_at,
     );
-    const loaded = snapshot?.loaded ?? null;
+    const loaded = snapshot ? (broker.codexNames?.loadedIn(snapshot) ?? null) : null;
+    for (const s of live.filter((s) => s.link === 'connected')) applyConnectedCodex(s, loaded);
     for (const s of codex)
       apply(
         s,
@@ -252,6 +304,7 @@ export function installLiveness(broker: Broker, opts: LivenessOptions = {}): Liv
     if (queuedKick) clearImmediate(queuedKick);
     queuedKick = null;
     unknownSince.clear();
+    missingSince.clear();
     broker.bus.off('session.available', connected);
   };
   broker.onStart.push(kick);

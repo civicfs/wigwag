@@ -6,7 +6,6 @@ import {
   deliveriesFor,
   deliveriesOfMessage,
   deliveryForRecipient,
-  deliveryRecipient,
   getMessage,
   insertMessage,
   type MessageKind,
@@ -14,6 +13,7 @@ import {
   type Priority,
   transition,
 } from '../../store/messages.js';
+import { canonicalSession, messageAddressedTo, messageSender, messageSentBy } from '../../store/ownership.js';
 import { assignedNamesWithWorkspace, getSession, holderOf } from '../../store/sessions.js';
 import { addMute, removeMute } from '../../store/subs.js';
 import type { Connection } from '../connection.js';
@@ -79,22 +79,32 @@ export async function sendMessage(
     reply_to?: string | null;
     request_id?: string | null;
     expires_at?: string | null;
+    /** Conversation replies stay addressed to this slot even if its former name has another holder. */
+    recipient_session_id?: string;
     /** Called synchronously once the message is persisted, before dispatch. */
     onInserted?: (m: MessageRow) => void;
   },
 ): Promise<MessageRow> {
   // Spec §17: recipients must share the sender's scope; owner and wigwag reach every workspace.
   const fromWorkspace = senderWorkspace(broker.db, input.from);
+  const recipient = input.recipient_session_id ? canonicalSession(broker.db, input.recipient_session_id) : undefined;
+  if (input.recipient_session_id && !recipient)
+    throw new WigwagError('not_found', 'Original recipient session is unavailable');
+  const to = recipient?.name ?? input.to;
   let recipients: string[];
-  if (input.to === 'all') {
+  if (to === 'all') {
     const scope = scopeFor(broker.db, fromWorkspace);
     recipients = assignedNamesWithWorkspace(broker.db)
       .filter((r) => r.name !== input.from && inScope(scope, r.workspace))
       .map((r) => r.name);
   } else {
-    const violation = scopeViolation(broker.db, fromWorkspace, input.to);
+    const violation = recipient
+      ? inScope(scopeFor(broker.db, fromWorkspace), recipient.workspace)
+        ? null
+        : 'Original recipient is outside the sender workspace scope'
+      : scopeViolation(broker.db, fromWorkspace, to);
     if (violation) throw new WigwagError('forbidden', violation);
-    recipients = [input.to];
+    recipients = [to];
   }
   const prepared = prepareBody(broker, input.from, input.body, input.attachments);
   const m = insertMessage(
@@ -102,7 +112,7 @@ export async function sendMessage(
     {
       from_name: input.from,
       from_workspace: fromWorkspace,
-      to_target: input.to,
+      to_target: to,
       kind: input.kind,
       priority: input.priority,
       subject: input.subject,
@@ -114,6 +124,7 @@ export async function sendMessage(
       stream: null,
     },
     recipients,
+    { recipient_session_id: recipient?.id },
   );
   broker.broadcastOwner('message', m);
   input.onInserted?.(m);
@@ -146,6 +157,18 @@ export function stillMine(broker: Broker, conn: Connection, me: string, m: Messa
   return s?.name === me && connCanSee(broker.db, conn, m);
 }
 
+/** An immutable sender name is presentation only. Unknown historical ownership must be resolved by the owner. */
+export function replyDestination(broker: Broker, m: MessageRow): { to: string; recipient_session_id?: string } {
+  if (['owner', 'wigwag'].includes(m.from_name)) return { to: m.from_name };
+  const sender = messageSender(broker.db, m.id);
+  if (!sender)
+    throw new WigwagError(
+      'conflict',
+      'Original sender ownership is unavailable; ask the owner to inspect this historical message',
+    );
+  return { to: sender.name ?? m.from_name, recipient_session_id: sender.id };
+}
+
 const UNREAD: DeliveryState[] = ['pending', 'held', 'pushed', 'failed', 'stuck'];
 
 export function installMessages(broker: Broker): void {
@@ -160,10 +183,15 @@ export function installMessages(broker: Broker): void {
     const me = myName(broker, conn);
     const orig = getMessage(db, p.msg_id);
     // R42-B: an original outside the caller's scope is reported exactly like a missing one.
-    if (!orig || !connCanSee(db, conn, orig)) throw new WigwagError('not_found', `Message not found: ${p.msg_id}`);
+    if (
+      !orig ||
+      !connCanSee(db, conn, orig) ||
+      (!messageSentBy(db, orig, conn.sessionId) && !messageAddressedTo(db, orig.id, conn.sessionId))
+    )
+      throw new WigwagError('not_found', `Message not found: ${p.msg_id}`);
     const m = await sendMessage(broker, {
       from: me,
-      to: orig.from_name,
+      ...replyDestination(broker, orig),
       kind: 'message',
       priority: p.priority,
       subject: `Re: ${orig.subject}`.slice(0, 200),
@@ -223,12 +251,12 @@ export function installMessages(broker: Broker): void {
   });
 
   broker.handle('msg.read', ({ conn }, p) => {
-    const me = myName(broker, conn);
+    myName(broker, conn);
     const m = getMessage(db, p.msg_id);
     if (
       !m ||
       !connCanSee(db, conn, m) ||
-      (m.from_name !== me && !deliveriesOfMessage(db, m.id).some((d) => deliveryRecipient(db, d) === me))
+      (!messageSentBy(db, m, conn.sessionId) && !messageAddressedTo(db, m.id, conn.sessionId))
     )
       throw new WigwagError('not_found', `Message not found: ${p.msg_id}`);
     if (p.body_offset > m.body.length || (p.body_offset > 0 && /[\uDC00-\uDFFF]/u.test(m.body[p.body_offset] ?? '')))

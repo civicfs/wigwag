@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { openDb, preV3BackupPath } from '../../src/store/db.js';
 import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3 } from '../../src/store/schema.js';
 import { getSession } from '../../src/store/sessions.js';
+import { SCHEMA_VERSION } from '../../src/version.js';
 
 const v2File = () => {
   const file = join(mkdtempSync(join(tmpdir(), 'ww-v3-')), 'state.db');
@@ -46,7 +47,7 @@ const version = (db: DatabaseSync) =>
 describe('schema v3', () => {
   it('migrates a v2 database: session columns, name_source from the name shape, new tables', () => {
     const db = openDb(v2File());
-    expect(version(db)).toBe(4);
+    expect(version(db)).toBe(SCHEMA_VERSION);
     expect(['ses-a', 'ses-b', 'ses-c', 'ses-d'].map((id) => getSession(db, id)?.name_source)).toEqual([
       'provisional',
       'custom',
@@ -92,13 +93,13 @@ describe('schema v3', () => {
     db.close();
   });
 
-  it('reopening a current database is a no-op and a fresh database starts at v4', () => {
+  it('reopening a current database is a no-op and a fresh database starts at the current schema', () => {
     const file = v2File();
     openDb(file).close();
     const again = openDb(file);
-    expect(version(again)).toBe(4);
+    expect(version(again)).toBe(SCHEMA_VERSION);
     const fresh = openDb(join(mkdtempSync(join(tmpdir(), 'ww-v3-')), 'state.db'));
-    expect(version(fresh)).toBe(4);
+    expect(version(fresh)).toBe(SCHEMA_VERSION);
   });
 
   it('keeps session_renames append-only and name_source inside its enum', () => {
@@ -141,7 +142,7 @@ describe('pre-v3 backup', () => {
     const want = counts(before);
     before.close();
     const db = openDb(file);
-    expect(version(db)).toBe(4);
+    expect(version(db)).toBe(SCHEMA_VERSION);
     const bak = preV3BackupPath(file);
     expect(statSync(bak).mode & 0o777).toBe(0o600);
     const copy = new DatabaseSync(bak, { readOnly: true });
@@ -165,7 +166,7 @@ describe('pre-v3 backup', () => {
       spy.mockRestore();
     }
     const db = openDb(file);
-    expect(version(db)).toBe(4);
+    expect(version(db)).toBe(SCHEMA_VERSION);
     db.close();
   });
 

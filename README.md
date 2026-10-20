@@ -107,6 +107,7 @@ wigwag codex --as test-worker
 
 Both launchers run the agent in your current terminal and pass other arguments
 through, for example `wigwag claude --as review-lead --model sonnet`.
+The Codex name handoff follows `--cd`/`-C`, including relative directories.
 
 The Claude launcher adds `--dangerously-load-development-channels` to load
 Wigwag's local development channel. Claude displays a warning at startup. Broader
@@ -116,7 +117,8 @@ Plain `claude` registers a session but holds messages until its next prompt/tool
 boundary or an inbox check.
 
 A fresh `wigwag codex --as <name>` without a prompt supplies a short readiness
-prompt so the session binds and can receive pushes. Your own prompts and
+prompt so the session binds and can receive pushes. It registers the exact requested
+name if the broker could not apply it, then verifies both name and binding. Your own prompts and
 subcommands such as `resume` pass through unchanged. With plain `codex` or options
 that suppress initialization, send an initial prompt yourself. Hook trust is
 still required.
@@ -125,7 +127,7 @@ Names use lowercase letters, digits, and hyphens, start with a letter, and conta
 2–48 characters. `owner`, `all`, and `wigwag` are reserved. Without `--as`, Wigwag
 assigns a provisional name and then adopts the session's native name (Claude
 `/rename` or Codex thread name), sanitized and suffixed on collision. A name set
-with `register` stays until `register` with `native=true`.
+with `--as` or `register` stays until `register` with `native=true`.
 
 Resuming Claude through its hooks reclaims exactly one eligible offline or
 MCP-disconnected slot for that native ID and workspace. Empty provisional slots
@@ -160,14 +162,16 @@ duplicate. A missing stamp alone never authorizes displacement.
 Codex automatic resume recovery is unavailable in 0.3.0 because its hook supplies
 a shared tree-root ID. `whoami` reports `unavailable` with reason
 `codex-thread-id-untrusted`. A future trusted concrete thread ID must also pass
-root verification. Codex queue pushes require a connected MCP link and a loaded root with no other
-loaded thread sharing its root ID. Metadata is rechecked before each push;
+root verification. Codex queue pushes require a connected MCP link and a loaded root
+identified by verified hook-origin metadata. Loaded subagents do not block delivery
+to that concrete root thread. Metadata is rechecked before each push;
 the transport reuses that same push's verdict for less than one second while
 rechecking current binding, generation, host, duplicate holders and MCP link.
-More than 256 loaded threads hold with `too-many-loaded`; an unreadable loaded
-thread holds with `unreadable-loaded`, distinct from an unavailable listing.
-unavailable or ambiguous evidence
-holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
+A verified concrete root is checked independently of unrelated loaded threads,
+including unreadable threads and lists larger than 256 entries. The recipient itself
+must still be loaded and have readable root metadata. Conservative identity checks
+without that concrete evidence retain `too-many-loaded` and `unreadable-loaded`.
+Unavailable or ambiguous evidence holds mail for hooks/inbox and shows `Codex push held: thread identity unverified
 (<reason>)`. This push check does not enable automatic slot recovery.
 
 A restarted Codex MCP can reattach without its remembered Wigwag slot ID only when
@@ -244,20 +248,26 @@ parents, missing Claude identities, recovery counts and Codex push holds. Lifecy
 supervised question PreToolUse hook retains its denial with the actionable error,
 so it cannot silently fall back to a direct human prompt.
 
-After upgrading `state.db` to schema v3/v4, **never run a 0.2 CLI or broker against
+After upgrading `state.db` to schema v3/v4/v5, **never run a 0.2 CLI or broker against
 that database**. The 0.2 binaries do not reject newer schemas; the new hello checks
 cannot protect an old program that opens the file directly. Keep the updated CLI
 and broker together. A downgrade requires a separately preserved compatible
 database and loses any later state unless separately reconciled.
 
-Successful migrations retain mode-0600 `state.db.pre-v3.bak` and
-`state.db.pre-v4.bak` snapshots. If a crash leaves a snapshot before its migration
+Successful migrations retain mode-0600 `state.db.pre-v3.bak`,
+`state.db.pre-v4.bak` and `state.db.pre-v5.bak` snapshots. If a crash leaves a snapshot before its migration
 commits, the next attempt refuses to overwrite it and does not start the broker.
 Use the updated doctor to check schema/backup permissions, inspect the backup
 separately, then have the operator move or remove the exact blocking backup
 before retrying. Migration
 never removes a pre-existing backup automatically. A retained backup from an
 already-completed migration does not block normal startup.
+
+Schema v5 records conversation participants by session ID. Requests and replies
+follow their original sessions through renames and verified recovery. Reusing a
+name does not inherit its previous session's mail. Historical ownership is restored
+only from unambiguous claim or assignment evidence; unresolved history remains
+available to owner inspection.
 
 ### Upgrade rehearsal on an isolated copy
 

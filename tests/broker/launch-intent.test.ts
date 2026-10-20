@@ -154,6 +154,30 @@ describe('launcher name intent for daemon-spawned Codex (E-1)', () => {
 });
 
 describe('launcher name intent: two launchers', () => {
+  it('consumes the matching intent when startup explicitly registers its requested name', async () => {
+    await boot();
+    await launcher('first-one');
+    await launcher('second-one');
+    const first = await codex();
+    expect(nameOf(first.welcome.session_id)).toMatch(/^codex-myproject-/);
+    await first.client.call('session.register', { name: 'first-one' });
+    broker.naming.adoptNative(first.welcome.session_id, 'Generated first title', 'codex-api');
+    expect(nameOf(first.welcome.session_id)).toBe('first-one');
+    const second = await codex();
+    expect(nameOf(second.welcome.session_id)).toBe('second-one');
+  });
+
+  it('does not consume a later launcher intent when an older session explicitly registers that name', async () => {
+    await boot();
+    const early = await codex();
+    await launcher('first-one');
+    await launcher('second-one');
+    await early.client.call('session.register', { name: 'first-one' });
+    const later = await codex();
+    // Both later intents remain ambiguous; the older session cannot resolve either launcher's handoff.
+    expect(nameOf(later.welcome.session_id)).toMatch(/^codex-myproject-/);
+  });
+
   it('two launchers for one directory fail closed', async () => {
     await boot();
     await launcher('first-one');

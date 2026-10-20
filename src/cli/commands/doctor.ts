@@ -70,7 +70,7 @@ function inspectState(
   warn: (name: string, detail: string) => void,
 ): void {
   const file = rehearsalSqlitePath(home, join(home, 'state.db'), true);
-  for (const version of [3, 4]) {
+  for (const version of [3, 4, 5]) {
     const backup = `${file}.pre-v${version}.bak`;
     try {
       const stat = lstatSync(backup),

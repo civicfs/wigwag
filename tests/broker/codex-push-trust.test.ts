@@ -74,6 +74,29 @@ async function boot() {
   return { home, app, broker, pushes, pushedMail, o, c, send };
 }
 describe('Codex push trust at bind, probe and dispatch', () => {
+  it('pushes to a hook-verified concrete root while its descendants remain loaded', async () => {
+    const { app, broker, c, send, pushes } = await boot();
+    app.descendant();
+    await c.client.call('session.bind', { agent_session_id: 'T' });
+    const message = await send();
+    await until(() => ['held', 'read'].includes(deliveriesOfMessage(broker.db, message.id)[0]?.state ?? ''));
+    expect(deliveriesOfMessage(broker.db, message.id)[0]?.state).toBe('read');
+    expect(pushes).toEqual(['T']);
+    expect(getSession(broker.db, c.welcome.session_id)?.codex_push_reason).toBeNull();
+  });
+
+  it('pushes a verified concrete root despite unreadable unrelated loaded metadata', async () => {
+    const { app, broker, c, send, pushes } = await boot();
+    app.descendant();
+    app.loaded.push('unreadable');
+    await c.client.call('session.bind', { agent_session_id: 'T' });
+    const message = await send();
+    await until(() => ['held', 'read'].includes(deliveriesOfMessage(broker.db, message.id)[0]?.state ?? ''));
+    expect(deliveriesOfMessage(broker.db, message.id)[0]?.state).toBe('read');
+    expect(pushes).toEqual(['T']);
+    expect(getSession(broker.db, c.welcome.session_id)?.codex_push_reason).toBeNull();
+  });
+
   it.each(['hold', 'push'])(
     'rechecks delivery ownership after trust I/O before a %s, including a forwarded ride-along',
     async (mode) => {
@@ -106,7 +129,9 @@ describe('Codex push trust at bind, probe and dispatch', () => {
       const wake = await f.send();
       try {
         await entered;
-        f.broker.db.prepare('UPDATE deliveries SET forward_to=? WHERE message_id=?').run(other.id, wake.id);
+        f.broker.db
+          .prepare('UPDATE deliveries SET forward_to=?,recipient_session_id=? WHERE message_id=?')
+          .run(other.id, other.id, wake.id);
         // A physical old address legitimately rides along for this session through durable forward_to ownership.
         const ride = insertMessage(
           f.broker.db,
@@ -130,7 +155,13 @@ describe('Codex push trust at bind, probe and dispatch', () => {
           .run(owner.id, ride.id);
         release();
         await f.c.client.call('sys.ping');
-        if (mode === 'push') await until(() => deliveriesOfMessage(f.broker.db, ride.id)[0]?.state === 'read');
+        await f.broker.engine?.drain(5000);
+        if (mode === 'push') {
+          // The transferred wake cannot wake its former owner with only low-priority mail. A fresh owned wake can.
+          expect(f.pushedMail.flatMap((x) => x.messages)).not.toContain(ride.id);
+          await f.send();
+          await until(() => deliveriesOfMessage(f.broker.db, ride.id)[0]?.state === 'read');
+        }
         expect(f.pushedMail.filter((x) => x.session === owner.id).flatMap((x) => x.messages)).not.toContain(wake.id);
         if (mode === 'push') expect(f.pushedMail.flatMap((x) => x.messages)).toContain(ride.id);
         else
@@ -246,14 +277,21 @@ describe('Codex push trust at bind, probe and dispatch', () => {
     );
     expect(JSON.stringify(await other.client.call('msg.inbox', { include_read: true }))).toContain(privateMail.id);
   });
-  it.each(['too-many-loaded', 'unreadable-loaded'])('persists and reports the distinct %s hold', async (reason) => {
-    const { app, broker, c, send, pushes, o } = await boot();
-    app.loaded =
-      reason === 'too-many-loaded'
-        ? ['T', ...Array.from({ length: 256 }, (_, i) => `other-${i}`)]
-        : ['T', 'unreadable'];
+  it('pushes a verified concrete root when more than 256 unrelated threads are loaded', async () => {
+    const { app, broker, c, send, pushes } = await boot();
+    app.loaded = ['T', ...Array.from({ length: 256 }, (_, i) => `other-${i}`)];
     await c.client.call('session.bind', { agent_session_id: 'T' });
-    expect(getSession(broker.db, c.welcome.session_id)?.codex_push_reason).toBe(reason);
+    expect(getSession(broker.db, c.welcome.session_id)?.codex_push_reason).toBeNull();
+    const m = await send();
+    await until(() => ['held', 'read'].includes(deliveriesOfMessage(broker.db, m.id)[0]?.state ?? ''));
+    expect(deliveriesOfMessage(broker.db, m.id)[0]?.state).toBe('read');
+    expect(pushes).toEqual(['T']);
+  });
+  it('persists and reports unreadable metadata for the actual recipient', async () => {
+    const { app, broker, c, send, pushes, o } = await boot();
+    app.threads.T = { id: 'T', source: 'cli', parentThreadId: null };
+    await c.client.call('session.bind', { agent_session_id: 'T' });
+    expect(getSession(broker.db, c.welcome.session_id)?.codex_push_reason).toBe('unreadable-loaded');
     const m = await send();
     await until(() => deliveriesOfMessage(broker.db, m.id)[0]?.state === 'held');
     expect(deliveriesOfMessage(broker.db, m.id)[0]?.hold_reason).toBe('codex-untrusted');
@@ -263,7 +301,7 @@ describe('Codex push trust at bind, probe and dispatch', () => {
       await o.call('session.who'),
       await o.call('owner.recovery'),
     ])
-      expect(JSON.stringify(output)).toContain(reason);
+      expect(JSON.stringify(output)).toContain('unreadable-loaded');
   });
   it.each(['bind-first', 'reattach-first'])(
     'keeps one live holder when an offline binding returns (%s)',
@@ -355,14 +393,18 @@ describe('Codex push trust at bind, probe and dispatch', () => {
       bindAgentSession(broker.db, root.id, 'T');
       setState(broker.db, root.id, state);
       app.descendant();
-      if (state === 'online-idle')
-        await expect(c.client.call('session.bind', { agent_session_id: 'T' })).rejects.toThrow(/live session/);
-      else await c.client.call('session.bind', { agent_session_id: 'T' });
+      // Real descendant hooks carry their own concrete threadId, even when session_id is the shared root ID.
+      await expect(
+        c.client.call('session.bind', {
+          agent_session_id: 'T',
+          hook_origin: { name: 'codex-mcp-client', version: '0.162.1', thread_id: 'child' },
+        }),
+      ).rejects.toThrow(/concrete host threadId/);
       const m = await send();
       await until(() => ['held', 'read'].includes(deliveriesOfMessage(broker.db, m.id)[0]?.state ?? ''));
       expect(pushes).toEqual([]);
       expect(getSession(broker.db, root.id)?.name).toBe('root-worker');
-      if (state === 'offline') expect(deliveriesOfMessage(broker.db, m.id)[0]?.hold_reason).toBe('codex-untrusted');
+      expect(deliveriesOfMessage(broker.db, m.id)[0]?.hold_reason).toBe('unbound');
     },
   );
   it('pushes a single root, then catches evidence changing between bind and push; inbox/digest remains available', async () => {
@@ -371,7 +413,7 @@ describe('Codex push trust at bind, probe and dispatch', () => {
     const first = await send();
     await until(() => deliveriesOfMessage(broker.db, first.id)[0]?.state === 'read');
     expect(pushes).toEqual(['T']);
-    app.descendant();
+    app.loaded = [];
     const second = await send();
     await until(() => ['held', 'read'].includes(deliveriesOfMessage(broker.db, second.id)[0]?.state ?? ''));
     expect(pushes).toEqual(['T']);
@@ -380,12 +422,12 @@ describe('Codex push trust at bind, probe and dispatch', () => {
       'session.whoami',
       {},
     );
-    expect(whoami.codex_push).toContain('descendant-loaded');
+    expect(whoami.codex_push).toContain('root-not-loaded');
     expect(whoami.capabilities.codex_push).toBe('held');
     const who = await o.call<Array<{ name: string; codex_push: string }>>('session.who', {});
     expect(who.find((s) => s.name === 'child-worker')?.codex_push).toContain('thread identity unverified');
     const recovery = await o.call<{ codex_push_untrusted: Array<{ reason: string }> }>('owner.recovery', {});
-    expect(recovery.codex_push_untrusted[0].reason).toBe('descendant-loaded');
+    expect(recovery.codex_push_untrusted[0].reason).toBe('root-not-loaded');
     expect(broker.engine?.takeDigest('child-worker')).toContain('trust-check');
   });
   it('holds a trusted loaded root while MCP is disconnected and releases on reattach', async () => {

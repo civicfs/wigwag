@@ -28,6 +28,79 @@ class FakeApp extends EventEmitter {
 const reader = (app: FakeApp) => new CodexNames({ factory: () => app, indexPath: `${tmpHome()}/missing` });
 
 describe('Codex push trust: metadata only', () => {
+  it('does not replace recovered trust with an old failed metadata snapshot', async () => {
+    let enter = () => {},
+      rejectOld = (_error: Error) => {};
+    const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      }),
+      old = new Promise<never>((_resolve, reject) => {
+        rejectOld = reject;
+      });
+    const a = new FakeApp(),
+      b = new FakeApp();
+    a.call = async () => {
+      enter();
+      return old;
+    };
+    let made = 0;
+    const names = new CodexNames({ factory: () => (++made === 1 ? a : b), indexPath: `${tmpHome()}/missing` });
+    const checking = names.pushTrust('T', true);
+    try {
+      await entered;
+      a.emit('disconnected');
+      expect(await names.pushTrust('T', true)).toEqual({ trusted: true, reason: null });
+      rejectOld(new Error('late failure on old connection'));
+      await checking;
+      const calls = b.calls.length;
+      expect(await names.pushTrust('T')).toEqual({ trusted: true, reason: null });
+      expect(b.calls).toHaveLength(calls);
+    } finally {
+      rejectOld(new Error('fixture cleanup'));
+      await checking;
+      names.stop();
+    }
+  });
+
+  it.each(['unreadable', 'large'])(
+    'checks only a verified concrete recipient with %s unrelated metadata',
+    async (kind) => {
+      const app = new FakeApp(),
+        names = reader(app);
+      app.loaded.push(...(kind === 'large' ? Array.from({ length: 256 }, (_, i) => `other-${i}`) : ['other']));
+      try {
+        expect(await names.pushTrust('T', true, undefined, true)).toEqual({ trusted: true, reason: null });
+        expect(app.calls.filter((method) => method === 'thread/read')).toHaveLength(1);
+        // Recipient-specific evidence must not populate the conservative callers' cache.
+        expect(await names.pushTrust('T')).toEqual({
+          trusted: false,
+          reason: kind === 'large' ? 'too-many-loaded' : 'unreadable-loaded',
+        });
+      } finally {
+        names.stop();
+      }
+    },
+  );
+
+  it.each(['unreadable', 'missing-session', 'non-root'])(
+    'still holds a concrete recipient with %s own metadata',
+    async (kind) => {
+      const app = new FakeApp(),
+        names = reader(app);
+      if (kind === 'unreadable') app.readErrors.add('T');
+      if (kind === 'missing-session') app.threads.T = { ...root('T'), sessionId: null };
+      if (kind === 'non-root') app.threads.T = { ...root('T'), parentThreadId: 'parent' };
+      try {
+        expect(await names.pushTrust('T', true, undefined, true)).toEqual({
+          trusted: false,
+          reason: kind === 'non-root' ? 'shared-root' : 'unreadable-loaded',
+        });
+      } finally {
+        names.stop();
+      }
+    },
+  );
+
   it('trusts one loaded root, caches briefly, and fresh checks detect a descendant appearing', async () => {
     const app = new FakeApp(),
       names = reader(app);

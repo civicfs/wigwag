@@ -29,6 +29,7 @@ const send = async (from: string, to: string, priority: 'urgent' | 'normal' | 'l
     broker.db,
     {
       from_name: from,
+      from_workspace: ['owner', 'wigwag'].includes(from) ? null : '/w/myproject',
       to_target: to,
       kind: 'message',
       priority,
@@ -171,6 +172,8 @@ describe('delivery engine', () => {
   });
 
   it('an item over the codex argv budget goes stuck on the first attempt, wake or ride-along (final I-11)', async () => {
+    const sender = await mcpClient(home, { requested_name: 'claude-main' });
+    closers.push(() => sender.client.close());
     const c = await mcpClient(home, { agent: 'codex', requested_name: 'codex-merger' });
     closers.push(() => c.client.close());
     await c.client.call('session.bind', { agent_session_id: 'thread-9' });

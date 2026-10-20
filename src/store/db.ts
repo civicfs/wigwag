@@ -2,7 +2,7 @@ import { chmodSync, linkSync, lstatSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { WigwagError } from '../errors.js';
 import { SCHEMA_VERSION } from '../version.js';
-import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4 } from './schema.js';
+import { SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5 } from './schema.js';
 
 export type Db = DatabaseSync;
 
@@ -64,6 +64,7 @@ export { SCHEMA_VERSION } from '../version.js';
 /** Clear-text snapshots taken before the corresponding migration, kept after success. */
 export const preV4BackupPath = (file: string): string => `${file}.pre-v4.bak`;
 export const preV3BackupPath = (file: string): string => `${file}.pre-v3.bak`;
+export const preV5BackupPath = (file: string): string => `${file}.pre-v5.bak`;
 
 const removeQuietly = (path: string): void => {
   try {
@@ -126,6 +127,7 @@ export function openDb(file: string): Db {
   for (const [version, schema] of [
     [3, SCHEMA_V3],
     [4, SCHEMA_V4],
+    [5, SCHEMA_V5],
   ] as const) {
     if (schemaVersion(db) >= version) continue;
     const snapshot = initialVersion >= 1 ? snapshotBeforeMigration(db, file, version) : null;
