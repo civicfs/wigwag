@@ -108,7 +108,7 @@ function prepare() {
   write(join(paths.codex, 'config.toml'), '[features]\nremote_plugin = false\nhooks = true\n\n[plugins._default]\nenabled = false\n');
   write(join(root, 'manifest.json'), manifest);
   write(join(paths.workspace, 'README.md'), 'Disposable Wigwag native acceptance workspace. Synthetic messages only.\n');
-  write(join(paths.workspace, '.wigwag-native-work.mjs'), `import { existsSync, watch } from 'node:fs';
+  write(join(paths.workspace, '.wigwag-native-work.mjs'), `import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const workspace = dirname(fileURLToPath(import.meta.url));
@@ -117,9 +117,9 @@ const tag = process.argv[2];
 if (!/^(?:claude|codex)-${id}$/.test(tag ?? '')) throw new Error('Unexpected native work tag');
 console.log('waiting ' + tag);
 await new Promise((resolve, reject) => {
-  const watcher = watch(workspace, () => { if (existsSync(release)) finish(); });
+  const poll = setInterval(() => { if (existsSync(release)) finish(); }, 200);
   const timer = setTimeout(() => finish(new Error('Native acceptance driver did not release work within 60s')), 60000);
-  function finish(error) { clearTimeout(timer); watcher.close(); error ? reject(error) : resolve(); }
+  function finish(error) { clearTimeout(timer); clearInterval(poll); error ? reject(error) : resolve(); }
   if (existsSync(release)) finish();
 });
 console.log('released ' + tag);
@@ -509,7 +509,7 @@ async function execute(m) {
       const args = p.command.split(/\s+/);
       return args[0]?.split('/').at(-1) === 'node' && [workFile, '.wigwag-native-work.mjs'].includes(args[1]) && args[2] === `${agent}-${m.id}` && args.length === 3;
     })]));
-    await Promise.all(['claude', 'codex'].map((agent) => keys(agent, `For this acceptance step, run exactly node .wigwag-native-work.mjs ${agent}-${m.id} with your shell tool in the foreground. ${agent === 'claude' ? 'Use Bash timeout 65000.' : 'Use yield_time_ms 30000, then wait for that same shell session until it exits.'} This read-only workspace watcher performs bounded acceptance work until the driver releases it. Do not background it or replace it with sleep. After it returns call the public Wigwag whoami tool, then end the turn. Continue replying to synthetic Wigwag messages using their requested exact tokens. Do not call any internal Wigwag hooks or bind tools.`)));
+    await Promise.all(['claude', 'codex'].map((agent) => keys(agent, `For this acceptance step, run exactly node .wigwag-native-work.mjs ${agent}-${m.id} with your shell tool in the foreground. ${agent === 'claude' ? 'Use Bash timeout 65000.' : 'Use yield_time_ms 30000, then wait for that same shell session until it exits.'} This read-only workspace helper checks for the driver's release file every 200ms for at most 60s. Do not background it or replace it with sleep. After it returns call the public Wigwag whoami tool, then end the turn. Continue replying to synthetic Wigwag messages using their requested exact tokens. Do not call any internal Wigwag hooks or bind tools.`)));
     const busy = await until('both native sessions busy', async () => {
       const state = assessReadiness(await rpc(m, 'session.who'), m.names, retained);
       const work = workProcesses();

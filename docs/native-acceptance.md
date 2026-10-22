@@ -108,11 +108,11 @@ MCP process IDs/start identities survived. Genuine later turn/tool hooks must
 restore the observed idle/bound state. No prompt asks the model to call an
 internal binding or hook tool.
 
-The busy interval uses a prepared workspace Node watcher with a unique provider/run
-tag. Both exact watcher processes and both busy sessions must be visible before
+The busy interval uses a prepared workspace Node helper with a unique provider/run
+tag. Both exact helper processes and both busy sessions must be visible before
 the driver sends challenges or replaces the broker. The same processes must remain
 alive after replacement; only then does the driver create its own release file.
-The fixture reads and watches the disposable workspace and times out after 60 seconds.
+The fixture checks for its release file every 200 ms and times out after 60 seconds.
 Claude receives permission only for its exact tagged fixture command.
 
 It then runs the genuine provider installation and explicit Claude plugin-update

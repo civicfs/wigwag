@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { expect, it } from 'vitest';
 
-it('prepares a tagged read-only foreground watcher that exits only after the driver releases it', async () => {
+it('prepares a tagged read-only foreground release check that exits only after the driver releases it', async () => {
   const base = mkdtempSync('/tmp/wwn-work-');
   const candidate = join(base, 'candidate');
   for (const name of ['dist', 'plugins', '.agents', '.claude-plugin', 'node_modules'])
@@ -39,6 +39,7 @@ it('prepares a tagged read-only foreground watcher that exits only after the dri
   const closed = once(child, 'close');
   try {
     expect(String((await once(child.stdout, 'data'))[0])).toContain(`waiting ${tag}`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
     expect(child.exitCode).toBeNull();
     writeFileSync(join(manifest.paths.workspace, '.wigwag-native-release'), 'driver release\n');
     expect((await closed)[0]).toBe(0);
