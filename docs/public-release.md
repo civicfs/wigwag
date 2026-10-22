@@ -38,9 +38,20 @@ the pinned previous-release MCP upgrade tests and the provider/active/idle deliv
 run must pass before claiming hosted CI or Linux validation. It does not publish
 packages or merge updates automatically.
 
-After those jobs have appeared and passed, require all four `Node 24 / ...` and
-`Node 26 / ...` contexts in main's branch protection. The existing Node 24 context
-names are preserved; adding a matrix job does not automatically make it required.
+The stable `CI required` job waits for all four matrix entries. Its `always()`
+condition makes it run after a failed, cancelled, or skipped dependency, and it
+fails unless the matrix result is `success`. It needs no repository permissions.
+The existing Node 24 context names are preserved.
+
+After `CI required` has appeared and passed on the exact candidate commit, add
+that check to main's required status checks, bound to the GitHub Actions app ID
+reported by its check run. Keep existing required checks and the current strict
+setting. Use the branch protection `required_status_checks` PATCH endpoint so
+review requirements and other protection settings remain unchanged, then read
+back the protection and verify the new context and app ID. Adding a workflow job
+does not make it required; a green workflow alone does not prove enforcement.
+Repository settings are configured by an authorized maintainer, outside PR CI;
+the workflow has no administrative token or permission to modify them.
 
 ## npm artifact
 
