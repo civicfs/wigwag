@@ -12,7 +12,7 @@ export const HANDSHAKE_VERSIONS = {
   version: VERSION,
 } as const;
 const PROVIDER_REPAIR =
-  'Claude: run /reload-plugins; Codex: restart the Codex session and trust/enable the updated plugin. Verify with `wigwag doctor` and the agent whoami tool (bound: true).';
+  'Claude: run /reload-plugins; restart Claude if whoami client.version is still old. Codex: restart the Codex session and trust/enable the updated plugin. Verify with `wigwag doctor` and the agent whoami tool (client.version matches the CLI, bound: true).';
 export const BROKER_OLDER = `broker is older than this client: update the CLI, run \`wigwag broker stop\`, then retry to start the updated broker. ${PROVIDER_REPAIR}`;
 export const CLIENT_OLDER = `client is older than the broker: update the CLI and plugin, then retry. ${PROVIDER_REPAIR}`;
 

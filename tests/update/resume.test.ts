@@ -109,6 +109,8 @@ it('retains broker failure as repair work and reports manual reload/trust separa
   );
   expect(result).toMatchObject({ completed: false, pending: ['broker'] });
   expect(result?.next_steps.join('\n')).toMatch(/\/reload-plugins/);
+  expect(result?.next_steps.join('\n')).toMatch(/\/mcp.*reconnect.*Wigwag|restart Claude/);
+  expect(result?.next_steps.join('\n')).toContain('client.version');
   expect(result?.next_steps.join('\n')).toMatch(/restart.*Codex|Codex.*restart/);
   expect(result?.next_steps.join('\n')).toMatch(/trust/);
   expect(result?.next_steps.join('\n')).toMatch(/wigwag who/);

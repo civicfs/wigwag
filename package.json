@@ -54,6 +54,8 @@
     "build": "tsup",
     "test": "vitest run",
     "test:upgrade": "vitest run tests/upgrade",
+    "test:native": "node scripts/native-acceptance.mjs",
+    "test:native:skew": "node scripts/native-acceptance/skew.mjs",
     "lint": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm run typecheck && biome check . && npm run check:public -- --history && npm run check:package",

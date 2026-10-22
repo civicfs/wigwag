@@ -38,6 +38,13 @@ synthetic data, and a separate `WIGWAG_HOME`; see the
 from real-provider behavior. Automated Linux coverage uses provider fixtures;
 real provider behavior on Linux still needs its own acceptance evidence.
 
+Real Claude/Codex upgrade acceptance is opt-in and runs from a source checkout:
+`npm run test:native -- --help`. The [native acceptance harness](docs/native-acceptance.md)
+uses private installations, agent homes and a dedicated tmux server, and records
+binding, native trust, correlated model replies and reload/restart outcomes.
+Model calls require the explicit `--run-native` flag and authenticated private
+provider homes. An unexecuted or blocked scenario cannot produce a passing report.
+
 ## Changes and reviews
 
 Keep each PR focused on a concrete behavior. Explain the problem, resulting

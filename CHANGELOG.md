@@ -19,8 +19,10 @@
 - Drain provider output with bounded diagnostics instead of terminating verbose installers;
   keep signalled nested provider operations held for explicit inspection before retry.
 - Report partial upgrades with a nonzero exit status and pending repair steps.
-  Explain the remaining Claude `/reload-plugins`, Codex restart/hook-trust and
+  Explain the remaining Claude `/reload-plugins` and possible restart, Codex restart/hook-trust and
   per-session binding/push verification actions after installation.
+- Show each connected client's protocol, schema and version in `whoami` and `who`;
+  distinguish the current client from broker-wide historical version warnings.
 - Exercise actual pinned 0.3.0 MCP processes across broker replacement and schema
   migration, plus all 48 provider/active/idle/priority combinations. Run CI on
   Node 24 and Node 26 on macOS and Linux. These fixtures do not establish live-model acceptance.

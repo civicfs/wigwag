@@ -607,8 +607,10 @@ reports pending repairs; `--json` reports structured check or apply results.
 
 **Loaded agent code still needs your action after a successful apply:**
 
-1. In each running Claude session, run `/reload-plugins` to load the new hooks
-   and tools.
+1. In each running Claude session, run `/reload-plugins`, then check the Wigwag
+   `whoami` result's `client.version`. Reloading plugin definitions can retain the
+   old MCP process. If the version is still old, restart Claude and continue the
+   conversation before relying on the updated tools.
 2. Restart each Codex session and trust the changed Wigwag hooks when prompted
    (`/hooks`, then `t`, if needed). The hooks cannot establish a trusted native
    identity until Codex allows them to run.
@@ -616,10 +618,15 @@ reports pending repairs; `--json` reports structured check or apply results.
    From the shell, run `wigwag broker status`, `wigwag doctor`, and `wigwag who`.
    For a single-provider installation use `wigwag doctor --claude-only` or
    `--codex-only`. Check the expected session name, `bound: true` in `whoami`,
-   `BOUND=yes` in the CLI, delivery/push capabilities, and no
+   `client.version` matching the installed CLI, `BOUND=yes` in the CLI,
+   delivery/push capabilities, and no
    Codex push-held reason before relying on delivery. Investigate warnings or
    held push with doctor; an idle session or missing hook trust may still need
    a genuine turn or plugin reload.
+
+`whoami.client` identifies the connected MCP process. `version_warnings` contains
+broker-wide history since startup, including older clients that have since
+disconnected; it does not establish the current client's version.
 
 Broker replacement reconnects MCP clients without closing agents. It does not
 reload their tools/hooks, prove a successful native bind, or demonstrate native

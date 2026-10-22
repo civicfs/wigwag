@@ -142,7 +142,9 @@ describe('protocol/schema version skew', () => {
         message: expect.stringMatching(/Claude.*\/reload-plugins.*Codex.*restart.*trust/),
       });
       await expect(attempt).rejects.toThrow('wigwag doctor');
-      await expect(attempt).rejects.toThrow('whoami tool (bound: true)');
+      await expect(attempt).rejects.toThrow('client.version');
+      await expect(attempt).rejects.toThrow('bound: true');
+      await expect(attempt).rejects.toThrow('restart Claude');
     },
   );
   it('maps the old strict hello rejection to restart advice, and hooks still exit zero', async () => {

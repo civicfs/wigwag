@@ -125,7 +125,9 @@ function nextSteps(providers: UpdateResult['providers'], pending: UpdateStep[]):
         ]
       : []),
     ...(providers.includes('claude')
-      ? ['Claude: run /reload-plugins in each running Claude session so it loads the updated hooks and tools.']
+      ? [
+          'Claude: run /reload-plugins in each running session, then check whoami client.version. If it is older than the installed CLI, restart Claude: reloading plugin definitions can retain the old MCP process.',
+        ]
       : []),
     ...(providers.includes('codex')
       ? [
@@ -134,7 +136,7 @@ function nextSteps(providers: UpdateResult['providers'], pending: UpdateStep[]):
       : []),
     'Broker replacement does not reload agent plugins or prove native binding/push readiness.',
     `Verify: wigwag broker status; wigwag doctor${providers.length === 1 ? ` --${providers[0]}-only` : ''}; wigwag who. Check BOUND=yes and resolve any Codex push-held reason.`,
-    'In each agent, run the Wigwag whoami tool after a genuine prompt/turn; verify the expected session name, bound: true, and delivery/push capabilities before relying on delivery.',
+    'In each agent, run the Wigwag whoami tool after a genuine prompt/turn; verify client.version matches the installed CLI, the expected session name, bound: true, and delivery/push capabilities before relying on delivery. version_warnings is broker history, not the connected client version.',
   ];
 }
 export function describeApply(result: UpdateResult): string {

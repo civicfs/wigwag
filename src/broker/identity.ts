@@ -56,6 +56,13 @@ const canonical = (p: string): string => {
   }
 };
 
+/** Connection-local validated wire stamps; absent legacy fields are unknown, never inferred from the broker. */
+const clientStamp = (hello: Hello | null | undefined) => ({
+  protocol: hello?.protocol ?? null,
+  schema_version: hello?.schema_version ?? null,
+  version: hello?.version ?? null,
+});
+
 /** A launcher's request (E-1): the Codex session that connects in `cwd` after it should take `name`. */
 interface LaunchIntent {
   conn: Connection;
@@ -733,7 +740,9 @@ export function installIdentity(broker: Broker): void {
       ...publicSession(db, s),
       capabilities: capabilitiesFor(broker, s),
       broker: HANDSHAKE_VERSIONS,
+      client: clientStamp(conn.hello),
       version_warnings: broker.versionWarnings,
+      version_warnings_scope: 'broker-history',
       ...(s.agent === 'codex' ? { codex_question_wait: broker.questions.codexWaiting.get(s.id) ?? null } : {}),
     };
   });
@@ -746,7 +755,7 @@ export function installIdentity(broker: Broker): void {
     return listSessions(db)
       .filter((s) => (scope === null || scope.has(s.workspace)) && (includeOffline || s.state !== 'offline'))
       .slice(offset, pageSize === undefined ? undefined : offset + pageSize)
-      .map((s) => publicSession(db, s));
+      .map((s) => ({ ...publicSession(db, s), client: clientStamp(broker.connectionFor(s.id)?.hello) }));
   });
 
   broker.handle('launch.intend', ({ conn }, p) => {
