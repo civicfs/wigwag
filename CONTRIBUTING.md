@@ -21,6 +21,11 @@ npm run check:public -- --history
 npm run check:package
 ```
 
+CI runs the full suite on Node 24 and Node 26 on macOS and Linux. The upgrade
+tests build the actual pinned 0.3.0 source from Git history; use a full clone
+(or fetch the missing history in a shallow checkout). `npm run test:upgrade`
+runs the provider/state matrix and retained-client upgrade checks separately.
+
 `install.sh` is for installing the live integration: it changes global plugin
 configuration and links the global CLI to this checkout. It is not required for
 tests. If you previously linked the global CLI here, rebuilding also changes
@@ -30,8 +35,8 @@ when your working sessions depend on that installation.
 Provider integration tests are a separate manual step. Use disposable sessions,
 synthetic data, and a separate `WIGWAG_HOME`; see the
 [end-to-end checklist](docs/e2e-checklist.md). Report automated evidence separately
-from real-provider behavior. Linux support remains unverified end to end until
-CI or manual evidence establishes it.
+from real-provider behavior. Automated Linux coverage uses provider fixtures;
+real provider behavior on Linux still needs its own acceptance evidence.
 
 ## Changes and reviews
 

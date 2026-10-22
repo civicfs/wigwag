@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.5 — 2026-10-22
+
+- Recover a missed Codex SessionStart bind on a later trusted turn or digest hook,
+  retaining concrete conversation, host, generation and ownership checks.
+- Keep explicitly supported 0.3.0 MCP, hook and owner clients connected across the
+  broker's schema-4 to schema-5 upgrade. Database migration and newer-schema refusal
+  remain separate from the negotiated wire contract.
+- Checkpoint upgrades so interrupted package/plugin/broker work can resume with
+  `wigwag update --apply`, including when the installed CLI is already the target version.
+  Verify the exact installed executable and preserve the original provider scope.
+- Repair upgrades begun by older updaters, which had no journal, with the offline
+  `wigwag update --apply --repair` command. Refresh the installed version without
+  reinstalling its npm package.
+- Prevent overlapping installers after an updater crash. Preserve an explicit unknown
+  outcome when command supervision is lost, with a guarded operator resolution step
+  before retry. Recheck a resumed upgrade's live broker instead of trusting an old checkpoint.
+- Drain provider output with bounded diagnostics instead of terminating verbose installers;
+  keep signalled nested provider operations held for explicit inspection before retry.
+- Report partial upgrades with a nonzero exit status and pending repair steps.
+  Explain the remaining Claude `/reload-plugins`, Codex restart/hook-trust and
+  per-session binding/push verification actions after installation.
+- Exercise actual pinned 0.3.0 MCP processes across broker replacement and schema
+  migration, plus all 48 provider/active/idle/priority combinations. Run CI on
+  Node 24 and Node 26 on macOS and Linux. These fixtures do not establish live-model acceptance.
+
 ## 0.3.1 — 2026-10-20
 
 - Keep requests, responses and replies attached to their original sessions across renames,

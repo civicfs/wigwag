@@ -10,7 +10,7 @@ import { WigwagError } from '../../errors.js';
 import { frameLimit } from '../../protocol/frame.js';
 import { assertRehearsalClientPaths, assertRehearsalStoragePaths, homeRehearsalMode } from '../../rehearsal.js';
 import { usageError } from '../help.js';
-import { cliEntry, out, ownerConnect, parseCli } from '../util.js';
+import { cliEntry, out, parseCli } from '../util.js';
 
 /** The pid reported by a broker answering on this home's socket, or null when none answers (never autospawns). */
 export async function liveStatus(home: string): Promise<{ pid: number; version?: string } | null> {
@@ -123,18 +123,20 @@ export async function cmdBroker(sub: string | undefined, args: string[] = []): P
     return;
   }
   if (sub === 'status') {
-    if (!(await canConnect(sockPath(home)))) {
+    const { values } = parseCli({ args, options: { 'expect-version': { type: 'string' } } });
+    // Unlike ownerConnect, this observation never starts a missing broker during
+    // a socket-disappearance race, and can diagnose an older wire client too.
+    const current = await liveStatus(home);
+    if (values['expect-version'] && (!current || current.version !== values['expect-version']))
+      throw new Error(
+        `Broker version not confirmed: expected ${values['expect-version']}, found ${current?.version ?? (current ? 'unknown' : 'not running')}`,
+      );
+    if (!current) {
       out('broker not running');
       process.exitCode = 1;
       return;
     }
-    const { client } = await ownerConnect();
-    try {
-      const r = await client.call<{ pid: number; version?: string }>('sys.ping');
-      out(`broker running pid ${r.pid}`);
-    } finally {
-      client.close();
-    }
+    out(`broker running pid ${current.pid} version ${current.version ?? 'unknown'}`);
     return;
   }
   if (sub === 'stop') {

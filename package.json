@@ -1,6 +1,6 @@
 {
   "name": "@civicfs/wigwag",
-  "version": "0.3.1",
+  "version": "0.3.5",
   "description": "Push messaging and a data channel between Claude Code and Codex sessions on one host",
   "license": "MIT",
   "author": {
@@ -53,6 +53,7 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
+    "test:upgrade": "vitest run tests/upgrade",
     "lint": "biome check --write .",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm run typecheck && biome check . && npm run check:public -- --history && npm run check:package",

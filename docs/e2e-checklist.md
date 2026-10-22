@@ -62,3 +62,22 @@ states; a generic peer message alone does not prove native completion.
 
 See [2026-10-13 relay evidence](native-question-relay-2026-10-13.md) for actual
 executed coverage and remaining live-test boundaries.
+
+## Upgrade acceptance (0.3.5)
+
+Use disposable Claude and Codex sessions, synthetic messages, a separate
+`WIGWAG_HOME`, and isolated installations. Record the old/new CLI and broker
+versions, each session's name/binding/capabilities, message IDs and observed
+responses. Automated fixtures do not replace this native acceptance pass.
+
+| Check | Expected |
+|---|---|
+| Retain each provider idle, then busy, across broker replacement | Same session/name and mail ownership; later genuine hooks work. A normal message receives a correlated response after the recipient can process it. |
+| Fail Codex's initial SessionStart while the old broker is incompatible, then replace the broker | A later genuine turn/tool hook restores binding without manually invoking an internal tool; a conflicting existing identity remains refused. |
+| Upgrade with low-priority mail held, and normal mail pending | Low mail never wakes on its own; subsequent delivery preserves IDs, ownership and unread recovery. |
+| Begin an upgrade with a pre-0.3.5 updater, replace the package, then fail provider refresh | After the old updater and associated commands stop, the newly installed `wigwag update --apply --repair` repairs the current version without npm metadata or package reinstallation, even without an old journal. It replaces an incompatible broker before provider setup. |
+| Interrupt an updater while its installer is still running | A retry reports the in-flight operation and starts no second installer. Once it finishes, repair reconciles the recorded outcome. |
+| A nested provider installer emits more than 1 MiB, or exits from a signal | Large output is drained without terminating the command. A signal leaves an unknown operation held for inspection; no subsequent provider command or retry overlaps its surviving work. |
+| Lose command supervision with an uncertain outcome | Update remains fenced. Inspect/stop associated commands before acknowledging the exact operation with `--resolve-operation <id> --not-running`; pending repair is preserved. |
+| Retry a partial same-version upgrade after the broker stops | Repair verifies/replaces the missing broker. A healthy broker is not restarted just to finish provider refresh. |
+| Complete installation while agent processes stay open | Output still names Claude `/reload-plugins`, Codex restart/hook trust, and public `whoami`/doctor readiness checks. Do not record success until the expected name, binding and delivery capabilities are verified and a correlated native response is observed. |

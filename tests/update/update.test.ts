@@ -1,12 +1,17 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyUpdate, checkUpdate, notifyUpdate, type Run } from '../../src/update/update.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { checkUpdate, notifyUpdate, type Run } from '../../src/update/update.js';
 import { VERSION } from '../../src/version.js';
 import { tmpHome } from '../helpers.js';
+import { isolatedApply } from './fixture.js';
 
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => vi.stubEnv('WIGWAG_HOME', mkdtempSync(join(tmpdir(), 'ww-updater-home-'))));
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const next = '99.0.0';
 describe('npm updates', () => {
   it('checks releases without running an installer and never offers a downgrade', async () => {
@@ -18,6 +23,8 @@ describe('npm updates', () => {
     for (const v of [VERSION, '0.0.1'])
       expect(await checkUpdate(async () => v)).toMatchObject({ update_available: false });
     await expect(checkUpdate(async () => 'latest; echo unsafe')).rejects.toThrow('Invalid release');
+    expect(existsSync(join(process.env.WIGWAG_HOME as string, 'update.mutex'))).toBe(false);
+    expect(existsSync(join(process.env.WIGWAG_HOME as string, 'update-progress.json'))).toBe(false);
   });
   it('applies the exact npm version and refreshes plugins and broker in order', async () => {
     const base = mkdtempSync(join(tmpdir(), 'ww-update-'));
@@ -27,26 +34,28 @@ describe('npm updates', () => {
     const calls: Array<[string, string[]]> = [];
     const execute: Run = async (bin, args) => {
       calls.push([bin, args]);
+      if (args.includes('--version')) return next;
       if (bin === 'claude' && args[1] === 'list') return JSON.stringify([{ id: 'wigwag@wigwag' }]);
       if (bin === 'codex' && args[1] === 'list') return JSON.stringify({ installed: [{ pluginId: 'wigwag@wigwag' }] });
       return bin === 'npm' && args[0] === 'root' ? base : '';
     };
-    await applyUpdate(root, await checkUpdate(async () => next), execute, () => true, 'codex');
+    await isolatedApply(root, await checkUpdate(async () => next), execute, () => true, 'codex');
     expect(calls).toEqual([
       ['npm', ['root', '--global']],
       ['claude', ['plugin', 'list', '--json']],
       ['codex', ['plugin', 'list', '--json']],
       ['npm', ['install', '--global', '@civicfs/wigwag@99.0.0', '--ignore-scripts']],
-      ['wigwag', ['install']],
+      [process.execPath, [join(root, 'dist', 'main.js'), '--version']],
+      [process.execPath, [join(root, 'dist', 'main.js'), 'broker', 'restart', '--expect-version', next]],
+      [process.execPath, [join(root, 'dist', 'main.js'), 'install', '--codex-binary', 'codex']],
       ['claude', ['plugin', 'update', 'wigwag@wigwag']],
-      ['wigwag', ['broker', 'restart', '--expect-version', next]],
     ]);
   });
   it('refuses a project dependency install and never touches Git', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ww-project-'));
     const calls: string[] = [];
     await expect(
-      applyUpdate(root, await checkUpdate(async () => next), async (bin) => {
+      isolatedApply(root, await checkUpdate(async () => next), async (bin) => {
         calls.push(bin);
         return root;
       }),
@@ -62,17 +71,23 @@ describe('npm updates', () => {
       .fn<Run>()
       .mockResolvedValueOnce(base)
       .mockResolvedValueOnce(JSON.stringify([{ id: 'wigwag@wigwag' }]))
-      .mockRejectedValueOnce(new Error('npm unavailable'));
-    await expect(
-      applyUpdate(root, await checkUpdate(async () => next), execute, (name) => name === 'claude', 'codex'),
-    ).rejects.toThrow('npm unavailable');
-    expect(execute).toHaveBeenCalledTimes(3);
+      .mockRejectedValueOnce(new Error('npm unavailable'))
+      .mockResolvedValueOnce('0.0.1');
+    const result = await isolatedApply(
+      root,
+      await checkUpdate(async () => next),
+      execute,
+      (name) => name === 'claude',
+      'codex',
+    );
+    expect(result).toMatchObject({ completed: false, cli_verified: false });
+    expect(execute).toHaveBeenCalledTimes(4);
   });
   it('refuses a development checkout link before changing the installation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'ww-dev-'));
     mkdirSync(join(root, '.git'));
     const execute = vi.fn<Run>();
-    await expect(applyUpdate(root, await checkUpdate(async () => next), execute)).rejects.toThrow(
+    await expect(isolatedApply(root, await checkUpdate(async () => next), execute)).rejects.toThrow(
       'Development checkout',
     );
     expect(execute).not.toHaveBeenCalled();
@@ -83,14 +98,23 @@ describe('npm updates', () => {
     const root = join(base, '@civicfs', 'wigwag');
     mkdirSync(root);
     const execute = vi.fn<Run>().mockImplementation(async (bin, args) => {
+      if (args.includes('--version')) return next;
       if (bin === 'npm' && args[0] === 'root') return base;
       if (bin === 'codex' && args[1] === 'list') return JSON.stringify({ installed: [{ pluginId: 'wigwag@wigwag' }] });
       return '';
     });
-    await applyUpdate(root, await checkUpdate(async () => next), execute, (name) => name === 'codex', 'codex');
+    await isolatedApply(root, await checkUpdate(async () => next), execute, (name) => name === 'codex', 'codex');
     expect(execute.mock.calls.some(([bin]) => bin === 'claude')).toBe(false);
-    expect(execute).toHaveBeenCalledWith('wigwag', ['install', '--codex-only'], root);
-    expect(execute).toHaveBeenCalledWith('wigwag', ['broker', 'restart', '--expect-version', next], root);
+    expect(execute).toHaveBeenCalledWith(
+      process.execPath,
+      [join(root, 'dist', 'main.js'), 'install', '--codex-only', '--codex-binary', 'codex'],
+      root,
+    );
+    expect(execute).toHaveBeenCalledWith(
+      process.execPath,
+      [join(root, 'dist', 'main.js'), 'broker', 'restart', '--expect-version', next],
+      root,
+    );
   });
   it('rejects globally linked package subdirectories before npm installation', async () => {
     const base = mkdtempSync(join(tmpdir(), 'ww-linked-'));
@@ -99,7 +123,9 @@ describe('npm updates', () => {
     mkdirSync(root);
     symlinkSync(root, join(base, '@civicfs', 'wigwag'));
     const execute = vi.fn<Run>().mockResolvedValue(base);
-    await expect(applyUpdate(root, await checkUpdate(async () => next), execute)).rejects.toThrow('Linked development');
+    await expect(isolatedApply(root, await checkUpdate(async () => next), execute)).rejects.toThrow(
+      'Linked development',
+    );
     expect(execute).toHaveBeenCalledTimes(1);
   });
   it('uses the configured Codex binary even when PATH has no codex', async () => {
@@ -109,13 +135,18 @@ describe('npm updates', () => {
     mkdirSync(root);
     const custom = '/custom/bin/codex';
     const execute = vi.fn<Run>().mockImplementation(async (bin, args) => {
+      if (args.includes('--version')) return next;
       if (bin === 'npm' && args[0] === 'root') return base;
       if (bin === custom) return JSON.stringify({ installed: [{ pluginId: 'wigwag@wigwag' }] });
       return '';
     });
-    await applyUpdate(root, await checkUpdate(async () => next), execute, (name) => name === custom, custom);
+    await isolatedApply(root, await checkUpdate(async () => next), execute, (name) => name === custom, custom);
     expect(execute).toHaveBeenCalledWith(custom, ['plugin', 'list', '--json'], root);
-    expect(execute).toHaveBeenCalledWith('wigwag', ['install', '--codex-only'], root);
+    expect(execute).toHaveBeenCalledWith(
+      process.execPath,
+      [join(root, 'dist', 'main.js'), 'install', '--codex-only', '--codex-binary', custom],
+      root,
+    );
   });
   it('caches launch checks for a day and only prints a notice', async () => {
     const home = mkdtempSync(join(tmpdir(), 'ww-notice-'));

@@ -56,7 +56,7 @@ resolution; PID reuse within the same second by the same uid cannot be distingui
 
 ## Install
 
-The current source release is **0.3.1**. GitHub releases and npm
+The current source release is **0.3.5**. GitHub releases and npm
 packages are published separately; check the [npm package page](https://www.npmjs.com/package/@civicfs/wigwag)
 for registry availability. Live native-question tests (0.2.0) used macOS, Claude Code
 **2.1.296**, and Codex **0.162.1**; 0.3.x's new behaviour is covered by automated tests
@@ -222,7 +222,10 @@ parent remains open. `who` shows "parent open, MCP disconnected"; Claude message
 wait for the next prompt or tool call. Codex pushes also wait for the MCP link;
 reattachment releases the backlog only after fresh thread-identity verification.
 
-Hello checks protocol and schema before registering a session. Incompatible
+Hello checks wire compatibility before registering a session. The broker accepts
+the reviewed 0.3.0 protocol-1/schema-4 client contract across the schema-5 upgrade,
+while the on-disk database still requires the current schema and cannot be opened
+by an older program. Other incompatible
 versions report `wigwag broker stop` then retry for an older broker, or
 update/reload advice for an older client. Package-version differences alone are
 accepted with a soft warning in whoami/ping/doctor: restart/reload when convenient.
@@ -546,24 +549,88 @@ Set `WIGWAG_NO_UPDATE_CHECK=1` to disable launch checks.
 wigwag update                  # check only
 wigwag update --check --json    # machine-readable check
 wigwag update --apply           # explicitly install the advertised version
+wigwag update --apply --repair  # repair installed-version plugins/broker without checking npm
 ```
 
 Applying an update requires a published global npm installation. The command
-installs that exact version, refreshes installed provider plugins, restarts the
-broker, and verifies its version. It reports failures without claiming success.
-Development checkouts linked into the global CLI are not self-updated; update
-them through Git, or migrate to npm and re-register the plugins. Project-local
-dependencies should use their package manager.
+installs the advertised version, verifies the replacement CLI, replaces the broker
+with a verified version, then refreshes only the providers already installed
+(including a configured custom Codex binary). Broker repair comes first because
+plugin installation itself needs a compatible broker. Development checkouts linked into
+the global CLI are not self-updated; update them through Git, or migrate to npm
+and re-register the plugins. Project-local dependencies use their package manager.
 
-Broker changes reconnect running sessions automatically without closing them.
-**Loaded plugin code is separate:** Claude can reload updated files with
-`/reload-plugins`; Codex needs a restart and trust for changed hooks. Wigwag does
-not promise automatic in-session hook/tool reload. Existing sessions can keep
-using broker delivery improvements while retaining their old tool definitions.
+**First upgrade from a version before 0.3.5:** the old updater cannot save the new
+repair journal. If it replaces the CLI and then fails while refreshing a plugin,
+wait until that updater and its installer/provider commands have stopped, then run
+the newly installed CLI:
 
-For a source upgrade, build, run `wigwag install` and `wigwag init`, restart the
-broker, then reload/restart the provider as above. Native delegation fails visibly
-if the worker integration is not ready.
+```sh
+wigwag update --apply --repair
+```
+
+This explicit repair works even when ordinary `--apply` reports no newer version.
+It skips npm metadata and package installation, targets the currently running CLI
+version, discovers the installed providers and configured Codex binary, and starts
+a journal for plugin refresh and broker replacement after verifying the installed
+CLI. A previously saved journal always takes precedence: `--repair` resumes its
+recorded version and scope. Subsequent interrupted repairs use ordinary
+`wigwag update --apply`. `--repair` requires `--apply` and cannot be combined with
+operation-resolution flags. Agent reload/trust and readiness checks below still
+remain necessary after repair.
+
+Only one updater can apply changes per Wigwag home at a time; its separate
+`update.mutex` lock is released automatically if the updater exits or crashes.
+Each mutating command also runs under a detached worker's `update-operation.mutex`.
+If the updater crashes or its two-minute wait expires, the worker continues holding
+that fence until the command finishes. A retry refuses to proceed while the operation
+is running. After it finishes, retry to consume its saved result without repeating
+a completed mutation.
+Installer output is discarded; only private operation metadata is recorded.
+If the worker itself dies, the command may still be running: the updater reports an
+unknown outcome and refuses to replay it. Inspect and stop the associated installer
+or provider command first, then acknowledge the exact operation ID printed in the
+error using `wigwag update --resolve-operation <id> --not-running`. This clears only
+the operation receipt; the pending repair journal is preserved. Then rerun
+`wigwag update --apply`. The acknowledgement is your assertion that the old command
+has stopped; a missing worker PID alone does not establish that.
+The updater saves private, atomic progress in `<WIGWAG_HOME>/update-progress.json`
+(default `~/.wigwag`). If npm, plugin refresh, or broker replacement fails, it
+reports an **incomplete update** and exits nonzero. Broker replacement and provider
+refresh report their own results; a known failure does not prevent independent repair.
+Rerun `wigwag update --apply` to finish the pending steps: it preserves the exact
+target version, provider scope, and Codex binary, even when that version is already
+installed or npm metadata is offline. A resumed apply rechecks a previously completed
+broker step against the live target version; it repairs a missing/older broker and
+keeps a healthy target broker running. `wigwag update --check` is read-only and
+reports pending repairs; `--json` reports structured check or apply results.
+
+**Loaded agent code still needs your action after a successful apply:**
+
+1. In each running Claude session, run `/reload-plugins` to load the new hooks
+   and tools.
+2. Restart each Codex session and trust the changed Wigwag hooks when prompted
+   (`/hooks`, then `t`, if needed). The hooks cannot establish a trusted native
+   identity until Codex allows them to run.
+3. Make a genuine prompt/turn in each agent, then run the Wigwag `whoami` tool.
+   From the shell, run `wigwag broker status`, `wigwag doctor`, and `wigwag who`.
+   For a single-provider installation use `wigwag doctor --claude-only` or
+   `--codex-only`. Check the expected session name, `bound: true` in `whoami`,
+   `BOUND=yes` in the CLI, delivery/push capabilities, and no
+   Codex push-held reason before relying on delivery. Investigate warnings or
+   held push with doctor; an idle session or missing hook trust may still need
+   a genuine turn or plugin reload.
+
+Broker replacement reconnects MCP clients without closing agents. It does not
+reload their tools/hooks, prove a successful native bind, or demonstrate native
+push delivery. Old clients may continue using broker delivery improvements while
+retaining their previous tool definitions. Complete pending installation repair
+and these provider actions separately; a successful broker restart alone does
+not establish that every running client has upgraded.
+
+For a source upgrade, build the updated CLI, run `wigwag init`, restart the broker,
+then run `wigwag install` and reload/restart the provider as above. Native delegation
+fails visibly if the worker integration is not ready.
 
 ## Configuration
 

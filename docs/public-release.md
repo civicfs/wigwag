@@ -33,9 +33,14 @@ match the repository's available GitHub features.
 
 The included CI workflow uses read-only repository permissions, immutable action
 commits, full history for the public-file check, and no provider credentials or
-plugin installation. It runs Node 24 checks on macOS and Linux. Its first hosted
+plugin installation. It runs Node 24 and Node 26 checks on macOS and Linux, including
+the pinned previous-release MCP upgrade tests and the provider/active/idle delivery matrix. Its first hosted
 run must pass before claiming hosted CI or Linux validation. It does not publish
 packages or merge updates automatically.
+
+After those jobs have appeared and passed, require all four `Node 24 / ...` and
+`Node 26 / ...` contexts in main's branch protection. The existing Node 24 context
+names are preserved; adding a matrix job does not automatically make it required.
 
 ## npm artifact
 
