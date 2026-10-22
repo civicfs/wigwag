@@ -2,6 +2,8 @@
 
 ## 0.3.5 — 2026-10-22
 
+- Update the locked transitive `ip-address` dependency to 10.7.4, fixing
+  GHSA-rxp7-6hxx-x8q5 without changing the SDK or its declared dependency range.
 - Recover a missed Codex SessionStart bind on a later trusted turn or digest hook,
   retaining concrete conversation, host, generation and ownership checks.
 - Keep explicitly supported 0.3.0 MCP, hook and owner clients connected across the
