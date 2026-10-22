@@ -16,7 +16,15 @@ import {
 } from '../rehearsal.js';
 import { terminalText } from '../terminal.js';
 import { runTui } from '../tui/run.js';
-import { applyUpdate, checkUpdate, describeUpdate } from '../update/update.js';
+import { resolveUpdateOperation, runUpdateWorker } from '../update/operation.js';
+import {
+  applyUpdate,
+  checkUpdate,
+  describeApply,
+  describeUpdate,
+  readUpdateProgress,
+  type UpdateStatus,
+} from '../update/update.js';
 import { VERSION } from '../version.js';
 import { cmdBroker } from './commands/broker.js';
 import { CLAUDE_LAUNCH, cmdDoctor } from './commands/doctor.js';
@@ -42,6 +50,10 @@ import { cliEntry, out, table, UsageError } from './util.js';
 
 async function main(argv: string[]): Promise<void> {
   const [cmd, sub, ...rest] = argv;
+  if (cmd === '__update-worker') {
+    await runUpdateWorker();
+    return;
+  }
   const tail = argv.slice(1);
   // Help never starts a broker or reads the home directory. Arguments after send's and the launchers' own flags
   // belong to those commands, so only a leading --help counts there.
@@ -100,18 +112,47 @@ async function main(argv: string[]): Promise<void> {
     case 'update': {
       const { values } = parseArgs({
         args: tail,
-        options: { apply: { type: 'boolean' }, check: { type: 'boolean' }, json: { type: 'boolean' } },
+        options: {
+          apply: { type: 'boolean' },
+          repair: { type: 'boolean' },
+          check: { type: 'boolean' },
+          json: { type: 'boolean' },
+          'resolve-operation': { type: 'string' },
+          'not-running': { type: 'boolean' },
+        },
       });
       if (values.apply && values.check) throw new UsageError('--apply and --check are exclusive');
+      if (values.repair && !values.apply)
+        throw new UsageError('--repair requires --apply and cannot be combined with operation resolution');
+      if (values['resolve-operation'] || values['not-running']) {
+        if (!values['resolve-operation'] || !values['not-running'] || values.apply || values.check || values.repair)
+          throw new UsageError(
+            'Recovery requires --resolve-operation <exact-id> --not-running, separately from --apply/--check; inspect and stop associated commands first',
+          );
+        resolveUpdateOperation(resolveHome(), values['resolve-operation']);
+        out(
+          values.json
+            ? JSON.stringify({ resolved: values['resolve-operation'], pending_preserved: true })
+            : 'Interrupted operation acknowledged as not running. Pending update progress preserved. Run wigwag update --apply to resume repair.',
+        );
+        return;
+      }
       const root = packageRoot();
-      const status = await checkUpdate();
+      // An interrupted replacement must be repairable even when npm is unavailable.
+      const pending = values.apply ? readUpdateProgress() : null;
+      const status: UpdateStatus = pending
+        ? { current: VERSION, source: 'npm', available: pending.target, update_available: false }
+        : values.repair
+          ? { current: VERSION, source: 'npm', available: VERSION, update_available: false }
+          : await checkUpdate();
       if (values.apply) {
         if (status.reason) throw new UsageError(status.reason);
-        await applyUpdate(root, status);
-        if (status.update_available) {
-          out(
-            'Wigwag updated. Existing agents keep running. Claude: /reload-plugins; Codex: restart and trust changed hooks.',
-          );
+        const result = await applyUpdate(root, status, undefined, undefined, undefined, {
+          repair: values.repair === true,
+        });
+        if (result) {
+          out(values.json ? JSON.stringify(result) : describeApply(result));
+          if (!result.completed) process.exitCode = 1;
           return;
         }
       }
@@ -131,7 +172,7 @@ async function main(argv: string[]): Promise<void> {
         throw new UsageError('--claude-only and --codex-only are exclusive');
       const which = { claude: !values['codex-only'], codex: !values['claude-only'] };
       const steps =
-        cmd === 'install' ? await install({ ...which, codexBinary: values['codex-binary'] }) : uninstall(which);
+        cmd === 'install' ? await install({ ...which, codexBinary: values['codex-binary'] }) : await uninstall(which);
       out(
         table([
           ['STATUS', 'TARGET', 'STEP', 'DETAIL'],

@@ -378,6 +378,7 @@ export class Broker {
       conn.reply(id, {
         ...(isObject(welcome) ? welcome : {}),
         ...HANDSHAKE_VERSIONS,
+        ...(compatibility.replySchemaVersion === undefined ? {} : { schema_version: compatibility.replySchemaVersion }),
         ...(compatibility.warning
           ? { compatibility_warning: compatibility.warning, client_mode: compatibility.legacy ? 'legacy' : 'current' }
           : {}),

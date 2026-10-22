@@ -1,27 +1,21 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { resolveCodexBinary, whichBin } from '../cli/commands/init.js';
 import { cliEntry } from '../cli/util.js';
 import { ensureBroker } from '../client/autospawn.js';
 import { configPath, initHome, loadConfig, resolveHome, setCodexBinary } from '../config.js';
+import { runInstaller } from './process.js';
 
 export type Step = { target: 'wigwag' | 'claude' | 'codex'; action: string; ok: boolean; detail: string };
 
 /** dist/main.js → package root. `npm install -g .` symlinks the repo, so this is the checkout. */
 export const packageRoot = (): string => resolve(dirname(realpathSync(cliEntry())), '..');
 
-const exec = (bin: string, args: string[]): { ok: boolean; text: string } => {
-  const r = spawnSync(bin, args, { encoding: 'utf8' });
-  if (r.error) return { ok: false, text: r.error.message };
-  return { ok: r.status === 0, text: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() };
-};
-
 const mentionsTarget = (text: string, extra: string[] = []): boolean =>
   /\bwigwag(@wigwag)?\b/.test(text) || extra.some((x) => text.includes(x));
 
 /** Run `add`; if the CLI says it already exists, run `onAlready` instead (or accept). */
-function addOrUpdate(
+async function addOrUpdate(
   steps: Step[],
   root: string,
   target: Step['target'],
@@ -29,8 +23,8 @@ function addOrUpdate(
   bin: string,
   add: string[],
   onAlready: string[] | null,
-): void {
-  const r = exec(bin, add);
+): Promise<void> {
+  const r = await runInstaller(bin, add);
   if (r.ok) {
     steps.push({ target, action, ok: true, detail: `${bin} ${add.join(' ')}` });
     return;
@@ -40,7 +34,7 @@ function addOrUpdate(
       steps.push({ target, action, ok: true, detail: 'already present' });
       return;
     }
-    const u = exec(bin, onAlready);
+    const u = await runInstaller(bin, onAlready);
     steps.push({
       target,
       action: `${action} (update)`,
@@ -87,10 +81,10 @@ export async function install(opts: { claude: boolean; codex: boolean; codexBina
     if (!whichBin('claude'))
       steps.push({ target: 'claude', action: 'cli', ok: false, detail: 'claude not found on PATH' });
     else {
-      const v = exec('claude', ['plugin', 'validate', root]);
+      const v = await runInstaller('claude', ['plugin', 'validate', root]);
       steps.push({ target: 'claude', action: 'validate', ok: v.ok, detail: v.ok ? root : v.text });
       if (v.ok) {
-        addOrUpdate(
+        await addOrUpdate(
           steps,
           root,
           'claude',
@@ -99,7 +93,7 @@ export async function install(opts: { claude: boolean; codex: boolean; codexBina
           ['plugin', 'marketplace', 'add', root],
           ['plugin', 'marketplace', 'update', 'wigwag'],
         );
-        addOrUpdate(
+        await addOrUpdate(
           steps,
           root,
           'claude',
@@ -118,8 +112,8 @@ export async function install(opts: { claude: boolean; codex: boolean; codexBina
     const present = bin.includes('/') ? existsSync(bin) : whichBin(bin) !== null;
     if (!present) steps.push({ target: 'codex', action: 'cli', ok: false, detail: `${bin} not found` });
     else {
-      addOrUpdate(steps, root, 'codex', 'marketplace', bin, ['plugin', 'marketplace', 'add', root], null);
-      addOrUpdate(steps, root, 'codex', 'plugin', bin, ['plugin', 'add', 'wigwag@wigwag'], null);
+      await addOrUpdate(steps, root, 'codex', 'marketplace', bin, ['plugin', 'marketplace', 'add', root], null);
+      await addOrUpdate(steps, root, 'codex', 'plugin', bin, ['plugin', 'add', 'wigwag@wigwag'], null);
     }
   }
   return steps;
@@ -132,10 +126,10 @@ export async function install(opts: { claude: boolean; codex: boolean; codexBina
 // (codex plugin remove exits 0 when the plugin is absent.) The match also requires the output to name wigwag.
 const ABSENT = /not (installed|found|configured)/i;
 
-export function uninstall(opts: { claude: boolean; codex: boolean }): Step[] {
+export async function uninstall(opts: { claude: boolean; codex: boolean }): Promise<Step[]> {
   const steps: Step[] = [];
-  const rm = (target: Step['target'], action: string, bin: string, args: string[]) => {
-    const r = exec(bin, args);
+  const rm = async (target: Step['target'], action: string, bin: string, args: string[]) => {
+    const r = await runInstaller(bin, args);
     const absent = !r.ok && mentionsTarget(r.text) && ABSENT.test(r.text);
     steps.push({
       target,
@@ -148,8 +142,8 @@ export function uninstall(opts: { claude: boolean; codex: boolean }): Step[] {
     if (!whichBin('claude'))
       steps.push({ target: 'claude', action: 'cli', ok: false, detail: 'claude not found on PATH' });
     else {
-      rm('claude', 'plugin', 'claude', ['plugin', 'uninstall', 'wigwag@wigwag']);
-      rm('claude', 'marketplace', 'claude', ['plugin', 'marketplace', 'remove', 'wigwag']);
+      await rm('claude', 'plugin', 'claude', ['plugin', 'uninstall', 'wigwag@wigwag']);
+      await rm('claude', 'marketplace', 'claude', ['plugin', 'marketplace', 'remove', 'wigwag']);
     }
   }
   if (opts.codex) {
@@ -157,8 +151,8 @@ export function uninstall(opts: { claude: boolean; codex: boolean }): Step[] {
     const present = bin.includes('/') ? existsSync(bin) : whichBin(bin) !== null;
     if (!present) steps.push({ target: 'codex', action: 'cli', ok: false, detail: `${bin} not found` });
     else {
-      rm('codex', 'plugin', bin, ['plugin', 'remove', 'wigwag@wigwag']);
-      rm('codex', 'marketplace', bin, ['plugin', 'marketplace', 'remove', 'wigwag']);
+      await rm('codex', 'plugin', bin, ['plugin', 'remove', 'wigwag@wigwag']);
+      await rm('codex', 'marketplace', bin, ['plugin', 'marketplace', 'remove', 'wigwag']);
     }
   }
   return steps;

@@ -56,6 +56,13 @@ const canonical = (p: string): string => {
   }
 };
 
+/** Connection-local validated wire stamps; absent legacy fields are unknown, never inferred from the broker. */
+const clientStamp = (hello: Hello | null | undefined) => ({
+  protocol: hello?.protocol ?? null,
+  schema_version: hello?.schema_version ?? null,
+  version: hello?.version ?? null,
+});
+
 /** A launcher's request (E-1): the Codex session that connects in `cwd` after it should take `name`. */
 interface LaunchIntent {
   conn: Connection;
@@ -443,6 +450,9 @@ export function installIdentity(broker: Broker): void {
       current.workspace !== self.workspace ||
       incoming.workspace !== self.workspace ||
       incoming.agent_session_id !== self.agent_session_id ||
+      incoming.host_client_name !== self.host_client_name ||
+      incoming.host_client_version !== self.host_client_version ||
+      incoming.bind_origin !== self.bind_origin ||
       incoming.link !== 'connected' ||
       incoming.state === 'offline' ||
       incoming.retired_at ||
@@ -730,7 +740,9 @@ export function installIdentity(broker: Broker): void {
       ...publicSession(db, s),
       capabilities: capabilitiesFor(broker, s),
       broker: HANDSHAKE_VERSIONS,
+      client: clientStamp(conn.hello),
       version_warnings: broker.versionWarnings,
+      version_warnings_scope: 'broker-history',
       ...(s.agent === 'codex' ? { codex_question_wait: broker.questions.codexWaiting.get(s.id) ?? null } : {}),
     };
   });
@@ -743,7 +755,7 @@ export function installIdentity(broker: Broker): void {
     return listSessions(db)
       .filter((s) => (scope === null || scope.has(s.workspace)) && (includeOffline || s.state !== 'offline'))
       .slice(offset, pageSize === undefined ? undefined : offset + pageSize)
-      .map((s) => publicSession(db, s));
+      .map((s) => ({ ...publicSession(db, s), client: clientStamp(broker.connectionFor(s.id)?.hello) }));
   });
 
   broker.handle('launch.intend', ({ conn }, p) => {
@@ -806,8 +818,54 @@ export function installIdentity(broker: Broker): void {
     renamed(s, 'launch');
   };
 
-  broker.handle('session.bind', async ({ conn }, { agent_session_id, question_relay_version, hook_origin }) => {
+  // First delivery hooks may arrive together after a missed SessionStart. Serialize them with explicit binds so
+  // only the first concrete host identity can claim an unbound connection while native verification is in flight.
+  const binding = new WeakMap<Connection, Promise<void>>();
+  const serializeBinding = <T>(conn: Connection, run: () => Promise<T>): Promise<T> => {
+    const pending = (binding.get(conn) ?? Promise.resolve()).then(run);
+    binding.set(
+      conn,
+      pending.then(
+        () => {},
+        () => {},
+      ),
+    );
+    return pending;
+  };
+  const assertBindingCurrent = (conn: Connection, expected: SessionRow) => {
+    if (stopped || conn.closed || conn.failed) throw new WigwagError('transport', 'connection closed during bind');
+    const current = me(conn.sessionId);
+    if (!current) throw new WigwagError('transport', 'connection closed during bind');
+    if (
+      current.id !== expected.id ||
+      conn.generation !== expected.conn_generation ||
+      current.conn_generation !== expected.conn_generation ||
+      current.agent_session_id !== expected.agent_session_id ||
+      current.workspace !== expected.workspace ||
+      current.host_client_name !== expected.host_client_name ||
+      current.host_client_version !== expected.host_client_version ||
+      current.bind_origin !== expected.bind_origin ||
+      current.link !== 'connected' ||
+      current.state === 'offline' ||
+      current.retired_at ||
+      broker.connectionFor(current.id) !== conn
+    )
+      throw new WigwagError('conflict', 'session binding changed during native verification; retry');
+  };
+  const bindSession = async (
+    conn: Connection,
+    {
+      agent_session_id,
+      question_relay_version,
+      hook_origin,
+    }: {
+      agent_session_id: string;
+      question_relay_version?: number;
+      hook_origin?: unknown;
+    },
+  ) => {
     let first = me(conn.sessionId);
+    assertBindingCurrent(conn, first);
     const origin =
       first.agent === 'codex' && !conn.legacy ? validateHookOrigin(hook_origin, conn.hello?.host_client) : null;
     if (origin && origin.thread_id !== agent_session_id)
@@ -816,7 +874,10 @@ export function installIdentity(broker: Broker): void {
       await codexMcpReattach(conn, first, agent_session_id, origin);
       if (conn.closed || conn.failed || !conn.sessionId)
         throw new WigwagError('transport', 'connection closed during bind');
+      // A verified reattach may itself adopt the canonical slot; otherwise the original slot must be unchanged.
+      if (conn.sessionId === first.id) assertBindingCurrent(conn, first);
       first = me(conn.sessionId);
+      assertBindingCurrent(conn, first);
     }
     // W7 (S-E): a Codex hook's session_id is the tree-root id, shared by descendants. Automatic recovery is limited to
     // an app-server-verified root thread. That check is I/O, so it runs first; everything after it is revalidated.
@@ -833,8 +894,7 @@ export function installIdentity(broker: Broker): void {
         exceptId: first.id,
       }).length === 1;
     const rootVerified = single ? ((await broker.codexNames?.verifyRoot(agent_session_id)) ?? false) : false;
-    if (conn.closed || conn.failed || !conn.sessionId)
-      throw new WigwagError('transport', 'connection closed during bind');
+    assertBindingCurrent(conn, first);
     let self = me(conn.sessionId);
     if (self.agent === 'claude') {
       if (self.agent_session_id && self.agent_session_id !== agent_session_id)
@@ -934,7 +994,9 @@ export function installIdentity(broker: Broker): void {
         me(conn.sessionId),
         conn.legacy ? 'legacy-unverified' : verified ? 'hook-verified' : 'hook-unverified',
       );
-      await broker.checkCodexPush(me(conn.sessionId), true, false);
+      const bound = me(conn.sessionId);
+      await broker.checkCodexPush(bound, true, false);
+      assertBindingCurrent(conn, bound);
     } else if (bindingOrigin(db, me(conn.sessionId)) !== 'hook-verified')
       recordBindingOrigin(db, me(conn.sessionId), 'raw-bind');
     applyLaunchIntent(me(conn.sessionId));
@@ -942,20 +1004,33 @@ export function installIdentity(broker: Broker): void {
     broker.bus.emit('session.bound', me(conn.sessionId));
     if (question_relay_version === 1) broker.questions.markReady(conn.sessionId as string, agent_session_id);
     return {};
-  });
+  };
+  broker.handle('session.bind', ({ conn }, params) => serializeBinding(conn, () => bindSession(conn, params)));
 
-  const checkInternalOrigin = (conn: Connection, origin: unknown) => {
+  const checkInternalOrigin = async (conn: Connection, origin: unknown) => {
     const s = me(conn.sessionId);
     if (s.agent !== 'codex' || conn.legacy) return;
     // A pre-guard stamped MCP may retain its remembered binding. Delivery hooks grant no new identity:
     // keep them working while pushes stay unverified; any new/replacement bind still requires origin.
     if (!origin && !conn.hello?.host_client && s.bind_origin === 'unverified') return;
     const checked = validateHookOrigin(origin, conn.hello?.host_client);
-    if (s.agent_session_id !== checked.thread_id)
+    if (!s.agent_session_id && trustedCodexHost(checked, broker.config.codex.trusted_host_versions)) {
+      await serializeBinding(conn, async () => {
+        const current = me(conn.sessionId);
+        assertBindingCurrent(conn, current);
+        validateHookOrigin(origin, conn.hello?.host_client);
+        if (!current.agent_session_id)
+          await bindSession(conn, { agent_session_id: checked.thread_id, hook_origin: checked });
+      });
+    }
+    const current = me(conn.sessionId);
+    assertBindingCurrent(conn, current);
+    validateHookOrigin(origin, conn.hello?.host_client);
+    if (current.agent_session_id !== checked.thread_id)
       throw new WigwagError('bad_request', 'Codex hook identity does not match the bound conversation');
   };
   broker.handle('session.turn', async ({ conn }, { phase, hook_origin }) => {
-    checkInternalOrigin(conn, hook_origin);
+    await checkInternalOrigin(conn, hook_origin);
     setState(db, conn.sessionId as string, phase === 'started' ? 'online-busy' : 'online-idle');
     const s = me(conn.sessionId);
     if (s.agent === 'codex')
@@ -966,8 +1041,8 @@ export function installIdentity(broker: Broker): void {
     return {};
   });
 
-  broker.handle('session.digest', ({ conn }, { hook_origin }) => {
-    checkInternalOrigin(conn, hook_origin);
+  broker.handle('session.digest', async ({ conn }, { hook_origin }) => {
+    await checkInternalOrigin(conn, hook_origin);
     const s = me(conn.sessionId);
     return { text: s.name && broker.digestProvider ? broker.digestProvider(s.name) : null };
   });

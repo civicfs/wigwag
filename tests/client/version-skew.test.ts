@@ -132,6 +132,21 @@ describe('protocol/schema version skew', () => {
     );
     await expect(attempt).rejects.toThrow(expected);
   });
+  it.each([{ role: 'owner' }, { role: 'owner', protocol: 2, schema_version: 5, version: '0.4.0' }])(
+    'incompatible broker guidance distinguishes broker replacement from loaded-provider repair: %j',
+    async (welcome) => {
+      const home = await fakeBroker(welcome);
+      const attempt = Client.connect(sockPath(home), { protocol: 1, role: 'owner' }, 1 << 20);
+      await expect(attempt).rejects.toMatchObject({
+        code: 'schema',
+        message: expect.stringMatching(/Claude.*\/reload-plugins.*Codex.*restart.*trust/),
+      });
+      await expect(attempt).rejects.toThrow('wigwag doctor');
+      await expect(attempt).rejects.toThrow('client.version');
+      await expect(attempt).rejects.toThrow('bound: true');
+      await expect(attempt).rejects.toThrow('restart Claude');
+    },
+  );
   it('maps the old strict hello rejection to restart advice, and hooks still exit zero', async () => {
     const home = await fakeBroker(null, { code: 'bad_request', message: 'Unrecognized keys: schema_version, version' });
     await expect(Client.connect(sockPath(home), { protocol: 1, role: 'owner' }, 1 << 20)).rejects.toThrow(

@@ -708,6 +708,70 @@ git clone <repo> ~/code/wigwag && cd ~/code/wigwag && ./install.sh
 
 `wigwag uninstall [--claude-only | --codex-only]` removes both plugins and marketplaces and keeps `<home>` data. A target that is already absent counts as removed when the CLI says `not found`, `not installed` or `not configured` and names wigwag (claude 2.1.294: `Plugin "wigwag@wigwag" not found in installed plugins`, `Marketplace 'wigwag' not found`; codex 0.160.1: `marketplace \`wigwag\` is not configured or installed`).
 
+`wigwag update --check [--json]` is read-only: it checks npm metadata and reports any
+pending repair without running installers, replacing the broker, or writing progress.
+`wigwag update --apply [--json]` requires a published, unlinked global npm installation.
+`wigwag update --apply --repair [--json]` explicitly repairs current-version provider
+and broker integration without npm metadata or package installation when no journal
+exists. It targets the running CLI's VERSION, discovers installed-provider scope and
+the configured Codex binary, journals plugins/Claude-refresh/broker work, and verifies
+the fresh installed CLI version before any repair command. Existing pending journals
+always retain their recorded target and scope; repair never overrides operation
+fences or receipts. Clean ordinary same-version `--apply` remains a no-op.
+`--repair` without `--apply`, or combined with operation resolution, is a usage error.
+This bootstraps repair after an updater older than 0.3.5 replaces the package but
+fails before saving any progress. After the old updater and its installer/provider
+commands have stopped, invoke the newly installed CLI with `--apply --repair`;
+subsequent interruptions resume through ordinary `--apply`. Manual agent reload,
+Codex hook trust, and binding/push verification remain separate required actions.
+
+Concurrent applies for one home are excluded by a separate SQLite `update.mutex`
+exclusive transaction, released on exit or process death; read-only checks never acquire it.
+Mutating commands run under a detached IPC worker holding a second SQLite
+`update-operation.mutex`. READY precedes GO, so a worker without dispatch authority
+cannot start a command after its parent disappears. The worker durably records a
+mode-0600 running receipt before spawn and terminal metadata before releasing the
+mutex; command output is discarded. A parent timeout ends waiting, not supervision.
+Retries check this fence before any external command. Terminal successes reconcile
+progress without replay, while package version and current broker target are still
+verified. Worker death or a signalled child leaves an unknown outcome, never inferred
+safe from PID absence. After inspecting/stopping associated commands, the operator
+may run `update --resolve-operation <exact-id> --not-running`; both locks must be
+free and the unresolved receipt ID must match. Only the receipt is cleared, preserving
+the repair journal for the next explicit apply. Read-only checks report receipt state
+without acquiring locks or claiming that a running receipt proves process liveness.
+Before package replacement it atomically persists mode-0600 `<home>/update-progress.json`
+(format 1: canonical installation root, exact target version, installed provider scope,
+Codex binary, and pending package/plugins/Claude-refresh/broker steps). Symlink,
+hard-linked and non-regular journal leaves are rejected. Each completed step is
+checkpointed. Once the target CLI is verified by a fresh process, broker repair
+precedes provider refresh because plugin install calls ensureBroker and needs a
+compatible broker. Known broker/provider failures remain independent; a failed
+broker replacement does not skip provider refresh, and provider failures do not
+undo the already attempted broker replacement. A failed npm
+invocation can have replaced the CLI: verify its exact version before any later step.
+A partial result reports pending steps and exits 1. Retry `wigwag update --apply`
+resumes the recorded target and scope, even at the installed version and without
+requiring npm metadata access; it never silently returns a clean same-version result
+while a repair is pending. A completed broker checkpoint is revalidated on resume
+using read-only `broker status --expect-version <target>`; missing or wrong-version
+brokers are durably requeued for restart, while a healthy target broker is retained.
+Status observes live status without autospawning a broker, including during socket races.
+`--json` preserves structured partial and complete outcomes.
+
+Successful apply means the CLI version and broker replacement were verified and
+installed-provider refresh commands succeeded. It does not mean running agents
+reloaded their plugins or established native binding/push readiness. Output names
+only installed providers: Claude requires `/reload-plugins` in each running session;
+Codex requires restarting each session and trusting changed Wigwag hooks. Explain
+that these actions load the updated hooks/tools and permit trusted native hooks.
+After a genuine prompt/turn, use the Wigwag `whoami` tool in each agent and
+`wigwag broker status`, `wigwag doctor [--claude-only | --codex-only]`, `wigwag who`
+in the shell. Verify expected session name, `bound: true` in whoami, `BOUND=yes`,
+delivery/push capabilities, and resolve Codex push-held
+reasons before relying on delivery. Broker replacement never terminates agent sessions.
+Fixture lifecycle proof is separate from real-provider acceptance and native delivery.
+
 After install Codex asks the owner to trust the plugin's hooks (first start, or `/hooks` then `t`); the plugin's hooks do not run until then.
 
 Launchers (run the agent in the current terminal; not session spawning, §16):

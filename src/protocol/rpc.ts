@@ -11,17 +11,18 @@ export const HANDSHAKE_VERSIONS = {
   schema_version: SCHEMA_VERSION,
   version: VERSION,
 } as const;
-export const BROKER_OLDER = 'broker is older than this client: restart it with `wigwag broker stop` then retry';
-export const CLIENT_OLDER =
-  'client is older than the broker: update/reload the plugin (and update the CLI), then retry';
+const PROVIDER_REPAIR =
+  'Claude: run /reload-plugins; restart Claude if whoami client.version is still old. Codex: restart the Codex session and trust/enable the updated plugin. Verify with `wigwag doctor` and the agent whoami tool (client.version matches the CLI, bound: true).';
+export const BROKER_OLDER = `broker is older than this client: update the CLI, run \`wigwag broker stop\`, then retry to start the updated broker. ${PROVIDER_REPAIR}`;
+export const CLIENT_OLDER = `client is older than the broker: update the CLI and plugin, then retry. ${PROVIDER_REPAIR}`;
 
 export const LEGACY_CLIENT_WARNING = 'legacy client 0.2: reload plugin for new features';
 
-/** Protocol/schema are compatibility gates; package releases only advise a convenient reload. */
+/** Wire gates only: database open/migration independently requires this build's on-disk schema. */
 export function assertPeerVersions(
   raw: unknown,
   peer: 'broker' | 'client',
-): { legacy: boolean; warning: string | null } {
+): { legacy: boolean; warning: string | null; replySchemaVersion?: number } {
   const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   for (const field of ['protocol', 'schema_version'] as const) {
     const value = p[field];
@@ -46,6 +47,23 @@ export function assertPeerVersions(
     oldRole
   )
     return { legacy: true, warning: LEGACY_CLIENT_WARNING };
+  // Reviewed against 36d80db (v0.3.0): protocol 1 methods/native identity are compatible;
+  // schema 5 only adds broker-owned message ownership. Its client strictly checks a schema-4
+  // welcome, so negotiate that wire stamp only, never the database format or arbitrary releases.
+  if (
+    peer === 'client' &&
+    oldRole &&
+    PROTOCOL_VERSION === 1 &&
+    SCHEMA_VERSION === 5 &&
+    p.protocol === PROTOCOL_VERSION &&
+    p.schema_version === 4 &&
+    p.version === '0.3.0'
+  )
+    return {
+      legacy: false,
+      warning: `client 0.3.0 uses reviewed wire compatibility with broker ${VERSION}; ${PROVIDER_REPAIR}`,
+      replySchemaVersion: 4,
+    };
   const order = [
     typeof p.protocol === 'number' ? p.protocol - PROTOCOL_VERSION : -1,
     typeof p.schema_version === 'number' ? p.schema_version - SCHEMA_VERSION : -1,

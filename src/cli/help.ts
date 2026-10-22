@@ -30,11 +30,17 @@ export const COMMANDS: CommandHelp[] = [
   {
     name: 'update',
     summary: 'check for updates, or explicitly apply one',
-    usage: ['wigwag update [--check | --apply] [--json]'],
+    usage: [
+      'wigwag update [--check | --apply [--repair]] [--json]',
+      'wigwag update --resolve-operation <id> --not-running',
+    ],
     flags: [
       ['--check', 'read-only update check (default)'],
-      ['--apply', 'install a newer npm release, refresh plugins and broker'],
-      ['--json', 'print check results as JSON'],
+      ['--apply', 'install a newer npm release or resume pending plugin/broker repair'],
+      ['--repair', 'with --apply, repair installed plugins/broker at the current CLI version without checking npm'],
+      ['--resolve-operation <id>', 'acknowledge an exact interrupted operation after inspecting/stopping its command'],
+      ['--not-running', 'required recovery assertion; preserves pending progress for a subsequent --apply'],
+      ['--json', 'print check or apply results as JSON (partial apply exits 1)'],
     ],
   },
   {
@@ -213,6 +219,7 @@ export const COMMANDS: CommandHelp[] = [
       ['start', 'start the broker in the background'],
       ['stop', 'stop the running broker'],
       ['restart [--expect-version <version>]', 'wait for and verify a replacement broker'],
+      ['status [--expect-version <version>]', 'read-only live broker/version verification; never starts it'],
       ['status', 'show whether the broker is running'],
     ],
   },

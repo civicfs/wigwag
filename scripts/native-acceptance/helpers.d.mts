@@ -1,0 +1,11 @@
+export function assessReadiness(sessions: Array<Record<string, unknown>>, names: Record<string, string>, retained?: Record<string, string>, expectedVersions?: Record<string, string>): { ok: boolean; reasons: string[]; sessions: Record<string, Record<string, unknown>> };
+export function correlatedReply(messages: Array<Record<string, unknown>>, challenge: { id: string; token: string; recipient: string; sessionId: string }): Record<string, unknown> | undefined;
+export function deliveryOwnedBy(deliveries: Array<Record<string, unknown>>, challenge: { id: string; recipient: string; sessionId: string; expectedTransport?: string; allowUncapturedOwner?: boolean }): boolean;
+export function overallVerdict(scenarios: Array<{ status: string }>, cleanup: { status: string }): 'pass' | 'fail' | 'blocked';
+export function shellQuote(value: unknown): string;
+export function sanitizePane(pane: string): string;
+export function pluginTrustScope(inventory: { installed?: Array<{ pluginId: string; enabled: boolean }> }, config: string): boolean;
+export function recognizeTrustPrompt(agent: string, pane: string, workspace?: string, context?: { onlyWigwag?: boolean; hookCount?: number }): { kind: string; tool?: string; keys: string[] } | undefined;
+export function ownedCliCommand(commandLine: string, root: string, allowed?: string[]): boolean;
+export function nativeUiErrors(pane: string): string[];
+export function uiActionKeys(agent: string, pane: string, match: { kind: string }, defer?: boolean): { keys: string[]; selected?: number; target?: number } | undefined;
