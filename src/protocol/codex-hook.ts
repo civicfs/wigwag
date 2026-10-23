@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { WigwagError } from '../errors.js';
 
-/** Source-audited host contract, not cryptographic attestation. Real hook metadata still needs live acceptance. */
-export const VERIFIED_CODEX_HOST_VERSIONS = ['0.162.1', '0.163.0'] as const;
+/** Earliest source-audited hook contract. Newer host releases have no upper version limit. */
+export const MIN_CODEX_HOST_VERSION = '0.162.1';
 export const HostClientZ = z.object({ name: z.string().min(1).max(100), version: z.string().min(1).max(100) }).strict();
 export type HostClient = z.infer<typeof HostClientZ>;
 export const HookOriginZ = HostClientZ.extend({
@@ -11,8 +11,22 @@ export const HookOriginZ = HostClientZ.extend({
 }).strict();
 export type HookOrigin = z.infer<typeof HookOriginZ>;
 
-export const trustedCodexHost = (host: HostClient | null | undefined, extra: readonly string[] = []): boolean =>
-  host?.name === 'codex-mcp-client' && [...VERIFIED_CODEX_HOST_VERSIONS, ...extra].includes(host.version);
+export function trustedCodexHost(host: HostClient | null | undefined, extra: readonly string[] = []): boolean {
+  if (host?.name !== 'codex-mcp-client') return false;
+  if (extra.includes(host.version)) return true;
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      host.version,
+    );
+  if (!match) return false;
+  if (match[4]?.split('.').some((identifier) => /^0\d+$/.test(identifier))) return false;
+  const parts = match.slice(1, 4).map(Number);
+  const minimum = MIN_CODEX_HOST_VERSION.split('.').map(Number);
+  for (let i = 0; i < minimum.length; i++) {
+    if (parts[i] !== minimum[i]) return parts[i] > minimum[i];
+  }
+  return true;
+}
 
 /** Used again at the broker boundary; an MCP tool argument can never establish this envelope. */
 export function validateHookOrigin(value: unknown, host: HostClient | null | undefined): HookOrigin {
@@ -41,6 +55,6 @@ export function codexHostWarning(s: {
   const host =
     s.host_client_name && s.host_client_version ? { name: s.host_client_name, version: s.host_client_version } : null;
   return host && !trustedCodexHost(host)
-    ? `Codex host ${host.name} ${host.version} not in the verified list: pushes held, inbox delivery works; see README`
+    ? `Codex host ${host.name} ${host.version} requires codex-mcp-client ${MIN_CODEX_HOST_VERSION} or newer: pushes held, inbox delivery works; see README`
     : 'Codex push held: reload the Wigwag plugin / restart this Codex session to enable push; inbox delivery works';
 }

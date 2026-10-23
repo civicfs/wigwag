@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.56.0 — 2026-10-23
+
+- Accept every Codex host version from 0.162.1 onward, including future minor and
+  major releases, prereleases and build metadata. Provider upgrades no longer need
+  a Wigwag release or a `codex.trusted_host_versions` config edit to receive pushes.
+- Retain hook-origin, concrete-thread, loaded-root, connection and ownership checks.
+  Keep explicit compatibility overrides for older or nonstandard hosts.
+- Cover future Codex versions through MCP hooks, queued delivery, missed-bind recovery
+  and reconnect with retained work. Verify future Claude versions still receive channel
+  notifications through capability negotiation without a version cap.
+
 ## 0.3.5 — 2026-10-22
 
 - Update the locked transitive `ip-address` dependency to 10.7.4, fixing

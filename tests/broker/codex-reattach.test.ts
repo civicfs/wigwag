@@ -762,13 +762,18 @@ describe('verified Codex MCP reattachment without a remembered slot', () => {
     expect(f.broker.questions.assignment(f.assignment.id)?.worker_session_id).toBe(f.old.welcome.session_id);
     expect(deliveriesOfMessage(f.broker.db, f.mail.id)[0]?.state).toBe('held');
   });
-  it.each([false, true])(
-    'restores only the verified disconnected thread’s work (descendant loaded=%s)',
-    async (descendant) => {
+  it.each([
+    { descendant: false, version: '0.162.1' },
+    { descendant: true, version: '0.162.1' },
+    { descendant: false, version: '999.1.2-alpha.3+build.4' },
+    { descendant: true, version: '999.1.2-alpha.3+build.4' },
+  ])(
+    'restores only the verified disconnected thread’s work (descendant loaded=$descendant, host=$version)',
+    async ({ descendant, version }) => {
       const f = await boot();
       await f.disconnect();
       if (descendant) f.app.loaded.push('child');
-      const fresh = await f.connect();
+      const fresh = await f.connect({ host_client: { name: 'codex-mcp-client', version } });
       expect(fresh.welcome.session_id).not.toBe(f.old.welcome.session_id);
       await fresh.client.call('session.bind', { agent_session_id: 'T', question_relay_version: 1 });
       expect(await fresh.client.call('session.whoami')).toMatchObject({

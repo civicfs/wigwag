@@ -56,7 +56,7 @@ resolution; PID reuse within the same second by the same uid cannot be distingui
 
 ## Install
 
-The current source release is **0.3.5**. GitHub releases and npm
+The current source release is **0.56.0**. GitHub releases and npm
 packages are published separately; check the [npm package page](https://www.npmjs.com/package/@civicfs/wigwag)
 for registry availability. Live native-question tests (0.2.0) used macOS, Claude Code
 **2.1.296**, and Codex **0.162.1**; 0.3.x's new behaviour is covered by automated tests
@@ -176,7 +176,7 @@ Unavailable or ambiguous evidence holds mail for hooks/inbox and shows `Codex pu
 
 A restarted Codex MCP can reattach without its remembered Wigwag slot ID only when
 both bindings have verified host-origin identity for the same concrete root thread,
-both host versions are currently trusted, exactly one matching slot is disconnected,
+both hosts meet the hook contract, exactly one matching slot is disconnected,
 and fresh metadata confirms the root is still loaded. Its name, mail and assignment
 stay with that slot. Pending native questions require fresh request replay before
 any answer is submitted; unavailable evidence keeps the relay visible and waiting.
@@ -188,13 +188,14 @@ safely rehomes that work; explicit owner resolution is a 0.4.0 follow-up.
 Codex pushes also require a verified hook-origin bind. Internal hook tools are
 hidden from the model; host-generated `threadId` must match the hook's session ID,
 and calls with model `callId` metadata or argument-supplied origin are refused.
-The built-in verified hosts are `codex-mcp-client` 0.162.1 (source-audited) and
-0.163.0 (owner-approved; not separately source-audited). An unknown host version with
-valid hook metadata keeps inbox and hook delivery, but pushes are held:
-`Codex host <name> <version> not in the verified list: pushes held, inbox delivery works; see README`.
-After checking a newer Codex host, the owner may add its version to
-`codex.trusted_host_versions` in config (empty by default), restart the broker and
-reload the plugin to bind again. `whoami`, `who` and doctor expose `bind_origin`,
+All `codex-mcp-client` versions from 0.162.1 onward are accepted, including future
+minor and major releases, prereleases and build metadata. There is no upper version
+limit or per-release allowlist: upgrading Codex does not require a Wigwag release or
+config edit. Hook-origin identity and loaded-root checks still apply. Claude channel
+delivery also has no provider-version cap; it uses the advertised channel capability.
+The source-audited minimum is 0.162.1. Older or malformed host versions keep inbox
+and hook delivery, but pushes are held. `codex.trusted_host_versions` remains available
+for explicit compatibility overrides (empty by default). `whoami`, `who` and doctor expose `bind_origin`,
 `host_client_name` and `host_client_version`.
 
 Legacy and pre-guard Codex bindings deliberately lose push until reloaded:
@@ -334,7 +335,7 @@ never use those against the copy after migration.
 
 `unverified-bind` holds Codex push and shows "reload the Wigwag plugin / restart
 this Codex session to enable push; inbox delivery works". Reload legacy/pre-guard
-sessions; for an unsupported host version, also check the verified-version
+sessions; for an older or malformed host version, also check the minimum-version
 instructions above. `unverified-root` is a recovery refusal in lineage/recovery
 diagnostics: metadata did not prove a root, so no adoption occurs. Inspect
 `wigwag recovery` and native thread metadata while retaining inbox delivery.

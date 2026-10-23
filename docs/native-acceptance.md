@@ -166,7 +166,7 @@ actually exits rather than terminating its parent on an arbitrary timeout.
 
 ## Incompatible-broker native recovery
 
-The companion runner pins a genuine 0.3.0 broker and a 0.3.5 MCP in another fresh
+The companion runner pins a genuine 0.3.0 broker and a current-release MCP in another fresh
 private home. Run it separately from the combined acceptance runner:
 
 ```sh

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { sockPath } from '../../src/client/autospawn.js';
 import { assertPeerVersions } from '../../src/protocol/rpc.js';
 import { getSession } from '../../src/store/sessions.js';
+import { VERSION } from '../../src/version.js';
 import { fixtureCodexNames, startBroker, tmpHome } from '../helpers.js';
 
 const cleanup: Array<() => unknown> = [];
@@ -60,8 +61,8 @@ describe('reviewed v0.3.0 wire compatibility', () => {
         ...(role === 'mcp' ? { agent: 'claude', cwd: home, pid_chain: [] } : {}),
       });
       // v0.3.0 rejects a welcome unless protocol=1/schema_version=4.
-      expect(peer.welcome).toMatchObject({ protocol: 1, schema_version: 4, version: '0.3.5', client_mode: 'current' });
-      expect(await peer.call('sys.ping')).toMatchObject({ pong: true, version: '0.3.5' });
+      expect(peer.welcome).toMatchObject({ protocol: 1, schema_version: 4, version: VERSION, client_mode: 'current' });
+      expect(await peer.call('sys.ping')).toMatchObject({ pong: true, version: VERSION });
       expect(broker.db.prepare('SELECT max(version) AS v FROM schema_version').get()).toEqual({ v: 5 });
     },
   );

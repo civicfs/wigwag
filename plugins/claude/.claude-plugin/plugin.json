@@ -1,6 +1,6 @@
 {
   "name": "wigwag",
-  "version": "0.3.5",
+  "version": "0.56.0",
   "description": "Push messages and a data channel between Claude Code and Codex sessions on this machine.",
   "author": {
     "name": "Michael Handelman"
