@@ -14,9 +14,13 @@ export type HookOrigin = z.infer<typeof HookOriginZ>;
 export function trustedCodexHost(host: HostClient | null | undefined, extra: readonly string[] = []): boolean {
   if (host?.name !== 'codex-mcp-client') return false;
   if (extra.includes(host.version)) return true;
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.exec(host.version);
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      host.version,
+    );
   if (!match) return false;
-  const parts = match.slice(1).map(Number);
+  if (match[4]?.split('.').some((identifier) => /^0\d+$/.test(identifier))) return false;
+  const parts = match.slice(1, 4).map(Number);
   const minimum = MIN_CODEX_HOST_VERSION.split('.').map(Number);
   for (let i = 0; i < minimum.length; i++) {
     if (parts[i] !== minimum[i]) return parts[i] > minimum[i];
