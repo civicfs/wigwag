@@ -88,12 +88,28 @@ it.each([
   });
 });
 
-it('does not grant automatic first-hook binding to an unsupported host', async () => {
-  const { broker, c } = await boot('0.164.0');
+it.each(['0.164.0', '1.0.0', '999.1.2-alpha.3+build.4'])(
+  'recovers a missed bind from a future host %s without a version override',
+  async (version) => {
+    const { broker, c } = await boot(version);
+    await c.client.call('session.turn', {
+      phase: 'started',
+      hook_origin: { ...origin(), version },
+    });
+    expect(getSession(broker.db, c.welcome.session_id)).toMatchObject({
+      agent_session_id: 'root-A',
+      bind_origin: 'hook-verified',
+      codex_push_reason: null,
+    });
+  },
+);
+
+it('does not grant automatic first-hook binding to an older host', async () => {
+  const { broker, c } = await boot('0.161.0');
   await expect(
     c.client.call('session.turn', {
       phase: 'started',
-      hook_origin: { ...origin(), version: '0.164.0' },
+      hook_origin: { ...origin(), version: '0.161.0' },
     }),
   ).rejects.toMatchObject({ code: 'bad_request' });
   expect(getSession(broker.db, c.welcome.session_id)?.agent_session_id).toBeNull();

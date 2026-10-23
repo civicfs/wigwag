@@ -44,7 +44,7 @@ async function start(
   });
   // Claude Code advertises the channel only when it was started with the development-channels flag; this stands in for that.
   const client = new McpClient(
-    agent === 'codex' ? { name: 'codex-mcp-client', version: hostVersion } : { name: 'test', version: '0' },
+    { name: agent === 'codex' ? 'codex-mcp-client' : 'claude-code', version: hostVersion },
     { capabilities: { experimental: { 'claude/channel': {} } } },
   );
   const channel: Array<{ content: string; meta: Record<string, string> }> = [];
@@ -58,7 +58,7 @@ async function start(
 const text = (r: unknown) => (r as { content: Array<{ text: string }> }).content[0].text;
 
 describe('MCP server', () => {
-  it('keeps unsupported-host messaging and hook digest while refusing pushes and forged binds', async () => {
+  it('accepts future-host hooks and digest while refusing forged binds', async () => {
     home = tmpHome();
     const broker = await startBroker(home, { codexNames: fixtureCodexNames(home, () => ['T']) });
     try {
@@ -71,9 +71,9 @@ describe('MCP server', () => {
       expect(bound.isError).toBeFalsy();
       expect(JSON.parse(text(await c.client.callTool({ name: 'whoami', arguments: {} })))).toMatchObject({
         bound: true,
-        bind_origin: 'unverified',
+        bind_origin: 'hook-verified',
         host_client_version: '0.164.0',
-        capabilities: { codex_push: 'held' },
+        capabilities: { codex_push: 'trusted' },
       });
       expect((await c.client.callTool({ name: 'inbox', arguments: {} })).isError).toBeFalsy();
       expect(
@@ -151,47 +151,53 @@ describe('MCP server', () => {
     }
   });
 
-  it('claude ↔ claude: send via tool arrives as a channel notification', async () => {
-    home = tmpHome();
-    const a = await start('claude', 'alpha-one');
-    const b = await start('claude', 'beta-one');
-    expect(JSON.parse(text(await a.client.callTool({ name: 'whoami', arguments: {} })))).toMatchObject({
-      name: 'alpha-one',
-    });
-    await a.client.callTool({
-      name: 'send',
-      arguments: { to: 'beta-one', subject: 'hi', body: 'over the channel', priority: 'normal' },
-    });
-    await until(() => b.channel.length === 1);
-    expect(b.channel[0].content).toContain('over the channel');
-    expect(b.channel[0].meta).toMatchObject({ from: 'alpha-one' });
-  });
-
-  it('claude → codex: session_bind via hook-only tool, then delivery runs codex queue', async () => {
-    home = tmpHome();
-    const log = join(home, 'codex.jsonl');
-    // Metadata evidence is injected; native sockets and thread interaction stay in fixtures.
-    process.env.FAKE_CODEX_LOG = log;
-    const broker = await startBroker(home, { codexNames: fixtureCodexNames(home, () => ['thread-77']) });
-    try {
-      const a = await start('claude', 'alpha-one', { FAKE_CODEX_LOG: log });
-      const c = await start('codex', 'codex-merger', { FAKE_CODEX_LOG: log });
-      await c.client.callTool({
-        name: 'session_bind',
-        arguments: { session_id: 'thread-77' },
-        _meta: { threadId: 'thread-77' },
+  it.each(['2.1.0', '999.1.2-alpha.3+build.4'])(
+    'claude host %s: send via tool arrives as a channel notification',
+    async (version) => {
+      home = tmpHome();
+      const a = await start('claude', 'alpha-one', {}, version);
+      const b = await start('claude', 'beta-one', {}, version);
+      expect(JSON.parse(text(await a.client.callTool({ name: 'whoami', arguments: {} })))).toMatchObject({
+        name: 'alpha-one',
       });
       await a.client.callTool({
         name: 'send',
-        arguments: { to: 'codex-merger', subject: 's', body: 'to codex', priority: 'normal' },
+        arguments: { to: 'beta-one', subject: 'hi', body: 'over the channel', priority: 'normal' },
       });
-      await until(() => readCodexCalls(log).length === 1);
-      expect(readCodexCalls(log)[0].argv.slice(0, 3)).toEqual(['queue', '--thread', 'thread-77']);
-    } finally {
-      await broker.stop();
-      delete process.env.FAKE_CODEX_LOG;
-    }
-  });
+      await until(() => b.channel.length === 1);
+      expect(b.channel[0].content).toContain('over the channel');
+      expect(b.channel[0].meta).toMatchObject({ from: 'alpha-one' });
+    },
+  );
+
+  it.each(['0.162.1', '0.164.0', '999.1.2-alpha.3+build.4'])(
+    'claude → codex host %s: verified hook delivery runs codex queue',
+    async (version) => {
+      home = tmpHome();
+      const log = join(home, 'codex.jsonl');
+      // Metadata evidence is injected; native sockets and thread interaction stay in fixtures.
+      process.env.FAKE_CODEX_LOG = log;
+      const broker = await startBroker(home, { codexNames: fixtureCodexNames(home, () => ['thread-77']) });
+      try {
+        const a = await start('claude', 'alpha-one', { FAKE_CODEX_LOG: log });
+        const c = await start('codex', 'codex-merger', { FAKE_CODEX_LOG: log }, version);
+        await c.client.callTool({
+          name: 'session_bind',
+          arguments: { session_id: 'thread-77' },
+          _meta: { threadId: 'thread-77' },
+        });
+        await a.client.callTool({
+          name: 'send',
+          arguments: { to: 'codex-merger', subject: 's', body: 'to codex', priority: 'normal' },
+        });
+        await until(() => readCodexCalls(log).length === 1);
+        expect(readCodexCalls(log)[0].argv.slice(0, 3)).toEqual(['queue', '--thread', 'thread-77']);
+      } finally {
+        await broker.stop();
+        delete process.env.FAKE_CODEX_LOG;
+      }
+    },
+  );
 
   it('kv_cas works with the argument shapes Claude Code sends (E4): "null" version and JSON-text value', async () => {
     home = tmpHome();

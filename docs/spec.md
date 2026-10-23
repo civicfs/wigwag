@@ -332,18 +332,20 @@ vitest, linted with biome.
   `_meta.ui.visibility=['app']`; the server derives origin only from initialized host identity and request
   metadata, never tool arguments. Model `callId`, missing metadata or sessionId/threadId disagreement refuses
   binding. The broker independently validates the origin envelope against the connection's observed host.
-  Verified host versions are an explicit code allow-list (codex-mcp-client 0.162.1, source-audited; 0.163.0,
-  owner-approved without a separate source audit), extended only by owner
-  config `codex.trusted_host_versions` (default []). Structurally valid hooks from unsupported versions bind
-  unverified and retain digest/turn/inbox delivery, but never push; diagnostics name the unsupported host and
-  point to README. Legacy/pre-guard bindings migrate unverified and require plugin reload/session restart
-  for push. who/whoami/doctor expose bind_origin and host_client_name/version. This is a pinned host contract,
+  All codex-mcp-client versions from the source-audited minimum 0.162.1 onward are accepted, with no upper
+  limit, including future minor/major releases, prereleases and build metadata. Provider upgrades require
+  no Wigwag release or config edit. Owner config `codex.trusted_host_versions` (default []) remains an
+  explicit compatibility override for older or nonstandard versions. Structurally valid hooks from older
+  or malformed versions bind unverified and retain digest/turn/inbox delivery, but never push; diagnostics
+  name the minimum host version and point to README. Claude delivery uses channel capability without a
+  provider-version cap. Legacy/pre-guard bindings migrate unverified and require plugin reload/session restart
+  for push. who/whoami/doctor expose bind_origin and host_client_name/version. This is a host metadata contract,
   not cryptographic origin proof; real hook metadata remains unverified until throwaway-session acceptance.
   A future use of concrete hook metadata for recovery is explicitly deferred. V4 includes nullable
   deliveries.forward_to (destination session ID) for durable in-flight rename ownership.
-  `unverified-bind` is the push-hold reason for legacy/pre-guard/unsupported-host bindings. who/whoami/doctor show
+  `unverified-bind` is the push-hold reason for legacy/pre-guard/older-host bindings. who/whoami/doctor show
   "reload the Wigwag plugin / restart this Codex session to enable push; inbox delivery works". Reload the plugin or
-  restart the session; unsupported hosts additionally require verification under the documented host allow-list.
+  restart the session; older hosts additionally require the documented minimum version or an explicit override.
   `unverified-root` is a flagged recovery refusal when a trusted concrete-ID provider exists but thread/read does
   not verify a root; there is no adoption. The operator should inspect wigwag recovery and native thread metadata,
   retaining inbox delivery. This path does not enable shipped Codex recovery: its production provider still returns

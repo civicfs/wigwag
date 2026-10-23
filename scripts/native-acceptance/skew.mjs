@@ -100,7 +100,7 @@ function prepare(v) {
   if (root.length > 45) throw new Error('Use a short private root such as /tmp/wws-UNIQUE');
   const candidate = artifact(v.candidate ?? repo);
   const baseline = artifact(v.baseline);
-  if (baseline.version !== '0.3.0' || candidate.version !== '0.3.5') throw new Error('This fault scenario requires pinned baseline 0.3.0 and candidate 0.3.5');
+  if (baseline.version !== '0.3.0' || candidate.version !== json(join(repo, 'package.json')).version) throw new Error('This fault scenario requires pinned baseline 0.3.0 and the current candidate version');
   Object.assign(baseline, verifyBaseline(baseline.root, candidate.root));
   const paths = Object.fromEntries(['installed', 'baseline', 'bin', 'codex', 'wigwag', 'workspace', 'logs'].map((name) => [name, join(root, name)]));
   for (const path of Object.values(paths)) mkdirSync(path, { mode: 0o700 });
@@ -300,7 +300,7 @@ async function run(m, v) {
     if ((await rpc(m, 'session.who')).length) throw new Error('Current MCP unexpectedly established a session with the incompatible broker');
     record(scenario, { native_ui_sha256: hash(failedPane), submitted_user_prompts: prompts, mcp_processes: failed.processes, before_broker_session_count: 0, sessionstart_detail_sha256: hash(sanitizePane(detail)), cause: 'Two real native initial hooks failed with schema skew before the first public whoami call. Native detail confirms trusted Wigwag SessionStart/session_bind. SessionStart attribution is inferred; exact native eventName telemetry was not observed.' });
     scenario = 'same-mcp-reconnects-unbound';
-    cli(false, 'broker', 'restart', '--expect-version', '0.3.5');
+    cli(false, 'broker', 'restart', '--expect-version', m.candidate.version);
     const unbound = await until('same current MCP reconnecting to a fresh unbound slot', async () => {
       const current = mcps(m);
       if (!failed.processes.every((p) => current.some((q) => p.pid === q.pid && p.start === q.start))) throw new Error('Failed MCP process was replaced');
